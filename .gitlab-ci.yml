@@ -21,7 +21,9 @@ variables:
   image: docker:27
   services: [docker:27-dind]
   variables:
-    DOCKER_TLS_CERTDIR: "/certs"
+    # non-TLS dind: демон на 2375, без shared-volume с сертификатами (надёжно на self-hosted).
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
   before_script:
     - echo "$REGISTRY_TOKEN" | docker login -u "$REGISTRY_USER" --password-stdin "$REGISTRY_HOST"
 
