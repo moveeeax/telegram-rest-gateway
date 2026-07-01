@@ -1,0 +1,131 @@
+# CI telegram-rest-gateway. Гейты — SPEC_ELABORATION §12, §14.9.
+#
+# Раннеры (решение C9, DECISIONS.md):
+#   - 1x amd64  — тег `amd64`
+#   - 6x arm64  — нативные теги node-1..node-6; на ВСЕ добавлен общий тег `arm64`,
+#     чтобы job `tags:[arm64]` балансировался по любой свободной ноде (GitLab-теги — только «И»).
+# Асимметрия 1:6 — amd64-задачи сериализуются на одной ноде (ожидаемо для multi-arch).
+#
+# TODO(инфра): образ builder ($BUILDER_IMAGE) = tdlib-base + собранный Drogon; готовится
+#              отдельным пайплайном из Dockerfile.tdlib (пересборка только при смене TDLIB_REF).
+
+stages:
+  - lint
+  - test
+  - image
+
+variables:
+  BUILDER_IMAGE: "$CI_REGISTRY_IMAGE/builder:latest"   # TODO: подставить реальный тег
+  GIT_SUBMODULE_STRATEGY: none
+
+# ---------- lint (без тяжёлого тулчейна) ----------
+clang-format:
+  stage: lint
+  image: xianpengshen/clang-tools:16
+  tags: [amd64]
+  script:
+    - git ls-files '*.cpp' '*.hpp' '*.h' | xargs -r clang-format --dry-run --Werror
+
+# Наш код НЕ должен попадать в sanitizer-suppressions (только сторонние символы).
+suppressions-guard:
+  stage: lint
+  image: debian:12-slim
+  tags: [amd64]
+  script:
+    - >
+      if grep -REn '(src/|tests/|tgw::)' cmake/suppressions/; then
+        echo "ОШИБКА: наш код в suppressions — гонки/утечки чиним, а не подавляем"; exit 1;
+      fi
+
+# ---------- test (нужен полный тулчейн: tdlib + drogon в BUILDER_IMAGE) ----------
+.build-and-test:
+  stage: test
+  image: $BUILDER_IMAGE
+  variables:
+    CMAKE_PREFIX_PATH: "/opt/tdlib;/opt/drogon"
+  script:
+    - cmake --preset "$PRESET"
+    - cmake --build --preset "$PRESET"
+    - ctest --preset "$PRESET"
+
+tidy:
+  extends: .build-and-test
+  tags: [amd64]
+  variables:
+    PRESET: dev-debug
+  script:
+    - cmake --preset dev-debug
+    - git ls-files 'src/*.cpp' | xargs -r clang-tidy -p build/dev-debug --warnings-as-errors='bugprone-*,concurrency-*'
+
+test:asan:
+  extends: .build-and-test
+  parallel:
+    matrix:
+      - ARCH: [amd64, arm64]
+  tags: [$ARCH]
+  variables:
+    PRESET: asan
+    ASAN_OPTIONS: "detect_leaks=1"
+    LSAN_OPTIONS: "suppressions=$CI_PROJECT_DIR/cmake/suppressions/lsan.supp"
+
+test:tsan:
+  extends: .build-and-test
+  parallel:
+    matrix:
+      - ARCH: [amd64, arm64]
+  tags: [$ARCH]
+  variables:
+    PRESET: tsan
+    TSAN_OPTIONS: "suppressions=$CI_PROJECT_DIR/cmake/suppressions/tsan.supp halt_on_error=1"
+
+# ---------- image (multi-arch, C9) ----------
+.image-build:
+  stage: image
+  image: docker:27
+  services: [docker:27-dind]
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - export TDLIB_REF="$(grep -E '^TDLIB_REF=' TDLIB_REF | cut -d= -f2)"
+    - export DROGON_REF="$(grep -E '^DROGON_REF=' DROGON_REF | cut -d= -f2)"
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - >
+      docker build
+      --build-arg TDLIB_REF="$TDLIB_REF"
+      --build-arg DROGON_REF="$DROGON_REF"
+      -t "$CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}-${ARCH}" .
+    - docker push "$CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}-${ARCH}"
+
+image:amd64:
+  extends: .image-build
+  tags: [amd64]
+  variables: { ARCH: amd64 }
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"'
+
+image:arm64:
+  extends: .image-build
+  tags: [arm64]
+  variables: { ARCH: arm64 }
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"'
+
+# Слить per-arch образы в один multi-arch манифест.
+image:manifest:
+  stage: image
+  image: docker:27
+  services: [docker:27-dind]
+  tags: [amd64]
+  needs: [image:amd64, image:arm64]
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - >
+      docker buildx imagetools create -t "$CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}"
+      "$CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}-amd64"
+      "$CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}-arm64"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"'

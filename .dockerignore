@@ -1,0 +1,16 @@
+.git
+.gitignore
+build/
+out/
+install/
+data/
+secrets/
+*.session
+.env
+.env.*
+.idea/
+.vscode/
+.DS_Store
+docs/
+*.md
+!README.md
