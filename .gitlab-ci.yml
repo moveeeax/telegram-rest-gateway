@@ -1,27 +1,61 @@
-# CI telegram-rest-gateway. Гейты — SPEC_ELABORATION §12, §14.9.
+# CI telegram-rest-gateway. Гейты — SPEC_ELABORATION §12, §14.9. Полный список
+# переменных CI/CD, которые нужно завести в GitLab — docs/CICD.md.
 #
-# Раннеры (решение C9, DECISIONS.md):
-#   - 1x amd64  — тег `amd64`
-#   - 6x arm64  — нативные теги node-1..node-6; на ВСЕ добавлен общий тег `arm64`,
-#     чтобы job `tags:[arm64]` балансировался по любой свободной ноде (GitLab-теги — только «И»).
-# Асимметрия 1:6 — amd64-задачи сериализуются на одной ноде (ожидаемо для multi-arch).
-#
-# TODO(инфра): образ builder ($BUILDER_IMAGE) = tdlib-base + собранный Drogon; готовится
-#              отдельным пайплайном из Dockerfile.tdlib (пересборка только при смене TDLIB_REF).
+# Раннеры (решение C9): 1x amd64 (tag `amd64`), 6x arm64 (общий tag `arm64`).
+# Реестр: внешний (Docker Hub / GHCR / Harbor) — креды в REGISTRY_* (protected).
+# Деплой: пока только сборка+пуш образа; CD-джоба добавится позже.
 
 stages:
+  - builder   # дорогой образ TDLib+Drogon — вручную при смене пинов
   - lint
   - test
   - image
 
 variables:
-  BUILDER_IMAGE: "$CI_REGISTRY_IMAGE/builder:latest"   # TODO: подставить реальный тег
+  # Тег builder-образа для текущей арки (ARCH задаётся в matrix/джобе).
+  BUILDER_TAG: "${REGISTRY_IMAGE}:builder-${ARCH}"
   GIT_SUBMODULE_STRATEGY: none
 
-# ---------- lint (без тяжёлого тулчейна) ----------
+# ---------- общий docker-login для docker-in-docker джоб ----------
+.docker:
+  image: docker:27
+  services: [docker:27-dind]
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - echo "$REGISTRY_TOKEN" | docker login -u "$REGISTRY_USER" --password-stdin "$REGISTRY_HOST"
+
+# ---------- builder (TDLib+Drogon), вручную ----------
+.builder:
+  extends: .docker
+  stage: builder
+  script:
+    - export TDLIB_REF="$(grep -E '^TDLIB_REF=' TDLIB_REF | cut -d= -f2)"
+    - export DROGON_REF="$(grep -E '^DROGON_REF=' DROGON_REF | cut -d= -f2)"
+    - >
+      docker build -f Dockerfile.builder
+      --build-arg TDLIB_REF="$TDLIB_REF"
+      --build-arg DROGON_REF="$DROGON_REF"
+      -t "${REGISTRY_IMAGE}:builder-${ARCH}" .
+    - docker push "${REGISTRY_IMAGE}:builder-${ARCH}"
+  rules:
+    - when: manual
+      allow_failure: false
+
+builder:amd64:
+  extends: .builder
+  tags: [amd64]
+  variables: { ARCH: amd64 }
+
+builder:arm64:
+  extends: .builder
+  tags: [arm64]
+  variables: { ARCH: arm64 }
+
+# ---------- lint (в builder-образе: там clang-format/tidy + deps) ----------
 clang-format:
   stage: lint
-  image: xianpengshen/clang-tools:16
+  image: "${REGISTRY_IMAGE}:builder-amd64"
   tags: [amd64]
   script:
     - git ls-files '*.cpp' '*.hpp' '*.h' | xargs -r clang-format --dry-run --Werror
@@ -30,29 +64,26 @@ clang-format:
 suppressions-guard:
   stage: lint
   image: debian:12-slim
-  tags: [amd64]
+  tags: [arm64]
   script:
     - >
       if grep -REn '(src/|tests/|tgw::)' cmake/suppressions/; then
         echo "ОШИБКА: наш код в suppressions — гонки/утечки чиним, а не подавляем"; exit 1;
       fi
 
-# ---------- test (нужен полный тулчейн: tdlib + drogon в BUILDER_IMAGE) ----------
+# ---------- test (в builder-образе) ----------
 .build-and-test:
   stage: test
-  image: $BUILDER_IMAGE
-  variables:
-    CMAKE_PREFIX_PATH: "/opt/tdlib;/opt/drogon"
+  image: "$BUILDER_TAG"
   script:
     - cmake --preset "$PRESET"
     - cmake --build --preset "$PRESET"
     - ctest --preset "$PRESET"
 
 tidy:
-  extends: .build-and-test
+  stage: test
+  image: "${REGISTRY_IMAGE}:builder-amd64"
   tags: [amd64]
-  variables:
-    PRESET: dev-debug
   script:
     - cmake --preset dev-debug
     - git ls-files 'src/*.cpp' | xargs -r clang-tidy -p build/dev-debug --warnings-as-errors='bugprone-*,concurrency-*'
@@ -78,54 +109,42 @@ test:tsan:
     PRESET: tsan
     TSAN_OPTIONS: "suppressions=$CI_PROJECT_DIR/cmake/suppressions/tsan.supp halt_on_error=1"
 
-# ---------- image (multi-arch, C9) ----------
+# ---------- image (multi-arch service, C9) ----------
 .image-build:
+  extends: .docker
   stage: image
-  image: docker:27
-  services: [docker:27-dind]
-  variables:
-    DOCKER_TLS_CERTDIR: "/certs"
-  before_script:
-    - export TDLIB_REF="$(grep -E '^TDLIB_REF=' TDLIB_REF | cut -d= -f2)"
-    - export DROGON_REF="$(grep -E '^DROGON_REF=' DROGON_REF | cut -d= -f2)"
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - >
       docker build
-      --build-arg TDLIB_REF="$TDLIB_REF"
-      --build-arg DROGON_REF="$DROGON_REF"
-      -t "$CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}-${ARCH}" .
-    - docker push "$CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}-${ARCH}"
+      --build-arg BUILDER_IMAGE="${REGISTRY_IMAGE}:builder-${ARCH}"
+      -t "${REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}-${ARCH}" .
+    - docker push "${REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}-${ARCH}"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"'
 
 image:amd64:
   extends: .image-build
   tags: [amd64]
   variables: { ARCH: amd64 }
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"'
 
 image:arm64:
   extends: .image-build
   tags: [arm64]
   variables: { ARCH: arm64 }
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"'
 
 # Слить per-arch образы в один multi-arch манифест.
 image:manifest:
+  extends: .docker
   stage: image
-  image: docker:27
-  services: [docker:27-dind]
   tags: [amd64]
   needs: [image:amd64, image:arm64]
-  variables:
-    DOCKER_TLS_CERTDIR: "/certs"
-  before_script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - >
-      docker buildx imagetools create -t "$CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}"
-      "$CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}-amd64"
-      "$CI_REGISTRY_IMAGE:${CI_COMMIT_SHORT_SHA}-arm64"
+      docker buildx imagetools create -t "${REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+      "${REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}-amd64"
+      "${REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}-arm64"
+    - if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        docker buildx imagetools create -t "${REGISTRY_IMAGE}:latest" "${REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}";
+      fi
   rules:
     - if: '$CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"'

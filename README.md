@@ -40,18 +40,23 @@ tests/
   fake_transport.hpp    — FakeTdTransport (scripted, потокобезопасный)
   transport_smoke_test.cpp
 openapi/openapi.yaml
-Dockerfile.tdlib        — кэш-образ со статической TDLib (пин TDLIB_REF)
-Dockerfile              — основной multi-stage → distroless
+Dockerfile.builder      — образ тулчейн+TDLib+Drogon (пины TDLIB_REF/DROGON_REF)
+Dockerfile              — образ сервиса (FROM builder) → distroless
 ```
+
+CI/CD и список переменных GitLab — [`docs/CICD.md`](docs/CICD.md).
 
 ## Сборка (в контейнере)
 
 ```bash
 # 1. Зафиксировать TDLIB_REF (полный git-SHA!) и DROGON_REF.
-# 2. Собрать кэш-образ TDLib (долго; только при смене пина):
-docker build -f Dockerfile.tdlib --build-arg TDLIB_REF="$(grep -oP '(?<=^TDLIB_REF=).*' TDLIB_REF)" -t tdlib-base:pinned .
+# 2. Собрать builder-образ (долго; только при смене пинов):
+docker build -f Dockerfile.builder \
+  --build-arg TDLIB_REF="$(grep -oP '(?<=^TDLIB_REF=).*' TDLIB_REF)" \
+  --build-arg DROGON_REF="$(grep -oP '(?<=^DROGON_REF=).*' DROGON_REF)" \
+  -t tgw-builder:local .
 # 3. Собрать сервис:
-docker build --build-arg TDLIB_REF=pinned -t telegram-rest-gateway .
+docker build --build-arg BUILDER_IMAGE=tgw-builder:local -t telegram-rest-gateway .
 ```
 
 Локальная сборка вне Docker требует установленных TDLib (`Td::TdStatic`), Drogon и
