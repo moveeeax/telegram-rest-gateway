@@ -40,9 +40,11 @@ variables:
       --build-arg DROGON_REF="$DROGON_REF"
       -t "${REGISTRY_IMAGE}:builder-${ARCH}" .
     - docker push "${REGISTRY_IMAGE}:builder-${ARCH}"
+  # Неблокирующий ручной запуск: обычные пайплайны идут в lint/test/image на уже
+  # собранном :builder-<arch>; эти джобы гоняем вручную только при смене пинов.
   rules:
     - when: manual
-      allow_failure: false
+      allow_failure: true
 
 builder:amd64:
   extends: .builder
