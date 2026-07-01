@@ -88,8 +88,10 @@ suppressions-guard:
   image: "$BUILDER_TAG"
   script:
     - cmake --preset "$PRESET"
-    - cmake --build --preset "$PRESET"
-    - ctest --preset "$PRESET"
+    # Только тест-таргет (не линкуем большой exe с Drogon) + -j2: держим пиковую память
+    # в рамках 8 ГБ amd64-ноды при санитайзерной сборке против статической TDLib.
+    - cmake --build --preset "$PRESET" --target tgw_unit_tests --parallel 2
+    - ctest --preset "$PRESET" --output-on-failure
 
 tidy:
   stage: test
