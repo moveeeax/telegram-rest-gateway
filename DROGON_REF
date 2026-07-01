@@ -1,3 +1,2 @@
-# Пин версии Drogon (>=1.8.x для стабильного Task<HttpResponsePtr>).
-# Заменить на конкретный тег/SHA перед первой сборкой (проверить, что тег существует).
-DROGON_REF=v1.9.1
+# Пин версии Drogon (>=1.8.x для стабильного Task<HttpResponsePtr>/AsyncTask).
+DROGON_REF=v1.9.8
