@@ -38,8 +38,12 @@ if(TGW_ENABLE_ASAN AND TGW_ENABLE_TSAN)
     message(FATAL_ERROR "ASAN и TSAN несовместимы — включай по одному")
 endif()
 if(TGW_ENABLE_ASAN)
-    target_compile_options(tgw_project_options INTERFACE -fsanitize=address,undefined -fno-omit-frame-pointer)
-    target_link_options(tgw_project_options INTERFACE -fsanitize=address,undefined)
+    # -fno-sanitize=vptr: UBSan vptr-чек требует RTTI/typeinfo, которых нет у типов
+    # td::td_api::* (TDLib собран без RTTI) — иначе undefined reference при линковке.
+    target_compile_options(tgw_project_options INTERFACE
+        -fsanitize=address,undefined -fno-sanitize=vptr -fno-omit-frame-pointer)
+    target_link_options(tgw_project_options INTERFACE
+        -fsanitize=address,undefined -fno-sanitize=vptr)
 endif()
 if(TGW_ENABLE_TSAN)
     target_compile_options(tgw_project_options INTERFACE -fsanitize=thread -fno-omit-frame-pointer)
