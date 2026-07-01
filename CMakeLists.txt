@@ -46,19 +46,22 @@ if(TGW_ENABLE_TSAN)
     target_link_options(tgw_project_options INTERFACE -fsanitize=thread)
 endif()
 
-# --- tgw_bridge: тестируемое ядро (порт транспорта, часы). Зависит от типов td_api. ---
-# ВАЖНО: интерфейс использует td_api::*, поэтому линкуем Td::TdStatic (реального
-# ClientManager он не поднимает — сеть/БД стартуют только через RealTdTransport).
+# --- tgw_bridge: ядро моста (порт транспорта, корреляция, поток-приёмник). ---
+# Использует td_api::* (Td::TdStatic) и trantor EventLoop::queueInLoop + логгер (Drogon).
 add_library(tgw_bridge STATIC
-    src/bridge/real_transport.cpp)
+    src/bridge/real_transport.cpp
+    src/bridge/correlation_map.cpp
+    src/bridge/update_sink.cpp
+    src/bridge/td_bridge.cpp)
 target_include_directories(tgw_bridge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(tgw_bridge
-    PUBLIC Td::TdStatic
+    PUBLIC Td::TdStatic Drogon::Drogon
     PRIVATE tgw_project_options)
 
 # --- Исполняемый сервис ---
 add_executable(telegram-rest-gateway
-    src/main.cpp)
+    src/main.cpp
+    src/http/routes.cpp)
 target_link_libraries(telegram-rest-gateway
     PRIVATE tgw_bridge Drogon::Drogon tgw_project_options)
 
