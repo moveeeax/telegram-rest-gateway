@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1.7
+# Кэш-образ со статически собранной TDLib. Пересобирается ТОЛЬКО при смене TDLIB_REF.
+# Собирается нативно под каждую арку (amd64/arm64) — cross-compile TDLib проблематичен
+# из-за host-генератора TL (SPEC_ELABORATION §11.4, §11.6).
+# Build: docker build -f Dockerfile.tdlib --build-arg TDLIB_REF=<git-sha> -t tdlib-base:<git-sha> .
+ARG TDLIB_REF=master
+
+FROM debian:12-slim AS build
+ARG TDLIB_REF
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates cmake ninja-build g++-12 \
+        gperf zlib1g-dev libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+ENV CC=gcc-12 CXX=g++-12
+
+WORKDIR /src
+RUN git clone https://github.com/tdlib/td.git . \
+    && git checkout "${TDLIB_REF}"
+
+# ВНИМАНИЕ: >=8 ГБ RAM на td_api.cpp; при нехватке — -j2 (§11.4).
+RUN cmake -S . -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/tdlib \
+        -DTD_ENABLE_LTO=OFF \
+        -DTD_ENABLE_JNI=OFF \
+    && cmake --build build --target install
+
+# Тонкий базовый слой: только установленная TDLib (заголовки + статические либы + CMake-config).
+FROM debian:12-slim AS base
+COPY --from=build /opt/tdlib /opt/tdlib

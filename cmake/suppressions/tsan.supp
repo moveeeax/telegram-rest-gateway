@@ -1,0 +1,5 @@
+# ThreadSanitizer suppressions — ТОЛЬКО для сторонних библиотек.
+# Наш код (src/bridge/*, update_router и т.п.) сюда добавлять ЗАПРЕЩЕНО:
+# гонки в мосте — это баги, которые чинятся, а не подавляются.
+called_from_lib:libcrypto.so
+called_from_lib:libssl.so
