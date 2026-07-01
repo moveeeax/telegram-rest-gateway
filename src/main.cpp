@@ -1,16 +1,16 @@
-#include <drogon/HttpAppFramework.h>
+#include "bridge/real_transport.hpp"
+#include "bridge/td_bridge.hpp"
+#include "bridge/update_sink.hpp"
+#include "http/routes.hpp"
+
 #include <drogon/drogon.h>
+#include <drogon/HttpAppFramework.h>
 #include <td/telegram/td_api.h>
 
 #include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <string_view>
-
-#include "bridge/real_transport.hpp"
-#include "bridge/td_bridge.hpp"
-#include "bridge/update_sink.hpp"
-#include "http/routes.hpp"
 
 namespace td_api = td::td_api;
 

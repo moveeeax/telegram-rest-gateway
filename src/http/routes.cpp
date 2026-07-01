@@ -1,14 +1,14 @@
 #include "http/routes.hpp"
 
+#include "bridge/expect.hpp"
+#include "bridge/td_bridge.hpp"
+
 #include <drogon/drogon.h>
 #include <td/telegram/td_api.h>
 
 #include <functional>
 #include <string>
 #include <utility>
-
-#include "bridge/expect.hpp"
-#include "bridge/td_bridge.hpp"
 
 namespace td_api = td::td_api;
 

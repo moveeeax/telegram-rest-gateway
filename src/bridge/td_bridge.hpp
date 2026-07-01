@@ -1,5 +1,12 @@
 #pragma once
 
+#include "bridge/clock.hpp"
+#include "bridge/correlation_map.hpp"
+#include "bridge/request_id.hpp"
+#include "bridge/request_state.hpp"
+#include "bridge/transport.hpp"
+#include "bridge/update_sink.hpp"
+
 #include <td/telegram/td_api.h>
 
 #include <atomic>
@@ -8,13 +15,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <thread>
-
-#include "bridge/clock.hpp"
-#include "bridge/correlation_map.hpp"
-#include "bridge/request_id.hpp"
-#include "bridge/request_state.hpp"
-#include "bridge/transport.hpp"
-#include "bridge/update_sink.hpp"
 
 namespace tgw::bridge {
 
@@ -30,7 +30,7 @@ class TdBridge;
 // Awaitable моста (SPEC_ELABORATION §5.7): insert-before-send строго внутри await_suspend,
 // resume — только через loop->queueInLoop исходного event-loop.
 class TdAwaitable {
-  public:
+   public:
     TdAwaitable(TdBridge& bridge, std::int32_t client_id,
                 td::td_api::object_ptr<td::td_api::Function> fn);
 
@@ -38,7 +38,7 @@ class TdAwaitable {
     bool await_suspend(std::coroutine_handle<> handle);
     td::td_api::object_ptr<td::td_api::Object> await_resume();
 
-  private:
+   private:
     TdBridge& bridge_;
     std::int32_t client_id_;
     td::td_api::object_ptr<td::td_api::Function> fn_;
@@ -48,7 +48,7 @@ class TdAwaitable {
 // Мост async TDLib <-> request/response. Владеет транспортом, таблицей корреляции,
 // генератором id и единственным потоком-приёмником (§5.3, §5.8).
 class TdBridge {
-  public:
+   public:
     TdBridge(ITdTransport& transport, IUpdateSink& sink, BridgeConfig config,
              SteadyClock clock = systemSteadyClock());
     TdBridge(const TdBridge&) = delete;
@@ -70,7 +70,7 @@ class TdBridge {
     std::uint64_t receiveIterations() const { return receive_iterations_.load(); }
     std::size_t pending() { return corr_.size(); }
 
-  private:
+   private:
     friend class TdAwaitable;
 
     bool registerAndSend(const RequestStatePtr& state,

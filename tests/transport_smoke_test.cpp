@@ -1,14 +1,17 @@
-#include <gtest/gtest.h>
-#include <td/telegram/td_api.h>
-
 #include "bridge/transport.hpp"
 #include "fake_transport.hpp"
+
+#include <td/telegram/td_api.h>
+
+#include <gtest/gtest.h>
 
 namespace td_api = td::td_api;
 
 namespace {
 
-td_api::object_ptr<td_api::Object> makeOk() { return td_api::make_object<td_api::ok>(); }
+td_api::object_ptr<td_api::Object> makeOk() {
+    return td_api::make_object<td_api::ok>();
+}
 
 }  // namespace
 

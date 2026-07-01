@@ -32,7 +32,8 @@ struct RequestState {
 
 using RequestStatePtr = std::shared_ptr<RequestState>;
 
-inline td::td_api::object_ptr<td::td_api::Object> makeError(std::int32_t code, std::string message) {
+inline td::td_api::object_ptr<td::td_api::Object> makeError(std::int32_t code,
+                                                            std::string message) {
     return td::td_api::make_object<td::td_api::error>(code, std::move(message));
 }
 

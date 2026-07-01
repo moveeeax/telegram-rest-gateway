@@ -6,7 +6,9 @@ namespace tgw::bridge {
 
 RealTdTransport::RealTdTransport() : manager_(std::make_unique<td::ClientManager>()) {}
 
-std::int32_t RealTdTransport::createClientId() { return manager_->create_client_id(); }
+std::int32_t RealTdTransport::createClientId() {
+    return manager_->create_client_id();
+}
 
 void RealTdTransport::send(std::int32_t client_id, std::uint64_t request_id,
                            td::td_api::object_ptr<td::td_api::Function> fn) {

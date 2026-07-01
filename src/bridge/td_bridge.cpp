@@ -49,17 +49,20 @@ TdBridge::TdBridge(ITdTransport& transport, IUpdateSink& sink, BridgeConfig conf
       clock_(std::move(clock)),
       corr_(config.max_inflight) {}
 
-TdBridge::~TdBridge() { stop(); }
+TdBridge::~TdBridge() {
+    stop();
+}
 
-std::int32_t TdBridge::createClientId() { return transport_.createClientId(); }
+std::int32_t TdBridge::createClientId() {
+    return transport_.createClientId();
+}
 
 TdAwaitable TdBridge::invoke(std::int32_t client_id,
                              td::td_api::object_ptr<td::td_api::Function> fn) {
     return TdAwaitable(*this, client_id, std::move(fn));
 }
 
-void TdBridge::sendOneWay(std::int32_t client_id,
-                          td::td_api::object_ptr<td::td_api::Function> fn) {
+void TdBridge::sendOneWay(std::int32_t client_id, td::td_api::object_ptr<td::td_api::Function> fn) {
     transport_.send(client_id, id_gen_.next(), std::move(fn));
 }
 

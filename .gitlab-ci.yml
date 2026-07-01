@@ -57,20 +57,27 @@ builder:arm64:
 # ---------- lint (в builder-образе: там clang-format/tidy + deps) ----------
 clang-format:
   stage: lint
-  image: "${REGISTRY_IMAGE}:builder-amd64"
+  image: python:3.12-slim
   tags: [amd64]
+  before_script:
+    - pip install --no-cache-dir clang-format==18.1.8
   script:
-    - git ls-files '*.cpp' '*.hpp' '*.h' | xargs -r clang-format --dry-run --Werror
+    - clang-format --version
+    - >
+      find src tests -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \)
+      | xargs -r clang-format --dry-run --Werror
 
 # Наш код НЕ должен попадать в sanitizer-suppressions (только сторонние символы).
+# Игнорируем строки-комментарии (в них слова src//tests/ встречаются легитимно).
 suppressions-guard:
   stage: lint
   image: debian:12-slim
   tags: [arm64]
   script:
-    - >
-      if grep -REn '(src/|tests/|tgw::)' cmake/suppressions/; then
-        echo "ОШИБКА: наш код в suppressions — гонки/утечки чиним, а не подавляем"; exit 1;
+    - |
+      hits=$(grep -rnE '(src/|tests/|tgw::)' cmake/suppressions/ | grep -vE ':[0-9]+:[[:space:]]*#' || true)
+      if [ -n "$hits" ]; then
+        echo "ОШИБКА: наш код в suppressions — гонки/утечки чиним, а не подавляем:"; echo "$hits"; exit 1;
       fi
 
 # ---------- test (в builder-образе) ----------

@@ -1,18 +1,18 @@
 #pragma once
 
+#include "bridge/transport.hpp"
+
 #include <td/telegram/td_api.h>
 
 #include <deque>
 #include <mutex>
-
-#include "bridge/transport.hpp"
 
 namespace tgw::testing {
 
 // Потокобезопасный scripted-транспорт для unit/TSan-тестов моста без реального TDLib.
 // pushResponse(rid, obj) — ответ на конкретный request_id; pushUpdate(obj) — апдейт (rid==0).
 class FakeTdTransport final : public tgw::bridge::ITdTransport {
-  public:
+   public:
     std::int32_t createClientId() override {
         std::lock_guard lock(mutex_);
         return ++last_client_id_;
@@ -50,7 +50,7 @@ class FakeTdTransport final : public tgw::bridge::ITdTransport {
         return sent_.size();
     }
 
-  private:
+   private:
     struct SentItem {
         std::int32_t client_id;
         std::uint64_t request_id;

@@ -16,7 +16,7 @@ struct Response {
 };
 
 class ITdTransport {
-  public:
+   public:
     virtual ~ITdTransport() = default;
 
     virtual std::int32_t createClientId() = 0;

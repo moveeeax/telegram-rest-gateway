@@ -8,7 +8,7 @@ namespace tgw::bridge {
 // Монотонный генератор request_id. 0 зарезервирован под апдейты (SPEC_ELABORATION §5.2),
 // поэтому wrap через 0 пропускается.
 class RequestIdGenerator {
-  public:
+   public:
     std::uint64_t next() {
         std::uint64_t id = counter_.fetch_add(1, std::memory_order_relaxed) + 1;
         while (id == 0) {
@@ -17,7 +17,7 @@ class RequestIdGenerator {
         return id;
     }
 
-  private:
+   private:
     std::atomic<std::uint64_t> counter_{0};
 };
 

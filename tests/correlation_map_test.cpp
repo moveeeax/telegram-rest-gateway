@@ -1,13 +1,13 @@
-#include <gtest/gtest.h>
+#include "bridge/correlation_map.hpp"
+
+#include "bridge/request_state.hpp"
 
 #include <atomic>
 #include <chrono>
+#include <gtest/gtest.h>
 #include <memory>
 #include <thread>
 #include <vector>
-
-#include "bridge/correlation_map.hpp"
-#include "bridge/request_state.hpp"
 
 using tgw::bridge::CorrelationMap;
 using tgw::bridge::RequestState;
