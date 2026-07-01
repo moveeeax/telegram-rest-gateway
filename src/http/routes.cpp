@@ -62,19 +62,27 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id) {
     // GET /v1/me — PoC моста: co_await ответа TDLib через correlation map (§12, этап 1).
     // До авторизации (этап 2) TDLib вернёт error — это тоже доказывает работу моста
     // (запрос -> ответ маршрутизируется обратно в приостановленный HTTP-запрос).
+    // registerHandler не биндит корутинные лямбды (FunctionTraits их не распознаёт),
+    // поэтому внешний хендлер — обычный callback, а корутину гоняем отдельным
+    // detached AsyncTask (захват по значению callback/client_id, bridge — по ссылке).
     drogon::app().registerHandler(
         "/v1/me",
-        [&bridge,
-         client_id](const drogon::HttpRequestPtr&) -> drogon::Task<drogon::HttpResponsePtr> {
-            auto object = co_await bridge.invoke(client_id, td_api::make_object<td_api::getMe>());
-            auto result = tgw::bridge::expect<td_api::user>(std::move(object));
-            if (!result.ok()) {
-                co_return telegramError(*result.error);
-            }
-            Json::Value body;
-            body["ok"] = true;
-            body["data"] = userToJson(*result.value);
-            co_return jsonResponse(std::move(body), drogon::k200OK);
+        [&bridge, client_id](const drogon::HttpRequestPtr&,
+                             std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            [](tgw::bridge::TdBridge& td, std::int32_t cid,
+               std::function<void(const drogon::HttpResponsePtr&)> cb) -> drogon::AsyncTask {
+                auto object = co_await td.invoke(cid, td_api::make_object<td_api::getMe>());
+                auto result = tgw::bridge::expect<td_api::user>(std::move(object));
+                if (!result.ok()) {
+                    cb(telegramError(*result.error));
+                    co_return;
+                }
+                Json::Value body;
+                body["ok"] = true;
+                body["data"] = userToJson(*result.value);
+                cb(jsonResponse(std::move(body), drogon::k200OK));
+                co_return;
+            }(bridge, client_id, std::move(callback));
         },
         {drogon::Get});
 }
