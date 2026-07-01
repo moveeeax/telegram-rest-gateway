@@ -1,5 +1,11 @@
 # CI telegram-rest-gateway. Гейты — SPEC_ELABORATION §12, §14.9.
-# TODO(инфра): нативные arm64-раннеры (tag: arm64) — следствие решения C9 (multi-arch).
+#
+# Раннеры (решение C9, DECISIONS.md):
+#   - 1x amd64  — тег `amd64`
+#   - 6x arm64  — нативные теги node-1..node-6; на ВСЕ добавлен общий тег `arm64`,
+#     чтобы job `tags:[arm64]` балансировался по любой свободной ноде (GitLab-теги — только «И»).
+# Асимметрия 1:6 — amd64-задачи сериализуются на одной ноде (ожидаемо для multi-arch).
+#
 # TODO(инфра): образ builder ($BUILDER_IMAGE) = tdlib-base + собранный Drogon; готовится
 #              отдельным пайплайном из Dockerfile.tdlib (пересборка только при смене TDLIB_REF).
 
