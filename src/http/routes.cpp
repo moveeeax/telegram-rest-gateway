@@ -64,20 +64,17 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id) {
     // (запрос -> ответ маршрутизируется обратно в приостановленный HTTP-запрос).
     drogon::app().registerHandler(
         "/v1/me",
-        [&bridge, client_id](
-            const drogon::HttpRequestPtr&,
-            std::function<void(const drogon::HttpResponsePtr&)> callback) -> drogon::AsyncTask {
+        [&bridge,
+         client_id](const drogon::HttpRequestPtr&) -> drogon::Task<drogon::HttpResponsePtr> {
             auto object = co_await bridge.invoke(client_id, td_api::make_object<td_api::getMe>());
             auto result = tgw::bridge::expect<td_api::user>(std::move(object));
             if (!result.ok()) {
-                callback(telegramError(*result.error));
-                co_return;
+                co_return telegramError(*result.error);
             }
             Json::Value body;
             body["ok"] = true;
             body["data"] = userToJson(*result.value);
-            callback(jsonResponse(std::move(body), drogon::k200OK));
-            co_return;
+            co_return jsonResponse(std::move(body), drogon::k200OK);
         },
         {drogon::Get});
 }
