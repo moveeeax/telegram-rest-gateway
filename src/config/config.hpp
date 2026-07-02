@@ -1,5 +1,6 @@
 #pragma once
 
+#include "events/kafka_sink.hpp"
 #include "util/s3_client.hpp"
 
 #include <cstddef>
@@ -58,6 +59,10 @@ struct Config {
     // тянется из S3 (при отсутствии локального), периодически и на shutdown заливается обратно.
     tgw::util::S3Config s3;
     int s3_sync_interval_seconds = 300;
+
+    // Kafka-канал событий: каждый форвардящийся апдейт (allowlist WS) публикуется сообщением.
+    // brokers пуст — выключено. Ключ сообщения: "<session_id>:<chat_id>".
+    tgw::events::KafkaConfig kafka;
 
     // Загружает конфиг из окружения. Кидает std::runtime_error, если нет обязательных
     // api_id/api_hash/database_encryption_key.

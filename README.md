@@ -71,6 +71,9 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 | `TGW_SESSION` / `TGW_SESSION_FILE` | — | Session string (base64 от `td.binlog`) для stateless-запуска |
 | `TGW_WS_MAX_PENDING_BYTES` | `8388608` | WS back-pressure: лимит байт с последнего pong; 0 — выкл |
 | `TGW_MAX_MEMORY_BODY_BYTES` | `1048576` | Порог spool-на-диск для тел запросов (RSS при аплоадах) |
+| `TGW_KAFKA_BROKERS` | — | Kafka/Redpanda bootstrap; пусто — события в Kafka выключены |
+| `TGW_KAFKA_TOPIC` | `tgw.updates` | Топик событий |
+| `TGW_KAFKA_CLIENT_ID` | `tgw-<session_id>` | client.id продюсера |
 
 ### Хранение сессии в S3/MinIO (опционально)
 
@@ -98,6 +101,15 @@ volume. Включается только при заполненных `bucket`
 
 Секреты (`api_id`, `api_hash`, `database_encryption_key`, Bearer-токены, S3 credentials) — только
 через `*_FILE` / secret manager, никогда в образ/env напрямую.
+
+## События в Kafka
+
+Если задан `TGW_KAFKA_BROKERS`, каждый апдейт из allowlist (тот же набор, что в WS) публикуется
+в топик `TGW_KAFKA_TOPIC`. Формат тела — как WS-фрейм (`type/update_type/seq/session_id/data`);
+**ключ сообщения — `<session_id>:<chat_id>`** (префикс id аккаунта; порядок в рамках чата
+гарантирован партиционированием). Доставка at-least-once: дедупликация у консьюмера по
+`(session_id, seq)`; дыра в `seq` = потеря (см. `tgw_kafka_dropped_total`). Продюсер никогда
+не блокирует приём апдейтов Telegram: при переполнении очереди события дропаются с метрикой.
 
 ## Метрики
 

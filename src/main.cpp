@@ -6,6 +6,7 @@
 #include "bridge/real_transport.hpp"
 #include "bridge/td_bridge.hpp"
 #include "config/config.hpp"
+#include "events/kafka_sink.hpp"
 #include "http/login_ui.hpp"
 #include "http/metrics_routes.hpp"
 #include "http/routes.hpp"
@@ -134,10 +135,20 @@ int main(int argc, char** argv) {
             break;  // чистый старт — логин через /v1/auth/*
     }
 
+    // Kafka-канал событий (no-op если TGW_KAFKA_BROKERS пуст).
+    auto kafka = tgw::events::KafkaSink::create(config.kafka);
+
     // Мост + приёмник апдейтов = AuthStateManager (обрабатывает updateAuthorizationState).
     tgw::bridge::RealTdTransport transport;
     tgw::auth::AuthStateManager auth;
-    tgw::ws::UpdateRouter router(auth);  // авторизационные -> auth, прикладные -> WS fan-out
+    // авторизационные -> auth, прикладные -> WS fan-out (+ Kafka, если включена)
+    tgw::ws::UpdateRouter router(auth, config.session_id);
+    if (kafka) {
+        router.setEventPublisher(
+            [sink = kafka.get()](const std::string& key, const std::string& payload) {
+                sink->produce(key, payload);
+            });
+    }
     tgw::bridge::TdBridge bridge(transport, router, tgw::bridge::BridgeConfig{});
 
     const std::int32_t client_id = bridge.createClientId();
@@ -180,6 +191,11 @@ int main(int argc, char** argv) {
     tgw::http::registerMetricsRoutes(bridge, auth);  // GET /metrics (Prometheus)
     tgw::http::startUploadCleanup(upload_dir, std::chrono::hours(1));
 
+    // Периодический сервис Kafka-продюсера (delivery-report'ы при простое трафика).
+    if (kafka) {
+        drogon::app().getLoop()->runEvery(1.0, [sink = kafka.get()] { sink->poll(); });
+    }
+
     // Периодический бэкап сессии в S3 (no-op если S3 не сконфигурирован). in_flight нужен, чтобы
     // на shutdown дождаться незавершённого фонового PUT перед финальным push.
     auto s3_sync_in_flight = tgw::auth::startS3Sync(config.s3, config.database_directory,
@@ -199,6 +215,11 @@ int main(int argc, char** argv) {
         LOG_WARN << "TDLib did not reach Closed within timeout";
     }
     bridge.stop();
+
+    // Дожидаемся доставки хвоста событий в Kafka (не блокирует, если очередь пуста/выключено).
+    if (kafka) {
+        kafka->flush(std::chrono::seconds(10));
+    }
 
     // Финальный push сессии в S3: binlog закрыт TDLib и консистентен (no-op если S3 выключен).
     if (config.s3.enabled()) {
