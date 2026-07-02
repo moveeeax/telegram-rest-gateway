@@ -6,6 +6,7 @@
 #include "bridge/real_transport.hpp"
 #include "bridge/td_bridge.hpp"
 #include "config/config.hpp"
+#include "http/login_ui.hpp"
 #include "http/routes.hpp"
 #include "http/upload_cleanup.hpp"
 #include "ws/update_router.hpp"
@@ -129,6 +130,7 @@ int main(int argc, char** argv) {
 
     tgw::http::registerRoutes(bridge, client_id, auth, config.database_directory);
     tgw::http::registerMessageRoutes(bridge, client_id, upload_dir);
+    tgw::http::registerLoginUi();  // GET /ui — страница входа (форма/QR)
     tgw::http::startUploadCleanup(upload_dir, std::chrono::hours(1));
 
     // Периодический бэкап сессии в S3 (no-op если S3 не сконфигурирован). in_flight нужен, чтобы
