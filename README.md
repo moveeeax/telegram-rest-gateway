@@ -69,6 +69,7 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 | `TGW_LISTEN_ADDRESS` | `127.0.0.1` | Адрес прослушивания (в Docker — `0.0.0.0`) |
 | `TGW_LISTEN_PORT` | `8080` | Порт HTTP |
 | `TGW_SESSION` / `TGW_SESSION_FILE` | — | Session string (base64 от `td.binlog`) для stateless-запуска |
+| `TGW_WS_MAX_PENDING_BYTES` | `8388608` | WS back-pressure: лимит байт с последнего pong; 0 — выкл |
 
 ### Хранение сессии в S3/MinIO (опционально)
 

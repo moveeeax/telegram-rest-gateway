@@ -3,6 +3,7 @@
 #include "auth/token_store.hpp"
 #include "ws/ws_registry.hpp"
 
+#include <chrono>
 #include <json/value.h>
 #include <json/writer.h>
 #include <string>
@@ -48,13 +49,19 @@ void UpdatesWs::handleNewConnection(const drogon::HttpRequestPtr& req,
         return;
     }
     WsSubscriberRegistry::instance().connect(conn);
+    // Пинг раз в 15с — драйвер back-pressure: pong сбрасывает счётчик backlog'а (ws_registry).
+    conn->setPingMessage("", std::chrono::seconds(15));
     conn->send(helloFrame());
 }
 
-void UpdatesWs::handleNewMessage(const drogon::WebSocketConnectionPtr& /*conn*/,
+void UpdatesWs::handleNewMessage(const drogon::WebSocketConnectionPtr& conn,
                                  std::string&& /*message*/,
-                                 const drogon::WebSocketMessageType& /*type*/) {
-    // MVP: входящие фреймы (ping/pong/подписки) игнорируем, не падаем (§6.5).
+                                 const drogon::WebSocketMessageType& type) {
+    // Pong = клиент дочитал поток до нашего пинга — снимаем его backlog-счётчик.
+    // Прочие входящие фреймы (подписки и т.п.) игнорируем, не падаем (§6.5).
+    if (type == drogon::WebSocketMessageType::Pong) {
+        WsSubscriberRegistry::instance().notePong(conn);
+    }
 }
 
 void UpdatesWs::handleConnectionClosed(const drogon::WebSocketConnectionPtr& conn) {

@@ -11,6 +11,7 @@
 #include "http/routes.hpp"
 #include "http/upload_cleanup.hpp"
 #include "ws/update_router.hpp"
+#include "ws/ws_registry.hpp"
 
 #include <drogon/drogon.h>
 #include <drogon/HttpAppFramework.h>
@@ -152,6 +153,7 @@ int main(int argc, char** argv) {
 
     tgw::http::registerRoutes(bridge, client_id, auth, config.database_directory);
     tgw::http::registerMessageRoutes(bridge, client_id, upload_dir);
+    tgw::ws::WsSubscriberRegistry::instance().setMaxPendingBytes(config.ws_max_pending_bytes);
     tgw::http::registerLoginUi();  // GET /ui — страница входа (форма/QR)
     tgw::http::registerMetricsRoutes(bridge, auth);  // GET /metrics (Prometheus)
     tgw::http::startUploadCleanup(upload_dir, std::chrono::hours(1));

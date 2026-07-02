@@ -47,6 +47,9 @@ struct Config {
     // Лимит тела аплоада (буферизованный приём в MVP). Стриминг больших файлов — hardening.
     std::size_t max_upload_bytes = 64UL * 1024 * 1024;
 
+    // WS back-pressure: лимит неподтверждённых pong'ом байт на подписчика; 0 — выключено.
+    std::uint64_t ws_max_pending_bytes = 8ULL * 1024 * 1024;
+
     // Внешнее хранилище сессии (td.binlog) в S3/MinIO. Если s3.enabled() — на старте binlog
     // тянется из S3 (при отсутствии локального), периодически и на shutdown заливается обратно.
     tgw::util::S3Config s3;

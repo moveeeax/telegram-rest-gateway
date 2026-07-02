@@ -97,6 +97,11 @@ Config Config::load() {
         c.max_upload_bytes = static_cast<std::size_t>(std::stoull(max_upload));
     }
 
+    const std::string ws_pending = envOrFile("TGW_WS_MAX_PENDING_BYTES");
+    if (!ws_pending.empty()) {
+        c.ws_max_pending_bytes = std::stoull(ws_pending);
+    }
+
     // Метка инстанса для разграничения сессий в S3. Валидируем как безопасный сегмент пути.
     c.session_id = envOrFile("TGW_SESSION_ID", "default");
     if (!isSafeSegment(c.session_id)) {
