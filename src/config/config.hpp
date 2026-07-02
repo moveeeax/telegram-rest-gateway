@@ -39,7 +39,7 @@ struct Config {
     std::string listen_address = "127.0.0.1";
     std::uint16_t listen_port = 8080;
 
-    std::string application_version = "0.0.1";
+    std::string application_version = "1.0.0";
 
     // API-токены клиентов (Bearer). Пусто = fail-closed: все защищённые эндпоинты дадут 401.
     std::vector<std::string> bearer_tokens;
