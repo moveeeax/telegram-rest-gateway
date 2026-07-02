@@ -67,6 +67,18 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Ready" }
 
+  /metrics:
+    get:
+      tags: [system]
+      summary: Prometheus-метрики
+      description: Text exposition format. Без Bearer (скрейпится изнутри периметра).
+      security: []
+      responses:
+        "200":
+          description: Метрики
+          content:
+            text/plain: {}
+
   /ui:
     get:
       tags: [system]
