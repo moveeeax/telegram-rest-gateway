@@ -11,15 +11,21 @@ RUN cmake -S . -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DTGW_BUILD_TESTS=OFF \
     && cmake --build build --target telegram-rest-gateway
 
+# Собираем ВСЕ динамические зависимости бинаря по ldd (OpenSSL/ZLib/c-ares/brotli/jsoncpp/uuid…),
+# кроме glibc/gcc-ядра (libc/libm/libdl/libpthread/librt/libstdc++/libgcc_s/ld-linux) — оно уже
+# есть в distroless/cc. TDLib слинкована статически, поэтому её .so тут нет.
+RUN mkdir -p /dist-libs && \
+    ldd /app/build/telegram-rest-gateway \
+      | awk '/=> \//{print $3}' \
+      | grep -vE '/(libc|libm|libdl|libpthread|librt|libstdc\+\+|libgcc_s|ld-linux[^/]*)\.so' \
+      | xargs -I{} cp -Lv {} /dist-libs/
+
 # Каталоги данных с нужными правами/владельцем (distroless не умеет chown в рантайме).
 RUN install -d -m 0700 -o 65532 -g 65532 /data/session /data/files
 
 # ---------- runtime (distroless nonroot) ----------
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
-# TDLib слинкована статически; из динамических нужны только OpenSSL/ZLib.
-COPY --from=builder /usr/lib/*/libssl.so.3    /usr/lib/
-COPY --from=builder /usr/lib/*/libcrypto.so.3 /usr/lib/
-COPY --from=builder /usr/lib/*/libz.so.1      /usr/lib/
+COPY --from=builder /dist-libs/ /usr/lib/
 COPY --from=builder /app/build/telegram-rest-gateway /app/telegram-rest-gateway
 COPY --from=builder --chown=65532:65532 /data /data
 
