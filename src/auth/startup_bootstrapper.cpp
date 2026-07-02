@@ -8,6 +8,7 @@
 #include <trantor/utils/Logger.h>
 
 #include <chrono>
+#include <string>
 
 namespace tgw::auth {
 
@@ -65,7 +66,7 @@ bool StartupBootstrapper::run(tgw::bridge::TdBridge& bridge, std::int32_t client
         }
     }
 
-    LOG_INFO << "bootstrap: authorization_state=" << toString(auth.current());
+    LOG_INFO << "bootstrap: authorization_state=" << std::string(toString(auth.current()));
     return true;
 }
 
