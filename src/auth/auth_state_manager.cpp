@@ -73,6 +73,7 @@ void AuthStateManager::onUpdate(api::object_ptr<api::Object> update) {
 
 void AuthStateManager::setState(AuthState s) {
     std::function<void()> terminate_cb;
+    std::function<void()> ready_cb;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         state_.store(s, std::memory_order_release);
@@ -86,10 +87,16 @@ void AuthStateManager::setState(AuthState s) {
             !termination_reported_.exchange(true) && on_unexpected_termination_) {
             terminate_cb = on_unexpected_termination_;
         }
+        if (s == AuthState::Ready && !ready_reported_.exchange(true) && on_ready_) {
+            ready_cb = on_ready_;
+        }
     }
     cv_.notify_all();
     if (terminate_cb) {
         terminate_cb();
+    }
+    if (ready_cb) {
+        ready_cb();
     }
 }
 

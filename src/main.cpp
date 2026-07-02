@@ -141,6 +141,26 @@ int main(int argc, char** argv) {
     tgw::bridge::TdBridge bridge(transport, router, tgw::bridge::BridgeConfig{});
 
     const std::int32_t client_id = bridge.createClientId();
+
+    // Колбэки регистрируем ДО start(): восстановленная из S3/TGW_SESSION сессия доходит до
+    // Ready ещё в StartupBootstrapper — регистрация после него теряет событие.
+    // Warmup чатов (§бэклог ChatCache): TDLib наполняет главный список лениво — без прогрева
+    // первый GET /v1/chats после старта может отдать частичный список. Fire-and-forget.
+    auth.setOnReady([&bridge, client_id] {
+        auto load = td_api::make_object<td_api::loadChats>();
+        load->chat_list_ = td_api::make_object<td_api::chatListMain>();
+        load->limit_ = 100;
+        bridge.sendOneWay(client_id, std::move(load));
+        LOG_INFO << "authorized: warming up main chat list";
+    });
+    // Удалённый logout / отзыв сессии (AUTH_KEY_DUPLICATED): останавливаем сервис — с
+    // restart-политикой контейнер поднимется и честно попросит новый логин, вместо вечных 409.
+    // queueInLoop до run() просто отложит quit до старта loop'а.
+    auth.setOnUnexpectedTermination([] {
+        LOG_ERROR << "session terminated remotely (logout/revoked) — shutting down";
+        drogon::app().getLoop()->queueInLoop([] { drogon::app().quit(); });
+    });
+
     bridge.start();
 
     // Автоподъём сессии ДО приёма HTTP (§7.1): глушим лог, шлём setTdlibParameters.
@@ -152,13 +172,6 @@ int main(int argc, char** argv) {
     drogon::app().setClientMaxBodySize(config.max_upload_bytes);
     // Тела крупнее порога Drogon спулит в temp-файл (mmap) — 64MiB-аплоад не живёт в RAM.
     drogon::app().setClientMaxMemoryBodySize(config.max_memory_body_bytes);
-
-    // Удалённый logout / отзыв сессии (AUTH_KEY_DUPLICATED): останавливаем сервис — с
-    // restart-политикой контейнер поднимется и честно попросит новый логин, вместо вечных 409.
-    auth.setOnUnexpectedTermination([] {
-        LOG_ERROR << "session terminated remotely (logout/revoked) — shutting down";
-        drogon::app().getLoop()->queueInLoop([] { drogon::app().quit(); });
-    });
 
     tgw::http::registerRoutes(bridge, client_id, auth, config.database_directory);
     tgw::http::registerMessageRoutes(bridge, client_id, upload_dir);

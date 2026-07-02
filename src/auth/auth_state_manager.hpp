@@ -55,13 +55,22 @@ class AuthStateManager final : public tgw::bridge::IUpdateSink {
         on_unexpected_termination_ = std::move(cb);
     }
 
+    // Колбэк на первый переход в Ready (warmup-задачи: прогрев списка чатов и т.п.).
+    // Вызывается один раз из потока-приёмника.
+    void setOnReady(std::function<void()> cb) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        on_ready_ = std::move(cb);
+    }
+
    private:
     void setState(AuthState s);
 
     std::atomic<AuthState> state_{AuthState::Unknown};
     std::atomic<bool> expect_shutdown_{false};
     std::atomic<bool> termination_reported_{false};
+    std::atomic<bool> ready_reported_{false};
     std::function<void()> on_unexpected_termination_;  // под mutex_
+    std::function<void()> on_ready_;                   // под mutex_
     std::atomic<std::uint64_t> generation_{0};
     std::atomic<std::uint64_t> update_count_{0};
     mutable std::mutex mutex_;
