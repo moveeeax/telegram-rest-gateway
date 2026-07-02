@@ -4,6 +4,37 @@ namespace tgw::auth {
 
 namespace api = td::td_api;
 
+namespace {
+
+// authenticationCodeType* -> строковый тип для DTO.
+std::string codeTypeToString(const api::AuthenticationCodeType* type, std::int32_t& length_out) {
+    if (type == nullptr) {
+        return "";
+    }
+    switch (type->get_id()) {
+        case api::authenticationCodeTypeTelegramMessage::ID:
+            length_out =
+                static_cast<const api::authenticationCodeTypeTelegramMessage&>(*type).length_;
+            return "telegram_message";
+        case api::authenticationCodeTypeSms::ID:
+            length_out = static_cast<const api::authenticationCodeTypeSms&>(*type).length_;
+            return "sms";
+        case api::authenticationCodeTypeCall::ID:
+            length_out = static_cast<const api::authenticationCodeTypeCall&>(*type).length_;
+            return "call";
+        case api::authenticationCodeTypeFlashCall::ID:
+            return "flash_call";
+        case api::authenticationCodeTypeMissedCall::ID:
+            return "missed_call";
+        case api::authenticationCodeTypeFragment::ID:
+            return "fragment";
+        default:
+            return "other";
+    }
+}
+
+}  // namespace
+
 void AuthStateManager::onUpdate(api::object_ptr<api::Object> update) {
     if (update == nullptr) {
         return;
@@ -11,6 +42,27 @@ void AuthStateManager::onUpdate(api::object_ptr<api::Object> update) {
     if (update->get_id() == api::updateAuthorizationState::ID) {
         auto& upd = static_cast<api::updateAuthorizationState&>(*update);
         if (upd.authorization_state_ != nullptr) {
+            if (upd.authorization_state_->get_id() ==
+                api::authorizationStateWaitOtherDeviceConfirmation::ID) {
+                const auto& wait =
+                    static_cast<const api::authorizationStateWaitOtherDeviceConfirmation&>(
+                        *upd.authorization_state_);
+                std::lock_guard<std::mutex> lock(mutex_);
+                qr_link_ = wait.link_;
+            }
+            if (upd.authorization_state_->get_id() == api::authorizationStateWaitCode::ID) {
+                const auto& wait =
+                    static_cast<const api::authorizationStateWaitCode&>(*upd.authorization_state_);
+                CodeInfo info;
+                if (wait.code_info_ != nullptr) {
+                    info.type = codeTypeToString(wait.code_info_->type_.get(), info.length);
+                    std::int32_t unused = 0;
+                    info.next_type = codeTypeToString(wait.code_info_->next_type_.get(), unused);
+                    info.timeout = wait.code_info_->timeout_;
+                }
+                std::lock_guard<std::mutex> lock(mutex_);
+                code_info_ = std::move(info);
+            }
             setState(authStateFromTdId(upd.authorization_state_->get_id()));
         }
         return;
@@ -40,6 +92,16 @@ bool AuthStateManager::waitForChange(std::uint64_t prev_generation,
     return cv_.wait_for(lock, timeout, [this, prev_generation] {
         return generation_.load(std::memory_order_acquire) > prev_generation;
     });
+}
+
+CodeInfo AuthStateManager::codeInfo() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return code_info_;
+}
+
+std::string AuthStateManager::qrLink() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return qr_link_;
 }
 
 bool AuthStateManager::waitForClosed(std::chrono::milliseconds timeout) {

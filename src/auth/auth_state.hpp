@@ -15,6 +15,7 @@ enum class AuthState : std::uint8_t {
     WaitPhoneNumber,
     WaitCode,
     WaitPassword,
+    WaitOtherDeviceConfirmation,  // QR-логин: ждём подтверждения с другого устройства
     Ready,
     LoggingOut,
     Closing,
@@ -33,6 +34,8 @@ inline AuthState authStateFromTdId(std::int32_t td_id) {
             return AuthState::WaitCode;
         case api::authorizationStateWaitPassword::ID:
             return AuthState::WaitPassword;
+        case api::authorizationStateWaitOtherDeviceConfirmation::ID:
+            return AuthState::WaitOtherDeviceConfirmation;
         case api::authorizationStateReady::ID:
             return AuthState::Ready;
         case api::authorizationStateLoggingOut::ID:
@@ -59,6 +62,8 @@ inline std::string_view toString(AuthState s) {
             return "wait_code";
         case AuthState::WaitPassword:
             return "wait_password";
+        case AuthState::WaitOtherDeviceConfirmation:
+            return "wait_other_device_confirmation";
         case AuthState::Ready:
             return "ready";
         case AuthState::LoggingOut:
