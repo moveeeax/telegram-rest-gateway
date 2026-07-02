@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
     tgw::auth::StartupBootstrapper::run(bridge, client_id, config, auth);
 
     tgw::http::registerRoutes(bridge, client_id, auth);
+    tgw::http::registerMessageRoutes(bridge, client_id);
 
     LOG_INFO << "telegram-rest-gateway listening on " << config.listen_address << ":"
              << config.listen_port;

@@ -15,4 +15,7 @@ namespace tgw::http {
 void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                     tgw::auth::AuthStateManager& auth);
 
+// Регистрирует REST-маршруты этапа 3: chats, история, отправка, чтение.
+void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id);
+
 }  // namespace tgw::http
