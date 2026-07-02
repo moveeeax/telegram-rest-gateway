@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace tgw::config {
 
@@ -26,6 +27,9 @@ struct Config {
     std::uint16_t listen_port = 8080;
 
     std::string application_version = "0.0.1";
+
+    // API-токены клиентов (Bearer). Пусто = fail-closed: все защищённые эндпоинты дадут 401.
+    std::vector<std::string> bearer_tokens;
 
     // Загружает конфиг из окружения. Кидает std::runtime_error, если нет обязательных
     // api_id/api_hash/database_encryption_key.

@@ -1,5 +1,6 @@
 #include "auth/auth_state_manager.hpp"
 #include "auth/startup_bootstrapper.hpp"
+#include "auth/token_store.hpp"
 #include "bridge/real_transport.hpp"
 #include "bridge/td_bridge.hpp"
 #include "config/config.hpp"
@@ -51,6 +52,12 @@ int main(int argc, char** argv) {
     } catch (const std::exception& e) {
         std::cerr << "config error: " << e.what() << '\n';
         return EXIT_FAILURE;
+    }
+
+    // API-токены клиентов (§8.1). Пусто — предупреждаем: сервис fail-closed (все 401).
+    tgw::auth::TokenStore::instance().load(config.bearer_tokens);
+    if (tgw::auth::TokenStore::instance().empty()) {
+        LOG_WARN << "no BEARER_TOKENS configured: all protected endpoints will return 401";
     }
 
     // Мост + приёмник апдейтов = AuthStateManager (обрабатывает updateAuthorizationState).

@@ -18,6 +18,9 @@ namespace {
 
 using HttpCallback = std::function<void(const drogon::HttpResponsePtr&)>;
 
+// Имя фильтра в реестре Drogon = полное имя класса. Вешается на защищённые маршруты.
+constexpr char kBearerFilter[] = "tgw::http::BearerAuthFilter";
+
 drogon::HttpResponsePtr jsonResponse(Json::Value body, drogon::HttpStatusCode code) {
     auto resp = drogon::HttpResponse::newHttpJsonResponse(std::move(body));
     resp->setStatusCode(code);
@@ -133,7 +136,7 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                             body["data"] = authStateJson(auth);
                             cb(jsonResponse(std::move(body), drogon::k200OK));
                         },
-                        {drogon::Get});
+                        {drogon::Get, kBearerFilter});
 
     // setTdlibParameters уже отправлен StartupBootstrapper'ом; эндпоинт идемпотентен —
     // просто возвращает текущее состояние (§7.1).
@@ -144,7 +147,7 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                             body["data"] = authStateJson(auth);
                             cb(jsonResponse(std::move(body), drogon::k200OK));
                         },
-                        {drogon::Post});
+                        {drogon::Post, kBearerFilter});
 
     app.registerHandler(
         "/v1/auth/phone",
@@ -160,7 +163,7 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                 td_api::make_object<td_api::setAuthenticationPhoneNumber>(phone, nullptr),
                 std::move(cb));
         },
-        {drogon::Post});
+        {drogon::Post, kBearerFilter});
 
     app.registerHandler(
         "/v1/auth/code",
@@ -175,7 +178,7 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                                td_api::make_object<td_api::checkAuthenticationCode>(code),
                                std::move(cb));
         },
-        {drogon::Post});
+        {drogon::Post, kBearerFilter});
 
     app.registerHandler(
         "/v1/auth/password",
@@ -190,7 +193,7 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                                td_api::make_object<td_api::checkAuthenticationPassword>(password),
                                std::move(cb));
         },
-        {drogon::Post});
+        {drogon::Post, kBearerFilter});
 
     // --- GET /v1/me (мост, §12 этап 1) ---
     app.registerHandler(
@@ -210,7 +213,7 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                 co_return;
             }(bridge, client_id, std::move(callback));
         },
-        {drogon::Get});
+        {drogon::Get, kBearerFilter});
 }
 
 }  // namespace tgw::http
