@@ -1,5 +1,8 @@
 #pragma once
 
+#include "auth/auth_state.hpp"
+#include "bridge/update_sink.hpp"
+
 #include <td/telegram/td_api.h>
 
 #include <atomic>
@@ -8,9 +11,6 @@
 #include <cstdint>
 #include <mutex>
 
-#include "auth/auth_state.hpp"
-#include "bridge/update_sink.hpp"
-
 namespace tgw::auth {
 
 // Держит текущее состояние авторизации, обновляемое ТОЛЬКО из updateAuthorizationState
@@ -18,7 +18,7 @@ namespace tgw::auth {
 // обрабатывает, прочие пока считает (WS fan-out — этап 4). Потокобезопасен: пишет
 // поток-приёмник, читают HTTP-потоки.
 class AuthStateManager final : public tgw::bridge::IUpdateSink {
-  public:
+   public:
     void onUpdate(td::td_api::object_ptr<td::td_api::Object> update) override;
 
     AuthState current() const { return state_.load(std::memory_order_acquire); }
@@ -30,7 +30,7 @@ class AuthStateManager final : public tgw::bridge::IUpdateSink {
     // Ждёт смены поколения относительно prev. true — сменилось.
     bool waitForChange(std::uint64_t prev_generation, std::chrono::milliseconds timeout);
 
-  private:
+   private:
     void setState(AuthState s);
 
     std::atomic<AuthState> state_{AuthState::Unknown};

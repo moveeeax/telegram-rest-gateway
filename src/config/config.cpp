@@ -44,8 +44,8 @@ std::string envOrFile(const char* name, const std::string& fallback = "") {
 std::string require(const char* name) {
     std::string v = envOrFile(name);
     if (v.empty()) {
-        throw std::runtime_error(std::string("missing required config: ") + name +
-                                 " (set " + name + " or " + name + "_FILE)");
+        throw std::runtime_error(std::string("missing required config: ") + name + " (set " + name +
+                                 " or " + name + "_FILE)");
     }
     return v;
 }

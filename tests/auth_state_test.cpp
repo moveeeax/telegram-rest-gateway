@@ -1,10 +1,11 @@
-#include <gtest/gtest.h>
+#include "auth/auth_state.hpp"
+
+#include "auth/auth_state_manager.hpp"
+
 #include <td/telegram/td_api.h>
 
+#include <gtest/gtest.h>
 #include <utility>
-
-#include "auth/auth_state.hpp"
-#include "auth/auth_state_manager.hpp"
 
 namespace api = td::td_api;
 using tgw::auth::AuthState;

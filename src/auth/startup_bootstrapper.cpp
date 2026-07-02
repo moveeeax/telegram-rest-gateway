@@ -1,13 +1,13 @@
 #include "auth/startup_bootstrapper.hpp"
 
+#include "auth/auth_state_manager.hpp"
+#include "bridge/td_bridge.hpp"
+#include "config/config.hpp"
+
 #include <td/telegram/td_api.h>
 #include <trantor/utils/Logger.h>
 
 #include <chrono>
-
-#include "auth/auth_state_manager.hpp"
-#include "config/config.hpp"
-#include "bridge/td_bridge.hpp"
 
 namespace tgw::auth {
 
@@ -23,8 +23,8 @@ api::object_ptr<api::setTdlibParameters> buildParameters(const tgw::config::Conf
     p->files_directory_ = c.files_directory;
     p->database_encryption_key_ = c.database_encryption_key;
     p->use_file_database_ = true;
-    p->use_chat_info_database_ = true;   // требует use_file_database
-    p->use_message_database_ = true;     // требует use_chat_info_database (нужен для истории)
+    p->use_chat_info_database_ = true;  // требует use_file_database
+    p->use_message_database_ = true;  // требует use_chat_info_database (нужен для истории)
     p->use_secret_chats_ = false;
     p->api_id_ = c.api_id;
     p->api_hash_ = c.api_hash;
@@ -40,7 +40,8 @@ api::object_ptr<api::setTdlibParameters> buildParameters(const tgw::config::Conf
 bool StartupBootstrapper::run(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                               const tgw::config::Config& config, AuthStateManager& auth) {
     // Первыми вызовами глушим лог TDLib (§13): без содержимого в stdout.
-    bridge.sendOneWay(client_id, api::make_object<api::setLogVerbosityLevel>(config.tdlib_log_verbosity));
+    bridge.sendOneWay(client_id,
+                      api::make_object<api::setLogVerbosityLevel>(config.tdlib_log_verbosity));
     bridge.sendOneWay(client_id,
                       api::make_object<api::setLogStream>(api::make_object<api::logStreamEmpty>()));
 
@@ -56,7 +57,8 @@ bool StartupBootstrapper::run(tgw::bridge::TdBridge& bridge, std::int32_t client
         const std::uint64_t gen = auth.generation();
         bridge.sendOneWay(client_id, buildParameters(config));
         if (!auth.waitForChange(gen, 15s)) {
-            // Частая причина — рассинхрон database_encryption_key/api-кред с существующей БД (§7.6).
+            // Частая причина — рассинхрон database_encryption_key/api-кред с существующей БД
+            // (§7.6).
             LOG_ERROR << "bootstrap: setTdlibParameters produced no state transition "
                          "(possible DB key / api credentials mismatch)";
             return false;

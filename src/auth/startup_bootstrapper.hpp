@@ -19,7 +19,7 @@ class AuthStateManager;
 // либо WaitPhoneNumber). НЕ использует co_await (event-loop Drogon ещё не крутится):
 // прогресс отслеживается по сменам состояния в AuthStateManager.
 class StartupBootstrapper {
-  public:
+   public:
     // true — дошли до состояния != Unknown/WaitTdlibParameters (готовы принимать HTTP).
     static bool run(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                     const tgw::config::Config& config, AuthStateManager& auth);
