@@ -6,9 +6,12 @@
 #include "bridge/td_bridge.hpp"
 
 #include <drogon/drogon.h>
+#include <drogon/RateLimiter.h>
 #include <td/telegram/td_api.h>
 
+#include <chrono>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -77,6 +80,9 @@ Json::Value authStateJson(const tgw::auth::AuthStateManager& auth) {
 // Запускает detached-корутину для auth-мутации: co_await ответа, ok -> текущее состояние,
 // error -> 400 с проброшенным td-кодом. registerHandler не биндит корутинные лямбды,
 // поэтому корутину гоняем внутри обычного callback-хендлера (см. §5.4 и историю /v1/me).
+// Про «fair auth-mutex» (бэклог): отдельный мьютекс не нужен. TDLib обрабатывает запросы
+// одного клиента строго в порядке отправки (один поток-приёмник, send сериализован), а
+// конкурирующие мутации FSM дают детерминированную ошибку TDLib -> 400/409 клиенту.
 void launchAuthMutation(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                         tgw::auth::AuthStateManager& auth, td_api::object_ptr<td_api::Function> fn,
                         HttpCallback callback) {
@@ -112,6 +118,15 @@ bool jsonString(const drogon::HttpRequestPtr& req, const char* field, std::strin
 }
 
 }  // namespace
+
+// Anti-bruteforce на секретные auth-мутации (§7.x): скользящее окно 10 попыток/мин на процесс
+// (single-account — per-IP не нужен, сервис за периметром). SafeRateLimiter — потокобезопасен.
+bool authAttemptAllowed() {
+    static const drogon::RateLimiterPtr limiter =
+        std::make_shared<drogon::SafeRateLimiter>(drogon::RateLimiter::newRateLimiter(
+            drogon::RateLimiterType::kSlidingWindow, 10, std::chrono::seconds(60)));
+    return limiter->isAllowed();
+}
 
 void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                     tgw::auth::AuthStateManager& auth, const std::string& database_dir) {
@@ -219,6 +234,11 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
     app.registerHandler(
         "/v1/auth/code",
         [&bridge, client_id, &auth](const drogon::HttpRequestPtr& req, HttpCallback&& cb) {
+            if (!authAttemptAllowed()) {
+                cb(serviceError("FLOOD_WAIT", "too many auth attempts, retry later",
+                                drogon::k429TooManyRequests));
+                return;
+            }
             std::string code;
             std::string err;
             if (!jsonString(req, "code", code, err)) {
@@ -234,6 +254,11 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
     app.registerHandler(
         "/v1/auth/password",
         [&bridge, client_id, &auth](const drogon::HttpRequestPtr& req, HttpCallback&& cb) {
+            if (!authAttemptAllowed()) {
+                cb(serviceError("FLOOD_WAIT", "too many auth attempts, retry later",
+                                drogon::k429TooManyRequests));
+                return;
+            }
             std::string password;
             std::string err;
             if (!jsonString(req, "password", password, err)) {

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 
 namespace tgw::auth {
@@ -45,10 +46,22 @@ class AuthStateManager final : public tgw::bridge::IUpdateSink {
     // Ждёт перехода в Closed (для graceful shutdown: TDLib должен закрыть БД). true — дождались.
     bool waitForClosed(std::chrono::milliseconds timeout);
 
+    // Помечает, что завершение ожидаемо (main начинает shutdown) — колбэк ниже не сработает.
+    void expectShutdown() { expect_shutdown_.store(true, std::memory_order_release); }
+    // Колбэк на НЕожидаемый LoggingOut/Closing/Closed (удалённый logout с другого устройства,
+    // AUTH_KEY_DUPLICATED и т.п.). Вызывается один раз из потока-приёмника.
+    void setOnUnexpectedTermination(std::function<void()> cb) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        on_unexpected_termination_ = std::move(cb);
+    }
+
    private:
     void setState(AuthState s);
 
     std::atomic<AuthState> state_{AuthState::Unknown};
+    std::atomic<bool> expect_shutdown_{false};
+    std::atomic<bool> termination_reported_{false};
+    std::function<void()> on_unexpected_termination_;  // под mutex_
     std::atomic<std::uint64_t> generation_{0};
     std::atomic<std::uint64_t> update_count_{0};
     mutable std::mutex mutex_;
