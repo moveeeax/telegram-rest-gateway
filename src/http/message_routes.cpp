@@ -5,6 +5,7 @@
 #include "http/routes.hpp"
 
 #include <drogon/drogon.h>
+#include <td/telegram/Client.h>
 #include <td/telegram/td_api.h>
 
 #include <atomic>
@@ -25,6 +26,36 @@ using HttpCallback = std::function<void(const drogon::HttpResponsePtr&)>;
 using ResponseBuilder = std::function<drogon::HttpResponsePtr(api::object_ptr<api::Object>)>;
 
 constexpr char kBearerFilter[] = "tgw::http::BearerAuthFilter";
+
+// formattedText из text (+опц. parse_mode "markdown"|"html"). parseTextEntities — offline-метод
+// TDLib: исполняется синхронно через ClientManager::execute, event-loop не задействован.
+// При ошибке разметки/неизвестном режиме возвращает nullptr и заполняет err.
+api::object_ptr<api::formattedText> makeFormattedText(const std::string& text,
+                                                      const std::string& parse_mode,
+                                                      std::string& err) {
+    if (parse_mode.empty()) {
+        auto formatted = api::make_object<api::formattedText>();
+        formatted->text_ = text;
+        return formatted;
+    }
+    auto parse = api::make_object<api::parseTextEntities>();
+    parse->text_ = text;
+    if (parse_mode == "markdown") {
+        parse->parse_mode_ = api::make_object<api::textParseModeMarkdown>(2);
+    } else if (parse_mode == "html") {
+        parse->parse_mode_ = api::make_object<api::textParseModeHTML>();
+    } else {
+        err = "parse_mode must be 'markdown' or 'html'";
+        return nullptr;
+    }
+    auto result = td::ClientManager::execute(std::move(parse));
+    if (result == nullptr || result->get_id() == api::error::ID) {
+        err = (result != nullptr) ? static_cast<api::error&>(*result).message_
+                                  : "parseTextEntities failed";
+        return nullptr;
+    }
+    return api::move_object_as<api::formattedText>(result);
+}
 
 drogon::HttpResponsePtr jsonResponse(Json::Value body, drogon::HttpStatusCode code) {
     auto resp = drogon::HttpResponse::newHttpJsonResponse(std::move(body));
@@ -203,12 +234,28 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                                 drogon::k400BadRequest));
                 return;
             }
+            std::string parse_err;
+            auto formatted = makeFormattedText(
+                (*json)["text"].asString(),
+                (*json)["parse_mode"].isString() ? (*json)["parse_mode"].asString() : "",
+                parse_err);
+            if (formatted == nullptr) {
+                cb(serviceError("VALIDATION_ERROR", parse_err, drogon::k400BadRequest));
+                return;
+            }
             auto content = api::make_object<api::inputMessageText>();
-            content->text_ = api::make_object<api::formattedText>();
-            content->text_->text_ = (*json)["text"].asString();
+            content->text_ = std::move(formatted);
 
             auto fn = api::make_object<api::sendMessage>();
             fn->chat_id_ = chatId;
+            // Опциональный ответ на сообщение (reply): id строкой, как все id наружу.
+            std::int64_t replyTo = 0;
+            if ((*json)["reply_to_message_id"].isString() &&
+                parseId((*json)["reply_to_message_id"].asString(), replyTo) && replyTo != 0) {
+                auto reply = api::make_object<api::inputMessageReplyToMessage>();
+                reply->message_id_ = replyTo;
+                fn->reply_to_ = std::move(reply);
+            }
             fn->input_message_content_ = std::move(content);
 
             launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
@@ -345,16 +392,58 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 out.write(req->bodyData(), static_cast<std::streamsize>(req->bodyLength()));
             }
 
-            // inputMessageDocument.document_ : inputDocument, а inputDocument.document_ :
+            // ?type=document|photo|video|voice|audio — как отправить файл (default document).
+            // У TDLib медиа-обёртки двухуровневые: inputMessageX.x_ : inputX, inputX.x_ :
             // InputFile.
-            auto document = api::make_object<api::inputDocument>();
-            document->document_ = api::make_object<api::inputFileLocal>(path.string());
-            auto content = api::make_object<api::inputMessageDocument>();
-            content->document_ = std::move(document);
-            const std::string caption = req->getParameter("caption");
-            if (!caption.empty()) {
-                content->caption_ = api::make_object<api::formattedText>();
-                content->caption_->text_ = caption;
+            auto local_file = api::make_object<api::inputFileLocal>(path.string());
+            api::object_ptr<api::formattedText> caption;
+            {
+                const std::string caption_text = req->getParameter("caption");
+                if (!caption_text.empty()) {
+                    caption = api::make_object<api::formattedText>();
+                    caption->text_ = caption_text;
+                }
+            }
+            api::object_ptr<api::InputMessageContent> content;
+            const std::string media_type = req->getParameter("type");
+            if (media_type.empty() || media_type == "document") {
+                auto document = api::make_object<api::inputDocument>();
+                document->document_ = std::move(local_file);
+                auto msg = api::make_object<api::inputMessageDocument>();
+                msg->document_ = std::move(document);
+                msg->caption_ = std::move(caption);
+                content = std::move(msg);
+            } else if (media_type == "photo") {
+                auto photo = api::make_object<api::inputPhoto>();
+                photo->photo_ = std::move(local_file);
+                auto msg = api::make_object<api::inputMessagePhoto>();
+                msg->photo_ = std::move(photo);
+                msg->caption_ = std::move(caption);
+                content = std::move(msg);
+            } else if (media_type == "video") {
+                auto video = api::make_object<api::inputVideo>();
+                video->video_ = std::move(local_file);
+                video->supports_streaming_ = true;
+                auto msg = api::make_object<api::inputMessageVideo>();
+                msg->video_ = std::move(video);
+                msg->caption_ = std::move(caption);
+                content = std::move(msg);
+            } else if (media_type == "voice") {
+                auto msg = api::make_object<api::inputMessageVoiceNote>();
+                msg->voice_note_ = std::move(local_file);
+                msg->caption_ = std::move(caption);
+                content = std::move(msg);
+            } else if (media_type == "audio") {
+                auto audio = api::make_object<api::inputAudio>();
+                audio->audio_ = std::move(local_file);
+                auto msg = api::make_object<api::inputMessageAudio>();
+                msg->audio_ = std::move(audio);
+                msg->caption_ = std::move(caption);
+                content = std::move(msg);
+            } else {
+                cb(serviceError("VALIDATION_ERROR", "type must be document|photo|video|voice|audio",
+                                drogon::k400BadRequest));
+                return;
             }
             auto fn = api::make_object<api::sendMessage>();
             fn->chat_id_ = chatId;
@@ -373,6 +462,153 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                              Json::Value body;
                              body["ok"] = true;
                              body["data"] = data;
+                             return jsonResponse(std::move(body), drogon::k202Accepted);
+                         });
+        },
+        {drogon::Post, kBearerFilter});
+
+    // PATCH /v1/chats/{chatId}/messages/{messageId} — правка текста. Тело: {"text", "parse_mode"?}.
+    app.registerHandler(
+        "/v1/chats/{chatId}/messages/{messageId}",
+        [&bridge, client_id](const drogon::HttpRequestPtr& req, HttpCallback&& cb,
+                             std::string chatIdStr, std::string messageIdStr) {
+            std::int64_t chatId = 0;
+            std::int64_t messageId = 0;
+            if (!parseId(chatIdStr, chatId) || !parseId(messageIdStr, messageId)) {
+                cb(serviceError("VALIDATION_ERROR", "invalid chat_id/message_id",
+                                drogon::k400BadRequest));
+                return;
+            }
+            auto json = req->getJsonObject();
+            if (json == nullptr || !(*json)["text"].isString() ||
+                (*json)["text"].asString().empty()) {
+                cb(serviceError("VALIDATION_ERROR", "field 'text' is required",
+                                drogon::k400BadRequest));
+                return;
+            }
+            std::string parse_err;
+            auto formatted = makeFormattedText(
+                (*json)["text"].asString(),
+                (*json)["parse_mode"].isString() ? (*json)["parse_mode"].asString() : "",
+                parse_err);
+            if (formatted == nullptr) {
+                cb(serviceError("VALIDATION_ERROR", parse_err, drogon::k400BadRequest));
+                return;
+            }
+            auto content = api::make_object<api::inputMessageText>();
+            content->text_ = std::move(formatted);
+            auto fn = api::make_object<api::editMessageText>();
+            fn->chat_id_ = chatId;
+            fn->message_id_ = messageId;
+            fn->input_message_content_ = std::move(content);
+            launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
+                         [](api::object_ptr<api::Object> obj) {
+                             auto message = tgw::bridge::expect<api::message>(std::move(obj));
+                             if (!message.ok()) {
+                                 return telegramError(*message.error, drogon::k502BadGateway);
+                             }
+                             Json::Value body;
+                             body["ok"] = true;
+                             body["data"] = tgw::dto::toJson(*message.value);
+                             return jsonResponse(std::move(body), drogon::k200OK);
+                         });
+        },
+        {drogon::Patch, kBearerFilter});
+
+    // DELETE /v1/chats/{chatId}/messages — удаление. Тело: {"message_ids":[...], "revoke"?:true}.
+    // revoke=true (default) — удалить у всех; false — только у себя.
+    app.registerHandler(
+        "/v1/chats/{chatId}/messages",
+        [&bridge, client_id](const drogon::HttpRequestPtr& req, HttpCallback&& cb,
+                             std::string chatIdStr) {
+            std::int64_t chatId = 0;
+            if (!parseId(chatIdStr, chatId)) {
+                cb(serviceError("VALIDATION_ERROR", "invalid chat_id", drogon::k400BadRequest));
+                return;
+            }
+            auto json = req->getJsonObject();
+            if (json == nullptr || !(*json)["message_ids"].isArray() ||
+                (*json)["message_ids"].empty()) {
+                cb(serviceError("VALIDATION_ERROR", "field 'message_ids' is required",
+                                drogon::k400BadRequest));
+                return;
+            }
+            auto fn = api::make_object<api::deleteMessages>();
+            fn->chat_id_ = chatId;
+            for (const auto& item : (*json)["message_ids"]) {
+                std::int64_t id = 0;
+                if (!item.isString() || !parseId(item.asString(), id)) {
+                    cb(serviceError("VALIDATION_ERROR", "message_ids must be strings",
+                                    drogon::k400BadRequest));
+                    return;
+                }
+                fn->message_ids_.push_back(id);
+            }
+            fn->revoke_ = !(*json)["revoke"].isBool() || (*json)["revoke"].asBool();
+            launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
+                         [](api::object_ptr<api::Object> obj) -> drogon::HttpResponsePtr {
+                             auto ok = tgw::bridge::expect<api::ok>(std::move(obj));
+                             if (!ok.ok()) {
+                                 return telegramError(*ok.error, drogon::k502BadGateway);
+                             }
+                             Json::Value body;
+                             body["ok"] = true;
+                             return jsonResponse(std::move(body), drogon::k200OK);
+                         });
+        },
+        {drogon::Delete, kBearerFilter});
+
+    // POST /v1/chats/{chatId}/messages/forward — пересылка. Тело: {"from_chat_id",
+    // "message_ids":[...], "send_copy"?:false, "remove_caption"?:false}. 202 + временные id.
+    app.registerHandler(
+        "/v1/chats/{chatId}/messages/forward",
+        [&bridge, client_id](const drogon::HttpRequestPtr& req, HttpCallback&& cb,
+                             std::string chatIdStr) {
+            std::int64_t chatId = 0;
+            if (!parseId(chatIdStr, chatId)) {
+                cb(serviceError("VALIDATION_ERROR", "invalid chat_id", drogon::k400BadRequest));
+                return;
+            }
+            auto json = req->getJsonObject();
+            std::int64_t fromChatId = 0;
+            if (json == nullptr || !(*json)["from_chat_id"].isString() ||
+                !parseId((*json)["from_chat_id"].asString(), fromChatId) ||
+                !(*json)["message_ids"].isArray() || (*json)["message_ids"].empty()) {
+                cb(serviceError("VALIDATION_ERROR",
+                                "fields 'from_chat_id' and 'message_ids' are required",
+                                drogon::k400BadRequest));
+                return;
+            }
+            auto fn = api::make_object<api::forwardMessages>();
+            fn->chat_id_ = chatId;
+            fn->from_chat_id_ = fromChatId;
+            for (const auto& item : (*json)["message_ids"]) {
+                std::int64_t id = 0;
+                if (!item.isString() || !parseId(item.asString(), id)) {
+                    cb(serviceError("VALIDATION_ERROR", "message_ids must be strings",
+                                    drogon::k400BadRequest));
+                    return;
+                }
+                fn->message_ids_.push_back(id);
+            }
+            fn->send_copy_ = (*json)["send_copy"].isBool() && (*json)["send_copy"].asBool();
+            fn->remove_caption_ =
+                (*json)["remove_caption"].isBool() && (*json)["remove_caption"].asBool();
+            launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
+                         [](api::object_ptr<api::Object> obj) {
+                             auto messages = tgw::bridge::expect<api::messages>(std::move(obj));
+                             if (!messages.ok()) {
+                                 return telegramError(*messages.error, drogon::k502BadGateway);
+                             }
+                             Json::Value ids(Json::arrayValue);
+                             for (const auto& m : messages.value->messages_) {
+                                 if (m != nullptr) {
+                                     ids.append(std::to_string(m->id_));
+                                 }
+                             }
+                             Json::Value body;
+                             body["ok"] = true;
+                             body["data"]["temporary_message_ids"] = ids;
                              return jsonResponse(std::move(body), drogon::k202Accepted);
                          });
         },
