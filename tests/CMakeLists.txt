@@ -16,7 +16,8 @@ add_executable(tgw_unit_tests
     auth_state_test.cpp
     token_store_test.cpp
     message_dto_test.cpp
-    update_router_test.cpp)
+    update_router_test.cpp
+    file_dto_test.cpp)
 target_include_directories(tgw_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(tgw_unit_tests
     PRIVATE tgw_bridge GTest::gtest_main tgw_project_options)

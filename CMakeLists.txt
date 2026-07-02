@@ -62,6 +62,7 @@ add_library(tgw_bridge STATIC
     src/auth/auth_state_manager.cpp
     src/auth/token_store.cpp
     src/dto/message_dto.cpp
+    src/dto/file_dto.cpp
     src/ws/ws_registry.cpp
     src/ws/update_router.cpp)
 target_include_directories(tgw_bridge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
