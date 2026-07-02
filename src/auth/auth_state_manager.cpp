@@ -42,4 +42,11 @@ bool AuthStateManager::waitForChange(std::uint64_t prev_generation,
     });
 }
 
+bool AuthStateManager::waitForClosed(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return cv_.wait_for(lock, timeout, [this] {
+        return state_.load(std::memory_order_acquire) == AuthState::Closed;
+    });
+}
+
 }  // namespace tgw::auth

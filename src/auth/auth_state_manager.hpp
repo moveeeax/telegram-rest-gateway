@@ -29,6 +29,8 @@ class AuthStateManager final : public tgw::bridge::IUpdateSink {
     bool waitForFirst(std::chrono::milliseconds timeout);
     // Ждёт смены поколения относительно prev. true — сменилось.
     bool waitForChange(std::uint64_t prev_generation, std::chrono::milliseconds timeout);
+    // Ждёт перехода в Closed (для graceful shutdown: TDLib должен закрыть БД). true — дождались.
+    bool waitForClosed(std::chrono::milliseconds timeout);
 
    private:
     void setState(AuthState s);

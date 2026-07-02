@@ -9,7 +9,9 @@
 
 #include <drogon/drogon.h>
 #include <drogon/HttpAppFramework.h>
+#include <td/telegram/td_api.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -18,6 +20,8 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+
+namespace td_api = td::td_api;
 
 namespace {
 
@@ -87,6 +91,14 @@ int main(int argc, char** argv) {
              << config.listen_port;
     drogon::app().addListener(config.listen_address, config.listen_port).run();
 
+    // Graceful shutdown (§7.4a, §10.4): даём TDLib закрыть БД до выхода — иначе при docker stop
+    // возможна порча БД. run() уже вернулся (SIGTERM/SIGINT), но поток-приёмник ещё жив и
+    // применит authorizationStateClosed, разбудив waitForClosed.
+    LOG_INFO << "shutting down: closing TDLib client";
+    bridge.sendOneWay(client_id, td_api::make_object<td_api::close>());
+    if (!auth.waitForClosed(std::chrono::seconds(10))) {
+        LOG_WARN << "TDLib did not reach Closed within timeout";
+    }
     bridge.stop();
     return EXIT_SUCCESS;
 }
