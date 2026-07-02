@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -30,6 +31,9 @@ struct Config {
 
     // API-токены клиентов (Bearer). Пусто = fail-closed: все защищённые эндпоинты дадут 401.
     std::vector<std::string> bearer_tokens;
+
+    // Лимит тела аплоада (буферизованный приём в MVP). Стриминг больших файлов — hardening.
+    std::size_t max_upload_bytes = 64UL * 1024 * 1024;
 
     // Загружает конфиг из окружения. Кидает std::runtime_error, если нет обязательных
     // api_id/api_hash/database_encryption_key.

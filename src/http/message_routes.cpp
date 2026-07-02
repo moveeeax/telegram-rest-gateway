@@ -7,9 +7,13 @@
 #include <drogon/drogon.h>
 #include <td/telegram/td_api.h>
 
+#include <atomic>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace api = td::td_api;
@@ -101,7 +105,8 @@ api::object_ptr<api::Function> makeLoadChats(std::int32_t limit) {
 
 }  // namespace
 
-void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id) {
+void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
+                           const std::string& upload_dir) {
     auto& app = drogon::app();
 
     // GET /v1/chats — best-effort loadChats + getChats, затем getChat на каждый id (§8.2.4).
@@ -303,6 +308,70 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
             }(bridge, client_id, fileId, std::move(cb));
         },
         {drogon::Get, kBearerFilter});
+
+    // POST /v1/chats/{chatId}/files — загрузка файла в чат (§8.3′, decision C10).
+    // Сырое тело application/octet-stream пишется во временный файл, затем sendMessage как
+    // документ. MVP — буферизованный приём (лимит setClientMaxBodySize); стриминг — hardening.
+    // ?file_name=&caption= — опциональные. Temp-файл НЕ удаляется (нужен TDLib на время аплоада);
+    // очистка по TTL — hardening.
+    app.registerHandler(
+        "/v1/chats/{chatId}/files",
+        [&bridge, client_id, upload_dir](const drogon::HttpRequestPtr& req, HttpCallback&& cb,
+                                         std::string chatIdStr) {
+            std::int64_t chatId = 0;
+            if (!parseId(chatIdStr, chatId)) {
+                cb(serviceError("VALIDATION_ERROR", "invalid chat_id", drogon::k400BadRequest));
+                return;
+            }
+            namespace fs = std::filesystem;
+            std::string name = fs::path(req->getParameter("file_name")).filename().string();
+            if (name.empty()) {
+                name = "upload.bin";
+            }
+            static std::atomic<std::uint64_t> counter{0};
+            const auto seq = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+            const fs::path dir = fs::path(upload_dir) / ("u" + std::to_string(seq));
+            std::error_code ec;
+            fs::create_directories(dir, ec);
+            if (ec) {
+                cb(serviceError("INTERNAL", "cannot create upload directory",
+                                drogon::k500InternalServerError));
+                return;
+            }
+            const fs::path path = dir / name;
+            {
+                std::ofstream out(path, std::ios::binary);
+                out.write(req->bodyData(), static_cast<std::streamsize>(req->bodyLength()));
+            }
+
+            auto content = api::make_object<api::inputMessageDocument>();
+            content->document_ = api::make_object<api::inputFileLocal>(path.string());
+            const std::string caption = req->getParameter("caption");
+            if (!caption.empty()) {
+                content->caption_ = api::make_object<api::formattedText>();
+                content->caption_->text_ = caption;
+            }
+            auto fn = api::make_object<api::sendMessage>();
+            fn->chat_id_ = chatId;
+            fn->input_message_content_ = std::move(content);
+
+            launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
+                         [](api::object_ptr<api::Object> obj) {
+                             auto message = tgw::bridge::expect<api::message>(std::move(obj));
+                             if (!message.ok()) {
+                                 return telegramError(*message.error, drogon::k502BadGateway);
+                             }
+                             Json::Value data;
+                             data["temporary_message_id"] = std::to_string(message.value->id_);
+                             data["chat_id"] = std::to_string(message.value->chat_id_);
+                             data["sending_state"] = "pending";
+                             Json::Value body;
+                             body["ok"] = true;
+                             body["data"] = data;
+                             return jsonResponse(std::move(body), drogon::k202Accepted);
+                         });
+        },
+        {drogon::Post, kBearerFilter});
 }
 
 }  // namespace tgw::http

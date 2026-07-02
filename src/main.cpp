@@ -13,9 +13,11 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 namespace {
 
@@ -73,8 +75,13 @@ int main(int argc, char** argv) {
     // Автоподъём сессии ДО приёма HTTP (§7.1): глушим лог, шлём setTdlibParameters.
     tgw::auth::StartupBootstrapper::run(bridge, client_id, config, auth);
 
+    const std::string upload_dir = config.files_directory + "/uploads";
+    std::error_code mkdir_ec;
+    std::filesystem::create_directories(upload_dir, mkdir_ec);
+    drogon::app().setClientMaxBodySize(config.max_upload_bytes);
+
     tgw::http::registerRoutes(bridge, client_id, auth);
-    tgw::http::registerMessageRoutes(bridge, client_id);
+    tgw::http::registerMessageRoutes(bridge, client_id, upload_dir);
 
     LOG_INFO << "telegram-rest-gateway listening on " << config.listen_address << ":"
              << config.listen_port;

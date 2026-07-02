@@ -76,6 +76,11 @@ Config Config::load() {
         c.listen_port = static_cast<std::uint16_t>(std::stoul(port));
     }
 
+    const std::string max_upload = envOrFile("TGW_MAX_UPLOAD_BYTES");
+    if (!max_upload.empty()) {
+        c.max_upload_bytes = static_cast<std::size_t>(std::stoull(max_upload));
+    }
+
     // Bearer-токены: по строке на токен, #-комментарии и пустые строки игнорируются.
     std::istringstream tokens(envOrFile("BEARER_TOKENS"));
     std::string line;
