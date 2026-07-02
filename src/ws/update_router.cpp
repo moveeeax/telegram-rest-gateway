@@ -65,6 +65,18 @@ std::optional<ForwardableUpdate> buildForwardable(const api::Object& update) {
             }
             return ForwardableUpdate{"updateNewChat", tgw::dto::toJson(*upd.chat_)};
         }
+        case api::updateMessageInteractionInfo::ID: {
+            const auto& upd = static_cast<const api::updateMessageInteractionInfo&>(update);
+            Json::Value data;
+            data["chat_id"] = std::to_string(upd.chat_id_);
+            data["message_id"] = std::to_string(upd.message_id_);
+            if (upd.interaction_info_ != nullptr && upd.interaction_info_->reactions_ != nullptr) {
+                data["reactions"] = tgw::dto::reactionsToJson(*upd.interaction_info_->reactions_);
+            } else {
+                data["reactions"] = Json::Value(Json::arrayValue);
+            }
+            return ForwardableUpdate{"updateMessageInteractionInfo", std::move(data)};
+        }
         case api::updateDeleteMessages::ID: {
             const auto& upd = static_cast<const api::updateDeleteMessages&>(update);
             Json::Value data;
