@@ -62,7 +62,10 @@ add_library(tgw_bridge STATIC
     src/auth/auth_state_manager.cpp
     src/auth/token_store.cpp
     src/auth/session_io.cpp
+    src/auth/s3_session.cpp
     src/util/base64.cpp
+    src/util/aws_sigv4.cpp
+    src/util/s3_client.cpp
     src/dto/message_dto.cpp
     src/dto/file_dto.cpp
     src/ws/ws_registry.cpp

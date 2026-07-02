@@ -1,4 +1,5 @@
 #include "auth/auth_state_manager.hpp"
+#include "auth/s3_session.hpp"
 #include "auth/session_io.hpp"
 #include "auth/startup_bootstrapper.hpp"
 #include "auth/token_store.hpp"
@@ -22,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 
 namespace td_api = td::td_api;
 
@@ -73,6 +75,26 @@ int main(int argc, char** argv) {
         LOG_WARN << "no BEARER_TOKENS configured: all protected endpoints will return 401";
     }
 
+    // S3-хранилище сессии: если сконфигурировано и локального binlog нет — тянем из S3 ДО
+    // создания клиента (§stateless). Пишет td.binlog, дальше restoreSession увидит existing.
+    switch (tgw::auth::restoreFromS3(config.s3, config.database_directory)) {
+        case tgw::auth::S3RestoreResult::Restored:
+            LOG_INFO << "session restored from S3 (" << config.s3.bucket << "/" << config.s3.key
+                     << ")";
+            break;
+        case tgw::auth::S3RestoreResult::NoRemoteObject:
+            LOG_INFO << "no session object in S3 — fresh start (login via /v1/auth/*)";
+            break;
+        case tgw::auth::S3RestoreResult::SkippedExisting:
+            LOG_WARN << "S3 configured, but local td.binlog exists — keeping it";
+            break;
+        case tgw::auth::S3RestoreResult::Error:
+            std::cerr << "failed to restore session from S3\n";
+            return EXIT_FAILURE;
+        case tgw::auth::S3RestoreResult::NotConfigured:
+            break;  // S3 не используется — обычный путь
+    }
+
     // Stateless: восстановить сессию из TGW_SESSION (base64 td.binlog) ДО создания клиента.
     switch (tgw::auth::restoreSession(config.database_directory, config.session_b64)) {
         case tgw::auth::RestoreResult::Restored:
@@ -109,6 +131,11 @@ int main(int argc, char** argv) {
     tgw::http::registerMessageRoutes(bridge, client_id, upload_dir);
     tgw::http::startUploadCleanup(upload_dir, std::chrono::hours(1));
 
+    // Периодический бэкап сессии в S3 (no-op если S3 не сконфигурирован). in_flight нужен, чтобы
+    // на shutdown дождаться незавершённого фонового PUT перед финальным push.
+    auto s3_sync_in_flight = tgw::auth::startS3Sync(config.s3, config.database_directory,
+                                                    config.s3_sync_interval_seconds);
+
     LOG_INFO << "telegram-rest-gateway listening on " << config.listen_address << ":"
              << config.listen_port;
     drogon::app().addListener(config.listen_address, config.listen_port).run();
@@ -122,5 +149,19 @@ int main(int argc, char** argv) {
         LOG_WARN << "TDLib did not reach Closed within timeout";
     }
     bridge.stop();
+
+    // Финальный push сессии в S3: binlog закрыт TDLib и консистентен (no-op если S3 выключен).
+    if (config.s3.enabled()) {
+        // Дожидаемся незавершённого фонового sync-PUT, иначе он мог бы затереть чистый снапшот
+        // старым. Loop уже остановлен, новые sync-задачи не спаунятся.
+        for (int i = 0; i < 200 && s3_sync_in_flight->load(std::memory_order_acquire); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));  // максимум ~10 с
+        }
+        if (tgw::auth::pushToS3(config.s3, config.database_directory)) {
+            LOG_INFO << "session pushed to S3 on shutdown";
+        } else {
+            LOG_ERROR << "failed to push session to S3 on shutdown";
+        }
+    }
     return EXIT_SUCCESS;
 }

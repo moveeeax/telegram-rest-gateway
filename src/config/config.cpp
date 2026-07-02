@@ -50,6 +50,21 @@ std::string require(const char* name) {
     return v;
 }
 
+// Безопасный одиночный сегмент пути S3: [A-Za-z0-9._-], непусто, без '..' целиком.
+bool isSafeSegment(const std::string& s) {
+    if (s.empty() || s == "." || s == "..") {
+        return false;
+    }
+    for (const unsigned char ch : s) {
+        const bool ok = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                        (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-';
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 Config Config::load() {
@@ -80,6 +95,37 @@ Config Config::load() {
     const std::string max_upload = envOrFile("TGW_MAX_UPLOAD_BYTES");
     if (!max_upload.empty()) {
         c.max_upload_bytes = static_cast<std::size_t>(std::stoull(max_upload));
+    }
+
+    // Метка инстанса для разграничения сессий в S3. Валидируем как безопасный сегмент пути.
+    c.session_id = envOrFile("TGW_SESSION_ID", "default");
+    if (!isSafeSegment(c.session_id)) {
+        throw std::runtime_error("invalid TGW_SESSION_ID '" + c.session_id +
+                                 "': allowed [A-Za-z0-9._-], not '.'/'..'");
+    }
+
+    // S3-хранилище сессии. bucket/creds/endpoint пусты — фича выключена (s3.enabled()==false).
+    c.s3.endpoint = envOrFile("TGW_S3_ENDPOINT");
+    c.s3.region = envOrFile("TGW_S3_REGION", "us-east-1");
+    c.s3.bucket = envOrFile("TGW_S3_BUCKET");
+    // Ключ объекта: явный TGW_S3_KEY имеет приоритет (полный контроль); иначе строим из
+    // TGW_S3_PREFIX/<session_id>/td.binlog — так на одном бакете живёт несколько аккаунтов.
+    const std::string explicit_key = envOrFile("TGW_S3_KEY");
+    if (!explicit_key.empty()) {
+        c.s3.key = explicit_key;
+    } else {
+        const std::string prefix = envOrFile("TGW_S3_PREFIX", "telegram-sessions");
+        c.s3.key = prefix + "/" + c.session_id + "/td.binlog";
+    }
+    c.s3.access_key = envOrFile("TGW_S3_ACCESS_KEY_ID");
+    c.s3.secret_key = envOrFile("TGW_S3_SECRET_ACCESS_KEY");
+    const std::string path_style = envOrFile("TGW_S3_PATH_STYLE");
+    if (!path_style.empty()) {
+        c.s3.path_style = (path_style == "1" || path_style == "true");
+    }
+    const std::string s3_interval = envOrFile("TGW_S3_SYNC_INTERVAL_SECONDS");
+    if (!s3_interval.empty()) {
+        c.s3_sync_interval_seconds = static_cast<int>(std::stol(s3_interval));
     }
 
     // Bearer-токены: по строке на токен, #-комментарии и пустые строки игнорируются.

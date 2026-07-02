@@ -33,3 +33,4 @@ secrets/
 .vscode/
 .DS_Store
 *.swp
+credentials.json
