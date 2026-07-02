@@ -13,6 +13,10 @@ class RealTdTransport final : public ITdTransport {
    public:
     RealTdTransport();
 
+    // Глушит лог TDLib СИНХРОННО (td::ClientManager::execute) — вызывать ДО создания
+    // клиента, иначе стартовый поток подробных логов проскакивает в stdout (§13).
+    static void configureGlobalLogging(std::int32_t verbosity);
+
     std::int32_t createClientId() override;
     void send(std::int32_t client_id, std::uint64_t request_id,
               td::td_api::object_ptr<td::td_api::Function> fn) override;

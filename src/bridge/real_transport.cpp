@@ -6,6 +6,12 @@ namespace tgw::bridge {
 
 RealTdTransport::RealTdTransport() : manager_(std::make_unique<td::ClientManager>()) {}
 
+void RealTdTransport::configureGlobalLogging(std::int32_t verbosity) {
+    // setLogVerbosityLevel — синхронная функция; execute применяет её немедленно и глобально.
+    td::ClientManager::execute(
+        td::td_api::make_object<td::td_api::setLogVerbosityLevel>(verbosity));
+}
+
 std::int32_t RealTdTransport::createClientId() {
     return manager_->create_client_id();
 }
