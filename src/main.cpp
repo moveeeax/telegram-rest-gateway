@@ -14,13 +14,16 @@
 #include <drogon/drogon.h>
 #include <drogon/HttpAppFramework.h>
 #include <td/telegram/td_api.h>
+#include <trantor/net/EventLoopThread.h>
 
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <future>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -39,16 +42,34 @@ int runHealthcheck() {
     if (const char* env = std::getenv("TGW_LISTEN_PORT")) {
         port = static_cast<std::uint16_t>(std::atoi(env));
     }
-    auto client = drogon::HttpClient::newHttpClient("http://127.0.0.1:" + std::to_string(port));
+    // Здесь app().run() не вызывается, главного event-loop нет — синхронный sendRequest завис бы
+    // навсегда (и HEALTHCHECK стабильно валился по таймауту). Крутим запрос на собственном
+    // коротком EventLoopThread — тот же паттерн, что в util/s3_client.
+    trantor::EventLoopThread loop_thread;
+    loop_thread.run();
+    auto client = drogon::HttpClient::newHttpClient("http://127.0.0.1:" + std::to_string(port),
+                                                    loop_thread.getLoop());
     auto req = drogon::HttpRequest::newHttpRequest();
     req->setMethod(drogon::Get);
     req->setPath("/v1/health");
-    auto [result, resp] = client->sendRequest(req, 3.0);
-    if (result == drogon::ReqResult::Ok && resp != nullptr &&
-        resp->statusCode() == drogon::k200OK) {
-        return EXIT_SUCCESS;
+
+    auto promise = std::make_shared<std::promise<bool>>();
+    auto future = promise->get_future();
+    client->sendRequest(
+        req,
+        [promise](drogon::ReqResult result, const drogon::HttpResponsePtr& resp) {
+            promise->set_value(result == drogon::ReqResult::Ok && resp != nullptr &&
+                               resp->statusCode() == drogon::k200OK);
+        },
+        2.0);
+
+    bool ok = false;
+    if (future.wait_for(std::chrono::milliseconds(2500)) == std::future_status::ready) {
+        ok = future.get();
     }
-    return EXIT_FAILURE;
+    loop_thread.getLoop()->quit();
+    loop_thread.wait();
+    return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 }  // namespace
