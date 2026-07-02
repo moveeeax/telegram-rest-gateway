@@ -12,9 +12,9 @@ class AuthStateManager;
 
 namespace tgw::http {
 
-// Регистрирует REST-маршруты этапов 1–2: health, ready, me, auth/*.
+// Регистрирует REST-маршруты этапов 1–2: health, ready, me, auth/* (+ session export).
 void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
-                    tgw::auth::AuthStateManager& auth);
+                    tgw::auth::AuthStateManager& auth, const std::string& database_dir);
 
 // Регистрирует REST-маршруты этапов 3/5: chats, история, отправка, чтение, файлы.
 // upload_dir — каталог для временных файлов аплоада (создаётся в main).

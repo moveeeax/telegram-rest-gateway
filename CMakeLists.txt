@@ -61,6 +61,8 @@ add_library(tgw_bridge STATIC
     src/bridge/td_bridge.cpp
     src/auth/auth_state_manager.cpp
     src/auth/token_store.cpp
+    src/auth/session_io.cpp
+    src/util/base64.cpp
     src/dto/message_dto.cpp
     src/dto/file_dto.cpp
     src/ws/ws_registry.cpp

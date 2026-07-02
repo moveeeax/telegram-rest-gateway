@@ -23,9 +23,12 @@ api::object_ptr<api::setTdlibParameters> buildParameters(const tgw::config::Conf
     p->database_directory_ = c.database_directory;
     p->files_directory_ = c.files_directory;
     p->database_encryption_key_ = c.database_encryption_key;
-    p->use_file_database_ = true;
-    p->use_chat_info_database_ = true;  // требует use_file_database
-    p->use_message_database_ = true;  // требует use_chat_info_database (нужен для истории)
+    // Stateless-режим: кэш-БД отключены — единственный state это td.binlog (auth key,
+    // десятки КБ), целиком помещается в session string (TGW_SESSION). История и чаты
+    // тянутся с сервера (getChatHistory идёт с only_local=false).
+    p->use_file_database_ = false;
+    p->use_chat_info_database_ = false;
+    p->use_message_database_ = false;
     p->use_secret_chats_ = false;
     p->api_id_ = c.api_id;
     p->api_hash_ = c.api_hash;

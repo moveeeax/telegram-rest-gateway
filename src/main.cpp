@@ -1,4 +1,5 @@
 #include "auth/auth_state_manager.hpp"
+#include "auth/session_io.hpp"
 #include "auth/startup_bootstrapper.hpp"
 #include "auth/token_store.hpp"
 #include "bridge/real_transport.hpp"
@@ -72,6 +73,21 @@ int main(int argc, char** argv) {
         LOG_WARN << "no BEARER_TOKENS configured: all protected endpoints will return 401";
     }
 
+    // Stateless: восстановить сессию из TGW_SESSION (base64 td.binlog) ДО создания клиента.
+    switch (tgw::auth::restoreSession(config.database_directory, config.session_b64)) {
+        case tgw::auth::RestoreResult::Restored:
+            LOG_INFO << "session restored from TGW_SESSION";
+            break;
+        case tgw::auth::RestoreResult::SkippedExisting:
+            LOG_WARN << "TGW_SESSION set, but td.binlog already exists — keeping existing session";
+            break;
+        case tgw::auth::RestoreResult::Error:
+            std::cerr << "invalid TGW_SESSION (bad base64 or write failure)\n";
+            return EXIT_FAILURE;
+        case tgw::auth::RestoreResult::NoSession:
+            break;  // чистый старт — логин через /v1/auth/*
+    }
+
     // Мост + приёмник апдейтов = AuthStateManager (обрабатывает updateAuthorizationState).
     tgw::bridge::RealTdTransport transport;
     tgw::auth::AuthStateManager auth;
@@ -89,7 +105,7 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(upload_dir, mkdir_ec);
     drogon::app().setClientMaxBodySize(config.max_upload_bytes);
 
-    tgw::http::registerRoutes(bridge, client_id, auth);
+    tgw::http::registerRoutes(bridge, client_id, auth, config.database_directory);
     tgw::http::registerMessageRoutes(bridge, client_id, upload_dir);
     tgw::http::startUploadCleanup(upload_dir, std::chrono::hours(1));
 
