@@ -150,6 +150,8 @@ int main(int argc, char** argv) {
     std::error_code mkdir_ec;
     std::filesystem::create_directories(upload_dir, mkdir_ec);
     drogon::app().setClientMaxBodySize(config.max_upload_bytes);
+    // Тела крупнее порога Drogon спулит в temp-файл (mmap) — 64MiB-аплоад не живёт в RAM.
+    drogon::app().setClientMaxMemoryBodySize(config.max_memory_body_bytes);
 
     // Удалённый logout / отзыв сессии (AUTH_KEY_DUPLICATED): останавливаем сервис — с
     // restart-политикой контейнер поднимется и честно попросит новый логин, вместо вечных 409.

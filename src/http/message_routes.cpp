@@ -311,7 +311,8 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
 
     // POST /v1/chats/{chatId}/files — загрузка файла в чат (§8.3′, decision C10).
     // Сырое тело application/octet-stream пишется во временный файл, затем sendMessage как
-    // документ. MVP — буферизованный приём (лимит setClientMaxBodySize); стриминг — hardening.
+    // документ. Тела > client_max_memory_body_size Drogon спулит на диск (mmap), поэтому
+    // копирование ниже file->file через page cache, RSS не растёт с размером аплоада.
     // ?file_name=&caption= — опциональные. Temp-файл НЕ удаляется сразу (нужен TDLib на время
     // аплоада) — его снимает TTL-очистка (http/upload_cleanup, старт в main).
     app.registerHandler(
