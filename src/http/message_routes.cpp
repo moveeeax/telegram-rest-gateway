@@ -1,5 +1,6 @@
 #include "bridge/expect.hpp"
 #include "bridge/td_bridge.hpp"
+#include "dto/file_dto.hpp"
 #include "dto/message_dto.hpp"
 #include "http/routes.hpp"
 
@@ -264,6 +265,44 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                          });
         },
         {drogon::Post, kBearerFilter});
+
+    // GET /v1/files/{fileId} — скачивание (§8.3′, решение C6): если файл докачан — стримим
+    // содержимое (newFileResponse, sendfile, без буферизации в RAM); иначе инициируем докачку
+    // и отдаём 202 + прогресс (готовность — по updateFile в WS, клиент опрашивает повторно).
+    // fileId — эфемерный td file_id (валиден в рамках текущей сессии процесса).
+    app.registerHandler(
+        "/v1/files/{fileId}",
+        [&bridge, client_id](const drogon::HttpRequestPtr& req, HttpCallback&& cb,
+                             std::string fileIdStr) {
+            std::int64_t fileId64 = 0;
+            if (!parseId(fileIdStr, fileId64)) {
+                cb(serviceError("VALIDATION_ERROR", "invalid file_id", drogon::k400BadRequest));
+                return;
+            }
+            const auto fileId = static_cast<std::int32_t>(fileId64);
+            [](tgw::bridge::TdBridge& td, std::int32_t cid, std::int32_t fid,
+               HttpCallback callback) -> drogon::AsyncTask {
+                auto fileObj = co_await td.invoke(cid, api::make_object<api::getFile>(fid));
+                auto file = tgw::bridge::expect<api::file>(std::move(fileObj));
+                if (!file.ok()) {
+                    callback(telegramError(*file.error, drogon::k502BadGateway));
+                    co_return;
+                }
+                const auto& local = file.value->local_;
+                if (local != nullptr && local->is_downloading_completed_ && !local->path_.empty()) {
+                    callback(drogon::HttpResponse::newFileResponse(local->path_));
+                    co_return;
+                }
+                // Инициируем асинхронную докачку (synchronous=false); результат игнорируем.
+                co_await td.invoke(cid, api::make_object<api::downloadFile>(fid, 1, 0, 0, false));
+                Json::Value body;
+                body["ok"] = true;
+                body["data"] = tgw::dto::toJson(*file.value);
+                callback(jsonResponse(std::move(body), drogon::k202Accepted));
+                co_return;
+            }(bridge, client_id, fileId, std::move(cb));
+        },
+        {drogon::Get, kBearerFilter});
 }
 
 }  // namespace tgw::http
