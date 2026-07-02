@@ -11,4 +11,7 @@ namespace tgw::dto {
 Json::Value toJson(const td::td_api::message& message);
 Json::Value toJson(const td::td_api::chat& chat);
 
+// Реакции сообщения → массив {reaction:{type,emoji}, total_count, is_chosen}.
+Json::Value reactionsToJson(const td::td_api::messageReactions& reactions);
+
 }  // namespace tgw::dto

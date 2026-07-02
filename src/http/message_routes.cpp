@@ -376,6 +376,75 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                          });
         },
         {drogon::Post, kBearerFilter});
+
+    // Реакции. POST — поставить emoji-реакцию, DELETE — снять. Тело: {"emoji":"👍"}.
+    // Фактическое изменение прилетит апдейтом updateMessageInteractionInfo по WebSocket.
+    const auto okBuilder = [](api::object_ptr<api::Object> obj) -> drogon::HttpResponsePtr {
+        if (obj != nullptr && obj->get_id() == api::error::ID) {
+            return telegramError(static_cast<api::error&>(*obj), drogon::k502BadGateway);
+        }
+        Json::Value body;
+        body["ok"] = true;
+        return jsonResponse(std::move(body), drogon::k200OK);
+    };
+
+    // POST /v1/chats/{chatId}/messages/{messageId}/reactions
+    app.registerHandler(
+        "/v1/chats/{chatId}/messages/{messageId}/reactions",
+        [&bridge, client_id, okBuilder](const drogon::HttpRequestPtr& req, HttpCallback&& cb,
+                                        std::string chatIdStr, std::string messageIdStr) {
+            std::int64_t chatId = 0;
+            std::int64_t messageId = 0;
+            if (!parseId(chatIdStr, chatId) || !parseId(messageIdStr, messageId)) {
+                cb(serviceError("VALIDATION_ERROR", "invalid chat_id/message_id",
+                                drogon::k400BadRequest));
+                return;
+            }
+            auto body = req->getJsonObject();
+            if (body == nullptr || !(*body)["emoji"].isString() ||
+                (*body)["emoji"].asString().empty()) {
+                cb(serviceError("VALIDATION_ERROR", "field 'emoji' is required",
+                                drogon::k400BadRequest));
+                return;
+            }
+            auto fn = api::make_object<api::addMessageReaction>();
+            fn->chat_id_ = chatId;
+            fn->message_id_ = messageId;
+            fn->reaction_type_ =
+                api::make_object<api::reactionTypeEmoji>((*body)["emoji"].asString());
+            fn->is_big_ = false;
+            fn->update_recent_reactions_ = true;
+            launchInvoke(bridge, client_id, std::move(fn), std::move(cb), okBuilder);
+        },
+        {drogon::Post, kBearerFilter});
+
+    // DELETE /v1/chats/{chatId}/messages/{messageId}/reactions
+    app.registerHandler(
+        "/v1/chats/{chatId}/messages/{messageId}/reactions",
+        [&bridge, client_id, okBuilder](const drogon::HttpRequestPtr& req, HttpCallback&& cb,
+                                        std::string chatIdStr, std::string messageIdStr) {
+            std::int64_t chatId = 0;
+            std::int64_t messageId = 0;
+            if (!parseId(chatIdStr, chatId) || !parseId(messageIdStr, messageId)) {
+                cb(serviceError("VALIDATION_ERROR", "invalid chat_id/message_id",
+                                drogon::k400BadRequest));
+                return;
+            }
+            auto body = req->getJsonObject();
+            if (body == nullptr || !(*body)["emoji"].isString() ||
+                (*body)["emoji"].asString().empty()) {
+                cb(serviceError("VALIDATION_ERROR", "field 'emoji' is required",
+                                drogon::k400BadRequest));
+                return;
+            }
+            auto fn = api::make_object<api::removeMessageReaction>();
+            fn->chat_id_ = chatId;
+            fn->message_id_ = messageId;
+            fn->reaction_type_ =
+                api::make_object<api::reactionTypeEmoji>((*body)["emoji"].asString());
+            launchInvoke(bridge, client_id, std::move(fn), std::move(cb), okBuilder);
+        },
+        {drogon::Delete, kBearerFilter});
 }
 
 }  // namespace tgw::http
