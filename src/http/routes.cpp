@@ -61,6 +61,16 @@ Json::Value authStateJson(const tgw::auth::AuthStateManager& auth) {
     Json::Value json;
     json["authorization_state"] = std::string(tgw::auth::toString(state));
     json["ready"] = (state == tgw::auth::AuthState::Ready);
+    if (state == tgw::auth::AuthState::WaitOtherDeviceConfirmation) {
+        json["qr_link"] = auth.qrLink();  // рендерить как QR; TDLib периодически обновляет
+    }
+    if (state == tgw::auth::AuthState::WaitCode) {
+        const auto info = auth.codeInfo();
+        json["code_info"]["type"] = info.type;            // куда отправлен код
+        json["code_info"]["next_type"] = info.next_type;  // тип после resend
+        json["code_info"]["length"] = info.length;
+        json["code_info"]["resend_timeout"] = info.timeout;
+    }
     return json;
 }
 
@@ -182,6 +192,27 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                 bridge, client_id, auth,
                 td_api::make_object<td_api::setAuthenticationPhoneNumber>(phone, nullptr),
                 std::move(cb));
+        },
+        {drogon::Post, kBearerFilter});
+
+    // POST /v1/auth/qr — переключить логин на QR (requestQrCodeAuthentication). Ссылка
+    // появится в /v1/auth/state (qr_link); сканировать с телефона: Настройки -> Устройства.
+    app.registerHandler(
+        "/v1/auth/qr",
+        [&bridge, client_id, &auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+            auto fn = td_api::make_object<td_api::requestQrCodeAuthentication>();
+            launchAuthMutation(bridge, client_id, auth, std::move(fn), std::move(cb));
+        },
+        {drogon::Post, kBearerFilter});
+
+    // POST /v1/auth/code/resend — переотправить код (после resend_timeout переключает на
+    // next_type, обычно SMS). resendCodeReasonUserRequest.
+    app.registerHandler(
+        "/v1/auth/code/resend",
+        [&bridge, client_id, &auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+            auto fn = td_api::make_object<td_api::resendAuthenticationCode>();
+            fn->reason_ = td_api::make_object<td_api::resendCodeReasonUserRequest>();
+            launchAuthMutation(bridge, client_id, auth, std::move(fn), std::move(cb));
         },
         {drogon::Post, kBearerFilter});
 

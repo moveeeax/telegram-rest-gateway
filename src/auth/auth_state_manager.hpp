@@ -17,9 +17,22 @@ namespace tgw::auth {
 // (request_id==0, глобальный апдейт — §7.3). Работает как IUpdateSink моста: auth-апдейты
 // обрабатывает, прочие пока считает (WS fan-out — этап 4). Потокобезопасен: пишет
 // поток-приёмник, читают HTTP-потоки.
+// Данные authenticationCodeInfo из wait_code (§7.2): куда отправлен код и когда resend.
+struct CodeInfo {
+    std::string type;       // sms | telegram_message | call | ...
+    std::string next_type;  // тип после resend ("" если нет)
+    std::int32_t length = 0;
+    std::int32_t timeout = 0;  // секунд до разрешённого resend
+};
+
 class AuthStateManager final : public tgw::bridge::IUpdateSink {
    public:
     void onUpdate(td::td_api::object_ptr<td::td_api::Object> update) override;
+
+    // Снимок code_info (валиден в wait_code; иначе пустой type).
+    CodeInfo codeInfo() const;
+    // tg://login-ссылка (валидна в wait_other_device_confirmation; TDLib её обновляет).
+    std::string qrLink() const;
 
     AuthState current() const { return state_.load(std::memory_order_acquire); }
     std::uint64_t generation() const { return generation_.load(std::memory_order_acquire); }
@@ -38,8 +51,10 @@ class AuthStateManager final : public tgw::bridge::IUpdateSink {
     std::atomic<AuthState> state_{AuthState::Unknown};
     std::atomic<std::uint64_t> generation_{0};
     std::atomic<std::uint64_t> update_count_{0};
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::condition_variable cv_;
+    CodeInfo code_info_;   // под mutex_; заполняется в wait_code
+    std::string qr_link_;  // под mutex_; заполняется в wait_other_device_confirmation
 };
 
 }  // namespace tgw::auth
