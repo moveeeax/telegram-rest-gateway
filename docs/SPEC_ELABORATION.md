@@ -177,7 +177,7 @@ struct ITdTransport {
 `[Решение]` MVP обрабатывает индивидуально ТОЛЬКО достижимые в phone-flow состояния:
 `wait_tdlib_parameters`, `wait_phone_number`, `wait_code`, `wait_password`, `ready`, `logging_out`, `closing`, `closed`.
 
-Все прочие (`wait_registration`, `wait_email_address`, `wait_email_code`, `wait_other_device_confirmation`(QR)) — одна ветка `default → 409 AUTH_REQUIRED` с machine-readable `state` в теле (не «молча зависнуть», но и без индивидуального маппинга/DTO-полей). QR/email-логин, регистрация нового номера — `post-MVP`.
+Все прочие (`wait_registration`, `wait_email_address`, `wait_email_code`) — одна ветка `default → 409 AUTH_REQUIRED` с machine-readable `state` в теле (не «молча зависнуть», но и без индивидуального маппинга/DTO-полей). Email-логин, регистрация нового номера — `post-MVP`. **Реализовано сверх плана:** QR-логин (`wait_other_device_confirmation`: `POST /v1/auth/qr`, `qr_link` в state), resend кода, `code_info` — Telegram может молча не доставлять коды кастомным api_id, QR оказался обязательным путём.
 
 `[Решение]` DTO наружу:
 - для `wait_code` отдавать `authenticationCodeInfo` (`type`/`next_type`/`length`/`timeout`);
@@ -470,7 +470,7 @@ struct ITdTransport {
 
 ### 11.4 Целевая архитектура *(упрощено)*
 
-`[Решение]` **MVP — одна целевая архитектура (обычно amd64).** Нативная сборка, без multi-arch матрицы/`buildx imagetools`. Кэш-образ `tdlib-base` (11.6) оставить — он ускоряет и single-arch. Multi-arch (arm64) — `post-MVP`, по реальному требованию. Для TDLib: `-DTD_ENABLE_LTO=OFF -DTD_ENABLE_JNI=OFF -DCMAKE_BUILD_TYPE=Release`, `-j2` при малом RAM (≥8 ГБ на TDLib-стадию).
+`[Решение]` ~~MVP — одна целевая архитектура~~ **Реализовано multi-arch с самого начала:** CI собирает amd64 + arm64 (`image:<sha>-<arch>` + манифест `image:<sha>` через `buildx imagetools`) — парк раннеров смешанный, а дев-машина arm64. Кэш-образ builder (11.6) есть для обеих архитектур. Для TDLib: `-DTD_ENABLE_LTO=OFF -DTD_ENABLE_JNI=OFF -DCMAKE_BUILD_TYPE=Release`, `-j2` при малом RAM (≥8 ГБ на TDLib-стадию).
 
 ### 11.5 glibc builder↔runtime
 
