@@ -13,6 +13,7 @@ ARG DROGON_REF
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates cmake ninja-build g++-12 clang-format clang-tidy \
         gperf zlib1g-dev libssl-dev libjsoncpp-dev uuid-dev libc-ares-dev libbrotli-dev \
+        librdkafka-dev \
     && rm -rf /var/lib/apt/lists/*
 ENV CC=gcc-12 CXX=g++-12
 

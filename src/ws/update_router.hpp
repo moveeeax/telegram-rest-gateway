@@ -6,9 +6,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <json/value.h>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace tgw::auth {
 class AuthStateManager;
@@ -31,12 +33,22 @@ std::optional<ForwardableUpdate> buildForwardable(const td::td_api::Object& upda
 // (§6.3′). Служебные (option/connectionState) отбрасываются.
 class UpdateRouter final : public tgw::bridge::IUpdateSink {
    public:
-    explicit UpdateRouter(tgw::auth::AuthStateManager& auth) : auth_(auth) {}
+    // session_id — метка аккаунта (TGW_SESSION_ID): идёт в кадры WS и события Kafka.
+    explicit UpdateRouter(tgw::auth::AuthStateManager& auth, std::string session_id = "default")
+        : auth_(auth), session_id_(std::move(session_id)) {}
 
     void onUpdate(td::td_api::object_ptr<td::td_api::Object> update) override;
 
+    // Дополнительный издатель событий (Kafka и т.п.): (key, payload). Вызывается из
+    // потока-приёмника ПОСЛЕ WS fan-out — обязан быть неблокирующим. Задавать до start().
+    void setEventPublisher(std::function<void(const std::string&, const std::string&)> pub) {
+        event_publisher_ = std::move(pub);
+    }
+
    private:
     tgw::auth::AuthStateManager& auth_;
+    std::string session_id_;
+    std::function<void(const std::string&, const std::string&)> event_publisher_;
     std::atomic<std::uint64_t> seq_{0};
 };
 

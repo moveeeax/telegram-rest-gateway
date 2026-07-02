@@ -28,6 +28,10 @@ find_package(Td CONFIG REQUIRED)
 find_package(Drogon CONFIG REQUIRED)
 # Единый OpenSSL для TDLib, Drogon/Trantor и нашего кода (§11.2).
 find_package(OpenSSL 3.0 REQUIRED)
+# librdkafka (Kafka-канал событий): Debian-пакет без CMake-конфига — ищем библиотеку/заголовки.
+find_library(RDKAFKA_CPP_LIB rdkafka++ REQUIRED)
+find_library(RDKAFKA_LIB rdkafka REQUIRED)
+find_path(RDKAFKA_INCLUDE_DIR librdkafka/rdkafkacpp.h REQUIRED)
 
 # --- Предупреждения и санитайзеры только на НАШИХ таргетах ---
 add_library(tgw_project_options INTERFACE)
@@ -84,12 +88,15 @@ add_executable(telegram-rest-gateway
     src/http/bearer_filter.cpp
     src/http/login_ui.cpp
     src/http/metrics_routes.cpp
+    src/events/kafka_sink.cpp
     src/http/upload_cleanup.cpp
     src/config/config.cpp
     src/auth/startup_bootstrapper.cpp
     src/ws/updates_ws.cpp)
+target_include_directories(telegram-rest-gateway PRIVATE ${RDKAFKA_INCLUDE_DIR})
 target_link_libraries(telegram-rest-gateway
-    PRIVATE tgw_bridge Drogon::Drogon tgw_project_options)
+    PRIVATE tgw_bridge Drogon::Drogon tgw_project_options
+    PRIVATE ${RDKAFKA_CPP_LIB} ${RDKAFKA_LIB})
 
 # --- Тесты ---
 if(TGW_BUILD_TESTS)

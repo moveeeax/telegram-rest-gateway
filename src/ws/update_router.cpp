@@ -106,12 +106,28 @@ void UpdateRouter::onUpdate(api::object_ptr<api::Object> update) {
     frame["type"] = "update";
     frame["update_type"] = forwardable->update_type;
     frame["seq"] = static_cast<Json::UInt64>(seq_.fetch_add(1, std::memory_order_relaxed) + 1);
-    frame["session_id"] = "default";
+    frame["session_id"] = session_id_;
     frame["data"] = std::move(forwardable->data);
 
     tgw::metrics::Counters::instance().updates_forwarded_total.fetch_add(1,
                                                                          std::memory_order_relaxed);
-    WsSubscriberRegistry::instance().fanOut(compact(frame));
+    const std::string payload = compact(frame);
+    WsSubscriberRegistry::instance().fanOut(payload);
+
+    if (event_publisher_) {
+        // Ключ: "<session_id>:<chat_id>" — префикс id аккаунта, порядок в рамках чата
+        // (партиционирование Kafka по ключу). Нет chat_id — только id аккаунта.
+        std::string key = session_id_;
+        const Json::Value& data = frame["data"];
+        if (data.isMember("chat_id") && data["chat_id"].isString()) {
+            key += ":" + data["chat_id"].asString();
+        } else if (data.isMember("message") && data["message"].isMember("chat_id") &&
+                   data["message"]["chat_id"].isString()) {
+            // updateMessageSendSucceeded/Failed: chat_id вложен в message
+            key += ":" + data["message"]["chat_id"].asString();
+        }
+        event_publisher_(key, payload);
+    }
 }
 
 }  // namespace tgw::ws
