@@ -101,24 +101,22 @@ tidy:
     - cmake --preset dev-debug
     - git ls-files 'src/*.cpp' | xargs -r clang-tidy -p build/dev-debug --warnings-as-errors='bugprone-*,concurrency-*'
 
+# Санитайзеры — на мощном arm64-парке (6 нод). Единственная 8-ГБ amd64-нода не тянет
+# исполнение санитайзерного бинаря (OOM); её покрытие — Release-сборка exe в стадии image.
 test:asan:
   extends: .build-and-test
-  parallel:
-    matrix:
-      - ARCH: [amd64, arm64]
-  tags: [$ARCH]
+  tags: [arm64]
   variables:
+    ARCH: arm64
     PRESET: asan
     ASAN_OPTIONS: "detect_leaks=1"
     LSAN_OPTIONS: "suppressions=$CI_PROJECT_DIR/cmake/suppressions/lsan.supp"
 
 test:tsan:
   extends: .build-and-test
-  parallel:
-    matrix:
-      - ARCH: [amd64, arm64]
-  tags: [$ARCH]
+  tags: [arm64]
   variables:
+    ARCH: arm64
     PRESET: tsan
     TSAN_OPTIONS: "suppressions=$CI_PROJECT_DIR/cmake/suppressions/tsan.supp halt_on_error=1"
 
