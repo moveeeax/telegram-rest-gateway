@@ -30,7 +30,8 @@ COPY --from=builder /app/build/telegram-rest-gateway /app/telegram-rest-gateway
 COPY --from=builder --chown=65532:65532 /data /data
 
 USER 65532:65532
-VOLUME ["/data/session", "/data/files"]
+# VOLUME намеренно НЕ объявлен: сервис stateless (сессия — через TGW_SESSION), а директива
+# плодила бы анонимные volume. Для stateful-запуска можно монтировать -v на /data/*.
 ENV TGW_LISTEN_ADDRESS=0.0.0.0 \
     TGW_LISTEN_PORT=8080
 EXPOSE 8080

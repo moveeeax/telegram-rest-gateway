@@ -1,6 +1,7 @@
 #include "http/routes.hpp"
 
 #include "auth/auth_state_manager.hpp"
+#include "auth/session_io.hpp"
 #include "bridge/expect.hpp"
 #include "bridge/td_bridge.hpp"
 
@@ -103,7 +104,7 @@ bool jsonString(const drogon::HttpRequestPtr& req, const char* field, std::strin
 }  // namespace
 
 void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
-                    tgw::auth::AuthStateManager& auth) {
+                    tgw::auth::AuthStateManager& auth, const std::string& database_dir) {
     auto& app = drogon::app();
 
     // --- system (без auth) ---
@@ -129,6 +130,25 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
         {drogon::Get});
 
     // --- auth (§7.2) — single-account, session_id неявно "default" ---
+    // GET /v1/auth/session/export — «session string» (base64 td.binlog) для stateless-запуска
+    // через TGW_SESSION. Содержит auth key: полноценный доступ к аккаунту — хранить как секрет.
+    app.registerHandler(
+        "/v1/auth/session/export",
+        [database_dir](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+            const auto session = tgw::auth::exportSession(database_dir);
+            if (!session) {
+                cb(serviceError("NOT_FOUND", "session binlog not found (not logged in yet?)",
+                                drogon::k404NotFound));
+                return;
+            }
+            Json::Value body;
+            body["ok"] = true;
+            body["data"]["session_b64"] = *session;
+            body["data"]["note"] = "store as secret; pass via TGW_SESSION on next start";
+            cb(jsonResponse(std::move(body), drogon::k200OK));
+        },
+        {drogon::Get, kBearerFilter});
+
     app.registerHandler("/v1/auth/state",
                         [&auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
                             Json::Value body;

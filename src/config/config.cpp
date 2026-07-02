@@ -58,6 +58,7 @@ Config Config::load() {
     c.api_id = static_cast<std::int32_t>(std::stol(require("API_ID")));
     c.api_hash = require("API_HASH");
     c.database_encryption_key = require("DATABASE_ENCRYPTION_KEY");
+    c.session_b64 = envOrFile("TGW_SESSION");
 
     c.database_directory = envOrFile("TGW_DATABASE_DIR", c.database_directory);
     c.files_directory = envOrFile("TGW_FILES_DIR", c.files_directory);

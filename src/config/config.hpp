@@ -17,6 +17,11 @@ struct Config {
     // Шифрование БД TDLib. Значение используется как opaque-ключ (стабильное!) — утеря = ре-логин.
     std::string database_encryption_key;
 
+    // Session string (base64 от td.binlog) для stateless-запуска: TGW_SESSION / TGW_SESSION_FILE.
+    // Пусто — чистый старт (логин через /v1/auth/*), после логина строку отдаёт
+    // GET /v1/auth/session/export.
+    std::string session_b64;
+
     // Пути (на volume). Права 0700 обеспечиваются образом/umask.
     std::string database_directory = "/data/session";
     std::string files_directory = "/data/files";
