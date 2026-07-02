@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace tgw::bridge {
 class TdBridge;
@@ -15,7 +16,9 @@ namespace tgw::http {
 void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                     tgw::auth::AuthStateManager& auth);
 
-// Регистрирует REST-маршруты этапа 3: chats, история, отправка, чтение.
-void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id);
+// Регистрирует REST-маршруты этапов 3/5: chats, история, отправка, чтение, файлы.
+// upload_dir — каталог для временных файлов аплоада (создаётся в main).
+void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
+                           const std::string& upload_dir);
 
 }  // namespace tgw::http
