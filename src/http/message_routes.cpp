@@ -344,8 +344,12 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 out.write(req->bodyData(), static_cast<std::streamsize>(req->bodyLength()));
             }
 
+            // inputMessageDocument.document_ : inputDocument, а inputDocument.document_ :
+            // InputFile.
+            auto document = api::make_object<api::inputDocument>();
+            document->document_ = api::make_object<api::inputFileLocal>(path.string());
             auto content = api::make_object<api::inputMessageDocument>();
-            content->document_ = api::make_object<api::inputFileLocal>(path.string());
+            content->document_ = std::move(document);
             const std::string caption = req->getParameter("caption");
             if (!caption.empty()) {
                 content->caption_ = api::make_object<api::formattedText>();
