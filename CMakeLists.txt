@@ -60,7 +60,8 @@ add_library(tgw_bridge STATIC
     src/bridge/update_sink.cpp
     src/bridge/td_bridge.cpp
     src/auth/auth_state_manager.cpp
-    src/auth/token_store.cpp)
+    src/auth/token_store.cpp
+    src/dto/message_dto.cpp)
 target_include_directories(tgw_bridge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(tgw_bridge
     PUBLIC Td::TdStatic Drogon::Drogon
@@ -70,6 +71,7 @@ target_link_libraries(tgw_bridge
 add_executable(telegram-rest-gateway
     src/main.cpp
     src/http/routes.cpp
+    src/http/message_routes.cpp
     src/http/bearer_filter.cpp
     src/config/config.cpp
     src/auth/startup_bootstrapper.cpp)
