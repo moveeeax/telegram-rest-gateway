@@ -76,6 +76,16 @@ Config Config::load() {
         c.listen_port = static_cast<std::uint16_t>(std::stoul(port));
     }
 
+    // Bearer-токены: по строке на токен, #-комментарии и пустые строки игнорируются.
+    std::istringstream tokens(envOrFile("BEARER_TOKENS"));
+    std::string line;
+    while (std::getline(tokens, line)) {
+        line = trim(line);
+        if (!line.empty() && line[0] != '#') {
+            c.bearer_tokens.push_back(line);
+        }
+    }
+
     return c;
 }
 
