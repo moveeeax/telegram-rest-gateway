@@ -1,0 +1,7 @@
+# LeakSanitizer suppressions — ТОЛЬКО для сторонних символов (TDLib/OpenSSL).
+# Наш код (src/, tests/) сюда добавлять ЗАПРЕЩЕНО (CI-греп проверяет — см. .gitlab-ci.yml).
+# Формат: leak:<подстрока символа/файла>
+leak:libcrypto
+leak:libssl
+# Пример для TDLib-глобалов (уточнить по факту первого прогона):
+# leak:td::Global

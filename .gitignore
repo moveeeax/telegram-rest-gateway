@@ -1,0 +1,36 @@
+# Build
+/build/
+/out/
+/install/
+*.o
+*.a
+*.so
+*.so.*
+compile_commands.json
+.cache/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# Runtime data (session/files volumes) — НИКОГДА не коммитить: содержат доступ к аккаунту
+/data/
+*.session
+session/
+files/
+
+# Secrets — только через *_FILE / secret manager
+*.secret
+.env
+.env.*
+secrets/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+credentials.json

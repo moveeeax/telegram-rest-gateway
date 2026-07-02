@@ -1,0 +1,70 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "20",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      },
+      "environment": {
+        "CC": "gcc-12",
+        "CXX": "g++-12"
+      }
+    },
+    {
+      "name": "dev-debug",
+      "inherits": "base",
+      "displayName": "Dev (Debug, tests)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TGW_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "asan",
+      "inherits": "base",
+      "displayName": "Debug + ASan/UBSan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TGW_BUILD_TESTS": "ON",
+        "TGW_ENABLE_ASAN": "ON"
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "displayName": "Debug + ThreadSanitizer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TGW_BUILD_TESTS": "ON",
+        "TGW_ENABLE_TSAN": "ON"
+      }
+    },
+    {
+      "name": "ci-release",
+      "inherits": "base",
+      "displayName": "CI Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "TGW_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev-debug", "configurePreset": "dev-debug" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "ci-release", "configurePreset": "ci-release" }
+  ],
+  "testPresets": [
+    { "name": "dev-debug", "configurePreset": "dev-debug", "output": { "outputOnFailure": true } },
+    { "name": "asan", "configurePreset": "asan", "output": { "outputOnFailure": true } },
+    { "name": "tsan", "configurePreset": "tsan", "output": { "outputOnFailure": true } },
+    { "name": "ci-release", "configurePreset": "ci-release", "output": { "outputOnFailure": true } }
+  ]
+}

@@ -1,93 +1,119 @@
 # telegram-rest-gateway
 
+Self-hosted REST/WebSocket-обёртка над пользовательским Telegram-аккаунтом на базе
+**TDLib** (нативный C++-интерфейс, `td::ClientManager`) и **Drogon**. Даёт языконезависимый
+HTTP-доступ к аккаунту, скрывая асинхронную природу TDLib за моделью «запрос → ответ»
+и доставляя апдейты через WebSocket.
 
+> Статус: **Stage 0 (каркас)**. Функциональность моста/авторизации/сообщений — в разработке
+> по этапам (см. `docs/SPEC_ELABORATION.md` §12). Сборка только в Docker/CI.
 
-## Getting started
+## Документация
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+| Файл | Назначение |
+|---|---|
+| [`TZ_TDLib_Drogon_REST.md`](TZ_TDLib_Drogon_REST.md) | Основное ТЗ (v2.0) |
+| [`docs/SPEC_ELABORATION.md`](docs/SPEC_ELABORATION.md) | Детальная проработка уровня реализации (v3.0) |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Журнал принятых решений |
+| [`docs/GITFLOW.md`](docs/GITFLOW.md) | Модель ветвления |
+| [`openapi/openapi.yaml`](openapi/openapi.yaml) | Единый источник истины HTTP-контракта |
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## Стек и ключевые решения
 
-## Add your files
+- **C++20** (корутины Drogon), TDLib собирается своим C++17.
+- **TDLib линкуется статически** через `Td::TdStatic` — нативный C++-API не экспортируется
+  `libtdjson.so`.
+- Единый **OpenSSL 3.0** для TDLib, Drogon и нашего кода.
+- Single-account, только WebSocket для апдейтов, шифрование БД TDLib, id в JSON — строками.
+- Деплой: multi-arch (amd64 + arm64) Docker, финал — distroless nonroot.
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## Структура
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/tarassov.me/telegram-rest-gateway.git
-git branch -M main
-git push -uf origin main
+src/
+  main.cpp              — точка входа, /v1/health, --healthcheck
+  bridge/
+    transport.hpp       — ITdTransport (seam над td::ClientManager)
+    real_transport.*    — RealTdTransport (единственная точка реального TDLib)
+    clock.hpp           — инъекция времени (SteadyClock / FakeClock в тестах)
+tests/
+  fake_transport.hpp    — FakeTdTransport (scripted, потокобезопасный)
+  transport_smoke_test.cpp
+openapi/openapi.yaml
+Dockerfile.builder      — образ тулчейн+TDLib+Drogon (пины TDLIB_REF/DROGON_REF)
+Dockerfile              — образ сервиса (FROM builder) → distroless
 ```
 
-## Integrate with your tools
+CI/CD и список переменных GitLab — [`docs/CICD.md`](docs/CICD.md).
 
-* [Set up project integrations](https://gitlab.com/tarassov.me/telegram-rest-gateway/-/settings/integrations)
+## Сборка (в контейнере)
 
-## Collaborate with your team
+```bash
+# 1. Зафиксировать TDLIB_REF (полный git-SHA!) и DROGON_REF.
+# 2. Собрать builder-образ (долго; только при смене пинов):
+docker build -f Dockerfile.builder \
+  --build-arg TDLIB_REF="$(grep -oP '(?<=^TDLIB_REF=).*' TDLIB_REF)" \
+  --build-arg DROGON_REF="$(grep -oP '(?<=^DROGON_REF=).*' DROGON_REF)" \
+  -t tgw-builder:local .
+# 3. Собрать сервис:
+docker build --build-arg BUILDER_IMAGE=tgw-builder:local -t telegram-rest-gateway .
+```
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+Локальная сборка вне Docker требует установленных TDLib (`Td::TdStatic`), Drogon и
+OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake --preset dev-debug`).
 
-## Test and Deploy
+## Конфигурация (env)
 
-Use the built-in continuous integration in GitLab.
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `TGW_LISTEN_ADDRESS` | `127.0.0.1` | Адрес прослушивания (в Docker — `0.0.0.0`) |
+| `TGW_LISTEN_PORT` | `8080` | Порт HTTP |
+| `TGW_SESSION` / `TGW_SESSION_FILE` | — | Session string (base64 от `td.binlog`) для stateless-запуска |
+| `TGW_WS_MAX_PENDING_BYTES` | `8388608` | WS back-pressure: лимит байт с последнего pong; 0 — выкл |
+| `TGW_MAX_MEMORY_BODY_BYTES` | `1048576` | Порог spool-на-диск для тел запросов (RSS при аплоадах) |
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+### Хранение сессии в S3/MinIO (опционально)
 
-***
+Если заданы, `td.binlog` на старте тянется из S3 (при отсутствии локального), периодически и на
+graceful shutdown заливается обратно. Позволяет запускать сервис полностью stateless без монтирования
+volume. Включается только при заполненных `bucket` + credentials + `endpoint`.
 
-# Editing this README
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `TGW_S3_ENDPOINT` | — | `http(s)://host[:port]` (AWS: `https://s3.<region>.amazonaws.com`) |
+| `TGW_S3_REGION` | `us-east-1` | Регион для подписи SigV4 |
+| `TGW_S3_BUCKET` | — | Имя бакета |
+| `TGW_SESSION_ID` | `default` | Метка инстанса → путь в S3 (сегмент `[A-Za-z0-9._-]`) |
+| `TGW_S3_PREFIX` | `telegram-sessions` | Префикс ключа |
+| `TGW_S3_KEY` | *(derived)* | Явный ключ-override; иначе `<prefix>/<session_id>/td.binlog` |
+| `TGW_S3_ACCESS_KEY_ID` / `_FILE` | — | Access key |
+| `TGW_S3_SECRET_ACCESS_KEY` / `_FILE` | — | Secret key |
+| `TGW_S3_PATH_STYLE` | `true` | `true` — path-style (MinIO); `false` — virtual-host (AWS) |
+| `TGW_S3_SYNC_INTERVAL_SECONDS` | `300` | Период фонового бэкапа сессии в S3 |
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+**Несколько аккаунтов на одном бакете.** Каждый инстанс получает свой путь по `TGW_SESSION_ID`:
+`telegram-sessions/<session_id>/td.binlog`. Задавай разный `TGW_SESSION_ID` на каждый аккаунт
+(Telegram account_id недоступен до логина, поэтому метку назначает оператор). Один и тот же
+`session_id` нельзя гонять в двух инстансах одновременно — Telegram убьёт сессию (`AUTH_KEY_DUPLICATED`).
 
-## Suggestions for a good README
+Секреты (`api_id`, `api_hash`, `database_encryption_key`, Bearer-токены, S3 credentials) — только
+через `*_FILE` / secret manager, никогда в образ/env напрямую.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+## Метрики
 
-## Name
-Choose a self-explaining name for your project.
+`GET /metrics` — Prometheus text format (без Bearer): auth-состояние, WS-подписчики,
+inflight моста, счётчики HTTP/апдейтов.
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+## Веб-интерфейс входа
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+`GET /ui` — самодостаточная страница логина (без Bearer-фильтра; токен вводится в форме):
+выбор метода **QR-код** (авто-обновление при ротации ссылки TDLib) или **телефон**
+(номер → код → 2FA). После авторизации показывает аккаунт.
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+## OpenAPI
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+Спецификация всех эндпоинтов: [`docs/openapi.yaml`](docs/openapi.yaml).
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## Лицензия
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+[MIT](LICENSE).

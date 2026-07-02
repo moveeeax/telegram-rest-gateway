@@ -1,0 +1,2 @@
+# Пин версии Drogon (>=1.8.x для стабильного Task<HttpResponsePtr>/AsyncTask).
+DROGON_REF=v1.9.8
