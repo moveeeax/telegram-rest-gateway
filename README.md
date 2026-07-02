@@ -97,6 +97,11 @@ volume. Включается только при заполненных `bucket`
 Секреты (`api_id`, `api_hash`, `database_encryption_key`, Bearer-токены, S3 credentials) — только
 через `*_FILE` / secret manager, никогда в образ/env напрямую.
 
+## Метрики
+
+`GET /metrics` — Prometheus text format (без Bearer): auth-состояние, WS-подписчики,
+inflight моста, счётчики HTTP/апдейтов.
+
 ## Веб-интерфейс входа
 
 `GET /ui` — самодостаточная страница логина (без Bearer-фильтра; токен вводится в форме):

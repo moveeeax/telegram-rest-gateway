@@ -64,6 +64,7 @@ add_library(tgw_bridge STATIC
     src/auth/session_io.cpp
     src/auth/s3_session.cpp
     src/util/base64.cpp
+    src/util/metrics.cpp
     src/util/aws_sigv4.cpp
     src/util/s3_client.cpp
     src/dto/message_dto.cpp
@@ -82,6 +83,7 @@ add_executable(telegram-rest-gateway
     src/http/message_routes.cpp
     src/http/bearer_filter.cpp
     src/http/login_ui.cpp
+    src/http/metrics_routes.cpp
     src/http/upload_cleanup.cpp
     src/config/config.cpp
     src/auth/startup_bootstrapper.cpp

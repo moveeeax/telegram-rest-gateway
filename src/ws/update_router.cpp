@@ -2,6 +2,7 @@
 
 #include "auth/auth_state_manager.hpp"
 #include "dto/message_dto.hpp"
+#include "util/metrics.hpp"
 #include "ws/ws_registry.hpp"
 
 #include <cstdint>
@@ -108,6 +109,8 @@ void UpdateRouter::onUpdate(api::object_ptr<api::Object> update) {
     frame["session_id"] = "default";
     frame["data"] = std::move(forwardable->data);
 
+    tgw::metrics::Counters::instance().updates_forwarded_total.fetch_add(1,
+                                                                         std::memory_order_relaxed);
     WsSubscriberRegistry::instance().fanOut(compact(frame));
 }
 
