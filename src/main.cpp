@@ -5,6 +5,7 @@
 #include "bridge/td_bridge.hpp"
 #include "config/config.hpp"
 #include "http/routes.hpp"
+#include "ws/update_router.hpp"
 
 #include <drogon/drogon.h>
 #include <drogon/HttpAppFramework.h>
@@ -63,7 +64,8 @@ int main(int argc, char** argv) {
     // Мост + приёмник апдейтов = AuthStateManager (обрабатывает updateAuthorizationState).
     tgw::bridge::RealTdTransport transport;
     tgw::auth::AuthStateManager auth;
-    tgw::bridge::TdBridge bridge(transport, auth, tgw::bridge::BridgeConfig{});
+    tgw::ws::UpdateRouter router(auth);  // авторизационные -> auth, прикладные -> WS fan-out
+    tgw::bridge::TdBridge bridge(transport, router, tgw::bridge::BridgeConfig{});
 
     const std::int32_t client_id = bridge.createClientId();
     bridge.start();
