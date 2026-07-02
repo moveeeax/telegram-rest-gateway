@@ -101,6 +101,16 @@ tidy:
     - cmake --preset dev-debug
     - git ls-files 'src/*.cpp' | xargs -r clang-tidy -p build/dev-debug --warnings-as-errors='bugprone-*,concurrency-*'
 
+# Сборка полного exe (Release) — test-джобы собирают только тест-таргет, поэтому exe
+# (main/routes/config/bootstrapper) иначе проверялся бы лишь в стадии image на develop/main.
+build:app:
+  stage: test
+  image: "${REGISTRY_IMAGE}:builder-arm64"
+  tags: [arm64]
+  script:
+    - cmake --preset ci-release
+    - cmake --build --preset ci-release --target telegram-rest-gateway
+
 # Санитайзеры — на мощном arm64-парке (6 нод). Единственная 8-ГБ amd64-нода не тянет
 # исполнение санитайзерного бинаря (OOM); её покрытие — Release-сборка exe в стадии image.
 test:asan:
