@@ -68,9 +68,34 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 |---|---|---|
 | `TGW_LISTEN_ADDRESS` | `127.0.0.1` | Адрес прослушивания (в Docker — `0.0.0.0`) |
 | `TGW_LISTEN_PORT` | `8080` | Порт HTTP |
+| `TGW_SESSION` / `TGW_SESSION_FILE` | — | Session string (base64 от `td.binlog`) для stateless-запуска |
 
-Секреты (`api_id`, `api_hash`, `database_encryption_key`, Bearer-токены) — только через
-`*_FILE` / secret manager, никогда в образ/env напрямую (появятся на этапе 2).
+### Хранение сессии в S3/MinIO (опционально)
+
+Если заданы, `td.binlog` на старте тянется из S3 (при отсутствии локального), периодически и на
+graceful shutdown заливается обратно. Позволяет запускать сервис полностью stateless без монтирования
+volume. Включается только при заполненных `bucket` + credentials + `endpoint`.
+
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `TGW_S3_ENDPOINT` | — | `http(s)://host[:port]` (AWS: `https://s3.<region>.amazonaws.com`) |
+| `TGW_S3_REGION` | `us-east-1` | Регион для подписи SigV4 |
+| `TGW_S3_BUCKET` | — | Имя бакета |
+| `TGW_SESSION_ID` | `default` | Метка инстанса → путь в S3 (сегмент `[A-Za-z0-9._-]`) |
+| `TGW_S3_PREFIX` | `telegram-sessions` | Префикс ключа |
+| `TGW_S3_KEY` | *(derived)* | Явный ключ-override; иначе `<prefix>/<session_id>/td.binlog` |
+| `TGW_S3_ACCESS_KEY_ID` / `_FILE` | — | Access key |
+| `TGW_S3_SECRET_ACCESS_KEY` / `_FILE` | — | Secret key |
+| `TGW_S3_PATH_STYLE` | `true` | `true` — path-style (MinIO); `false` — virtual-host (AWS) |
+| `TGW_S3_SYNC_INTERVAL_SECONDS` | `300` | Период фонового бэкапа сессии в S3 |
+
+**Несколько аккаунтов на одном бакете.** Каждый инстанс получает свой путь по `TGW_SESSION_ID`:
+`telegram-sessions/<session_id>/td.binlog`. Задавай разный `TGW_SESSION_ID` на каждый аккаунт
+(Telegram account_id недоступен до логина, поэтому метку назначает оператор). Один и тот же
+`session_id` нельзя гонять в двух инстансах одновременно — Telegram убьёт сессию (`AUTH_KEY_DUPLICATED`).
+
+Секреты (`api_id`, `api_hash`, `database_encryption_key`, Bearer-токены, S3 credentials) — только
+через `*_FILE` / secret manager, никогда в образ/env напрямую.
 
 ## Лицензия
 

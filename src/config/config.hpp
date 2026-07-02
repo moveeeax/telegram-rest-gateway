@@ -1,5 +1,7 @@
 #pragma once
 
+#include "util/s3_client.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -22,6 +24,11 @@ struct Config {
     // GET /v1/auth/session/export.
     std::string session_b64;
 
+    // Операторская метка инстанса (TGW_SESSION_ID): разграничивает сессии в S3, когда на одном
+    // бакете держат несколько аккаунтов. Задаётся оператором (Telegram account_id неизвестен до
+    // логина, поэтому автоключевание по нему невозможно). Валидируется как безопасный сегмент пути.
+    std::string session_id = "default";
+
     // Пути (на volume). Права 0700 обеспечиваются образом/umask.
     std::string database_directory = "/data/session";
     std::string files_directory = "/data/files";
@@ -39,6 +46,11 @@ struct Config {
 
     // Лимит тела аплоада (буферизованный приём в MVP). Стриминг больших файлов — hardening.
     std::size_t max_upload_bytes = 64UL * 1024 * 1024;
+
+    // Внешнее хранилище сессии (td.binlog) в S3/MinIO. Если s3.enabled() — на старте binlog
+    // тянется из S3 (при отсутствии локального), периодически и на shutdown заливается обратно.
+    tgw::util::S3Config s3;
+    int s3_sync_interval_seconds = 300;
 
     // Загружает конфиг из окружения. Кидает std::runtime_error, если нет обязательных
     // api_id/api_hash/database_encryption_key.
