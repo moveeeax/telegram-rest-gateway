@@ -12,7 +12,8 @@ Checks: >
   -cppcoreguidelines-pro-bounds-pointer-arithmetic,
   -misc-non-private-member-variables-in-classes,
   -misc-include-cleaner,
-  -concurrency-mt-unsafe
+  -concurrency-mt-unsafe,
+  -bugprone-easily-swappable-parameters
 
 WarningsAsErrors: 'bugprone-*,concurrency-*'
 
