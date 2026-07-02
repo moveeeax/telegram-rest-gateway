@@ -72,12 +72,25 @@ void AuthStateManager::onUpdate(api::object_ptr<api::Object> update) {
 }
 
 void AuthStateManager::setState(AuthState s) {
+    std::function<void()> terminate_cb;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         state_.store(s, std::memory_order_release);
         generation_.fetch_add(1, std::memory_order_acq_rel);
+        // Удалённый logout / отзыв сессии: терминальное состояние пришло, хотя main shutdown
+        // не начинал. Один раз дёргаем колбэк (main по нему останавливает сервис — иначе он
+        // молча продолжил бы отдавать 409 на всё).
+        const bool terminal =
+            (s == AuthState::LoggingOut || s == AuthState::Closing || s == AuthState::Closed);
+        if (terminal && !expect_shutdown_.load(std::memory_order_acquire) &&
+            !termination_reported_.exchange(true) && on_unexpected_termination_) {
+            terminate_cb = on_unexpected_termination_;
+        }
     }
     cv_.notify_all();
+    if (terminate_cb) {
+        terminate_cb();
+    }
 }
 
 bool AuthStateManager::waitForFirst(std::chrono::milliseconds timeout) {

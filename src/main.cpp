@@ -151,6 +151,13 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(upload_dir, mkdir_ec);
     drogon::app().setClientMaxBodySize(config.max_upload_bytes);
 
+    // Удалённый logout / отзыв сессии (AUTH_KEY_DUPLICATED): останавливаем сервис — с
+    // restart-политикой контейнер поднимется и честно попросит новый логин, вместо вечных 409.
+    auth.setOnUnexpectedTermination([] {
+        LOG_ERROR << "session terminated remotely (logout/revoked) — shutting down";
+        drogon::app().getLoop()->queueInLoop([] { drogon::app().quit(); });
+    });
+
     tgw::http::registerRoutes(bridge, client_id, auth, config.database_directory);
     tgw::http::registerMessageRoutes(bridge, client_id, upload_dir);
     tgw::ws::WsSubscriberRegistry::instance().setMaxPendingBytes(config.ws_max_pending_bytes);
@@ -171,6 +178,7 @@ int main(int argc, char** argv) {
     // возможна порча БД. run() уже вернулся (SIGTERM/SIGINT), но поток-приёмник ещё жив и
     // применит authorizationStateClosed, разбудив waitForClosed.
     LOG_INFO << "shutting down: closing TDLib client";
+    auth.expectShutdown();  // дальше терминальные состояния ожидаемы
     bridge.sendOneWay(client_id, td_api::make_object<td_api::close>());
     if (!auth.waitForClosed(std::chrono::seconds(10))) {
         LOG_WARN << "TDLib did not reach Closed within timeout";
