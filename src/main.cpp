@@ -5,6 +5,7 @@
 #include "bridge/td_bridge.hpp"
 #include "config/config.hpp"
 #include "http/routes.hpp"
+#include "http/upload_cleanup.hpp"
 #include "ws/update_router.hpp"
 
 #include <drogon/drogon.h>
@@ -90,6 +91,7 @@ int main(int argc, char** argv) {
 
     tgw::http::registerRoutes(bridge, client_id, auth);
     tgw::http::registerMessageRoutes(bridge, client_id, upload_dir);
+    tgw::http::startUploadCleanup(upload_dir, std::chrono::hours(1));
 
     LOG_INFO << "telegram-rest-gateway listening on " << config.listen_address << ":"
              << config.listen_port;
