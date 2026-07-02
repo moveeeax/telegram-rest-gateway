@@ -7,6 +7,7 @@
 #include "bridge/td_bridge.hpp"
 #include "config/config.hpp"
 #include "events/kafka_sink.hpp"
+#include "http/directory_routes.hpp"
 #include "http/login_ui.hpp"
 #include "http/metrics_routes.hpp"
 #include "http/routes.hpp"
@@ -186,6 +187,7 @@ int main(int argc, char** argv) {
 
     tgw::http::registerRoutes(bridge, client_id, auth, config.database_directory);
     tgw::http::registerMessageRoutes(bridge, client_id, upload_dir);
+    tgw::http::registerDirectoryRoutes(bridge, client_id);
     tgw::ws::WsSubscriberRegistry::instance().setMaxPendingBytes(config.ws_max_pending_bytes);
     tgw::http::registerLoginUi();  // GET /ui — страница входа (форма/QR)
     tgw::http::registerMetricsRoutes(bridge, auth);  // GET /metrics (Prometheus)

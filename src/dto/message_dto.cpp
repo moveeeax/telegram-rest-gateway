@@ -199,6 +199,104 @@ Json::Value toJson(const api::chat& chat) {
     json["id"] = std::to_string(chat.id_);
     json["title"] = chat.title_;
     json["unread_count"] = chat.unread_count_;
+    if (chat.type_ != nullptr) {
+        switch (chat.type_->get_id()) {
+            case api::chatTypePrivate::ID:
+                json["type"] = "private";
+                json["user_id"] =
+                    std::to_string(static_cast<const api::chatTypePrivate&>(*chat.type_).user_id_);
+                break;
+            case api::chatTypeBasicGroup::ID:
+                json["type"] = "group";
+                break;
+            case api::chatTypeSupergroup::ID:
+                json["type"] = static_cast<const api::chatTypeSupergroup&>(*chat.type_).is_channel_
+                                   ? "channel"
+                                   : "supergroup";
+                break;
+            case api::chatTypeSecret::ID:
+                json["type"] = "secret";
+                break;
+            default:
+                json["type"] = "other";
+        }
+    }
+    return json;
+}
+
+Json::Value toJson(const api::user& user) {
+    Json::Value json;
+    json["id"] = std::to_string(user.id_);
+    json["first_name"] = user.first_name_;
+    json["last_name"] = user.last_name_;
+    if (user.usernames_ != nullptr && !user.usernames_->active_usernames_.empty()) {
+        json["username"] = user.usernames_->active_usernames_.front();
+    }
+    json["phone_number"] = user.phone_number_;
+    json["is_contact"] = user.is_contact_;
+    json["is_premium"] = user.is_premium_;
+    if (user.status_ != nullptr) {
+        switch (user.status_->get_id()) {
+            case api::userStatusOnline::ID:
+                json["status"] = "online";
+                break;
+            case api::userStatusOffline::ID:
+                json["status"] = "offline";
+                json["was_online"] =
+                    static_cast<const api::userStatusOffline&>(*user.status_).was_online_;
+                break;
+            case api::userStatusRecently::ID:
+                json["status"] = "recently";
+                break;
+            case api::userStatusLastWeek::ID:
+                json["status"] = "last_week";
+                break;
+            case api::userStatusLastMonth::ID:
+                json["status"] = "last_month";
+                break;
+            default:
+                json["status"] = "unknown";
+        }
+    }
+    return json;
+}
+
+Json::Value toJson(const api::chatMember& member) {
+    Json::Value json;
+    if (member.member_id_ != nullptr) {
+        if (member.member_id_->get_id() == api::messageSenderUser::ID) {
+            json["user_id"] = std::to_string(
+                static_cast<const api::messageSenderUser&>(*member.member_id_).user_id_);
+        } else if (member.member_id_->get_id() == api::messageSenderChat::ID) {
+            json["chat_id"] = std::to_string(
+                static_cast<const api::messageSenderChat&>(*member.member_id_).chat_id_);
+        }
+    }
+    json["joined_date"] = member.joined_chat_date_;
+    if (member.status_ != nullptr) {
+        switch (member.status_->get_id()) {
+            case api::chatMemberStatusCreator::ID:
+                json["status"] = "creator";
+                break;
+            case api::chatMemberStatusAdministrator::ID:
+                json["status"] = "administrator";
+                break;
+            case api::chatMemberStatusMember::ID:
+                json["status"] = "member";
+                break;
+            case api::chatMemberStatusRestricted::ID:
+                json["status"] = "restricted";
+                break;
+            case api::chatMemberStatusLeft::ID:
+                json["status"] = "left";
+                break;
+            case api::chatMemberStatusBanned::ID:
+                json["status"] = "banned";
+                break;
+            default:
+                json["status"] = "unknown";
+        }
+    }
     return json;
 }
 

@@ -719,6 +719,106 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+  /v1/resolve:
+    get:
+      tags:
+      - chats
+      summary: Резолв @username → чат/юзер (searchPublicChat)
+      parameters:
+      - name: username
+        in: query
+        required: true
+        schema:
+          type: string
+        description: С @ или без
+      responses:
+        '200':
+          description: Chat DTO (для юзера — private-чат с user_id)
+        '400': &id002
+          $ref: '#/components/responses/ValidationError'
+        '401': &id001
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/chats/{chatId}:
+    get:
+      tags:
+      - chats
+      summary: Карточка чата (getChat)
+      description: Только для чатов, известных клиенту (из списка/resolve) — иначе TELEGRAM_ERROR Chat
+        not found.
+      parameters:
+      - $ref: '#/components/parameters/chatId'
+      responses:
+        '200':
+          description: 'Chat DTO: id, title, type (private|group|supergroup|channel|secret), unread_count'
+        '401': *id001
+  /v1/users/{userId}:
+    get:
+      tags:
+      - account
+      summary: Карточка пользователя (getUser)
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: 'User DTO: id, имена, username, phone, is_contact, is_premium, status'
+        '401': *id001
+  /v1/chats/join:
+    post:
+      tags:
+      - chats
+      summary: Вступить в чат по invite-ссылке
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - invite_link
+              properties:
+                invite_link:
+                  type: string
+                  example: https://t.me/+abcdef
+      responses:
+        '200':
+          description: 'result: joined|request_sent|declined (+chat_id при joined)'
+        '400': *id002
+        '401': *id001
+  /v1/chats/{chatId}/members:
+    get:
+      tags:
+      - chats
+      summary: Участники чата (searchChatMembers)
+      description: Доступность списка — по правам Telegram (у каналов скрыт для подписчиков).
+      parameters:
+      - $ref: '#/components/parameters/chatId'
+      - name: query
+        in: query
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 50
+          maximum: 200
+      responses:
+        '200':
+          description: user_id/chat_id, status (creator|administrator|member|...), joined_date; meta.total_count
+        '401': *id001
+  /v1/contacts:
+    get:
+      tags:
+      - account
+      summary: Контакты (id)
+      responses:
+        '200':
+          description: data.user_ids (строки) + total_count; карточки — /v1/users/{id}
+        '401': *id001
 components:
   securitySchemes:
     bearerAuth:
