@@ -44,8 +44,12 @@ struct Config {
     // API-токены клиентов (Bearer). Пусто = fail-closed: все защищённые эндпоинты дадут 401.
     std::vector<std::string> bearer_tokens;
 
-    // Лимит тела аплоада (буферизованный приём в MVP). Стриминг больших файлов — hardening.
+    // Лимит тела аплоада (приём через spool-на-диск Drogon, см. max_memory_body_bytes).
     std::size_t max_upload_bytes = 64UL * 1024 * 1024;
+
+    // Порог, выше которого Drogon спулит тело запроса во временный файл (mmap) вместо RAM.
+    // Держит RSS плоским при больших аплоадах; JSON-запросы (< порога) не задевает.
+    std::size_t max_memory_body_bytes = 1UL * 1024 * 1024;
 
     // WS back-pressure: лимит неподтверждённых pong'ом байт на подписчика; 0 — выключено.
     std::uint64_t ws_max_pending_bytes = 8ULL * 1024 * 1024;
