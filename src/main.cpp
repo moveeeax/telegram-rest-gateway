@@ -61,6 +61,10 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // Глушим лог TDLib СИНХРОННО до любой активности клиента (§13), иначе стартовый поток
+    // подробных логов проскакивает в stdout.
+    tgw::bridge::RealTdTransport::configureGlobalLogging(config.tdlib_log_verbosity);
+
     // API-токены клиентов (§8.1). Пусто — предупреждаем: сервис fail-closed (все 401).
     tgw::auth::TokenStore::instance().load(config.bearer_tokens);
     if (tgw::auth::TokenStore::instance().empty()) {

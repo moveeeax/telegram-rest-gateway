@@ -40,12 +40,7 @@ api::object_ptr<api::setTdlibParameters> buildParameters(const tgw::config::Conf
 
 bool StartupBootstrapper::run(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                               const tgw::config::Config& config, AuthStateManager& auth) {
-    // Первыми вызовами глушим лог TDLib (§13): без содержимого в stdout.
-    bridge.sendOneWay(client_id,
-                      api::make_object<api::setLogVerbosityLevel>(config.tdlib_log_verbosity));
-    bridge.sendOneWay(client_id,
-                      api::make_object<api::setLogStream>(api::make_object<api::logStreamEmpty>()));
-
+    // Лог TDLib уже заглушён синхронно в main (RealTdTransport::configureGlobalLogging, §13).
     // Толкаем поток апдейтов: первый запрос инициирует updateAuthorizationState.
     bridge.sendOneWay(client_id, api::make_object<api::getOption>("version"));
 
