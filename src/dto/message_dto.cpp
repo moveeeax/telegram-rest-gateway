@@ -20,6 +20,8 @@ std::string captionText(const api::formattedText* caption) {
     return (caption != nullptr) ? caption->text_ : "";
 }
 
+}  // namespace
+
 Json::Value contentToJson(const api::MessageContent& content) {
     Json::Value json;
     json["supported"] = true;
@@ -142,6 +144,8 @@ Json::Value contentToJson(const api::MessageContent& content) {
     return json;
 }
 
+namespace {
+
 Json::Value reactionTypeToJson(const api::ReactionType& type) {
     Json::Value json;
     switch (type.get_id()) {
@@ -236,27 +240,36 @@ Json::Value toJson(const api::user& user) {
     json["is_contact"] = user.is_contact_;
     json["is_premium"] = user.is_premium_;
     if (user.status_ != nullptr) {
-        switch (user.status_->get_id()) {
-            case api::userStatusOnline::ID:
-                json["status"] = "online";
-                break;
-            case api::userStatusOffline::ID:
-                json["status"] = "offline";
-                json["was_online"] =
-                    static_cast<const api::userStatusOffline&>(*user.status_).was_online_;
-                break;
-            case api::userStatusRecently::ID:
-                json["status"] = "recently";
-                break;
-            case api::userStatusLastWeek::ID:
-                json["status"] = "last_week";
-                break;
-            case api::userStatusLastMonth::ID:
-                json["status"] = "last_month";
-                break;
-            default:
-                json["status"] = "unknown";
+        const Json::Value status = userStatusToJson(*user.status_);
+        json["status"] = status["status"];
+        if (status.isMember("was_online")) {
+            json["was_online"] = status["was_online"];
         }
+    }
+    return json;
+}
+
+Json::Value userStatusToJson(const api::UserStatus& status) {
+    Json::Value json;
+    switch (status.get_id()) {
+        case api::userStatusOnline::ID:
+            json["status"] = "online";
+            break;
+        case api::userStatusOffline::ID:
+            json["status"] = "offline";
+            json["was_online"] = static_cast<const api::userStatusOffline&>(status).was_online_;
+            break;
+        case api::userStatusRecently::ID:
+            json["status"] = "recently";
+            break;
+        case api::userStatusLastWeek::ID:
+            json["status"] = "last_week";
+            break;
+        case api::userStatusLastMonth::ID:
+            json["status"] = "last_month";
+            break;
+        default:
+            json["status"] = "unknown";
     }
     return json;
 }

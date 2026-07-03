@@ -635,16 +635,25 @@ paths:
         `Authorization: Bearer <token>` **или** `Sec-WebSocket-Protocol: bearer.<token>`.
 
 
-        При подключении сервер шлёт `{"type":"hello","session_id":"default"}`, далее фреймы:
+        При подключении сервер шлёт `{"type":"hello","session_id":"<TGW_SESSION_ID>"}`, далее фреймы:
 
-        `{"type":"update","update_type":"...","seq":N,"session_id":"default","data":{...}}`.
+        `{"type":"update","update_type":"...","seq":N,"session_id":"...","data":{...}}`.
 
 
-        Форвардятся: `updateNewMessage`, `updateMessageSendSucceeded`,
+        Форвардятся: `updateNewMessage`, `updateMessageSendSucceeded`, `updateMessageSendFailed`,
 
-        `updateMessageSendFailed`, `updateNewChat`, `updateDeleteMessages`,
+        `updateNewChat`, `updateDeleteMessages`, `updateMessageInteractionInfo` (реакции),
 
-        `updateMessageInteractionInfo` (реакции). Входящие фреймы игнорируются.
+        `updateMessageEdited`, `updateMessageContent` (правки), `updateChatReadInbox` (прочитанность),
+
+        `updateUserStatus` (онлайн/оффлайн), `updateChatAction` (typing).
+
+
+        Фильтр подписки: клиент шлёт `{"type":"subscribe","update_types":["updateNewMessage",...]}`
+
+        (пустой массив = все) — сервер отвечает `{"type":"subscribed",...}` и дальше присылает только
+
+        выбранные типы. Kafka-канал фильтров не имеет — туда идёт всё.
 
         '
       responses:

@@ -19,6 +19,9 @@ class UpdatesWs : public drogon::WebSocketController<UpdatesWs> {
     WS_PATH_LIST_BEGIN
     WS_PATH_ADD("/v1/updates");
     WS_PATH_LIST_END
+
+    // Метка аккаунта для hello-фрейма (TGW_SESSION_ID); задаётся из main до старта.
+    static void setSessionId(std::string session_id);
 };
 
 }  // namespace tgw::ws

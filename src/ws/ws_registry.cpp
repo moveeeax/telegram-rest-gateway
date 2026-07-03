@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <set>
 #include <vector>
 
 namespace tgw::ws {
@@ -37,12 +38,23 @@ void WsSubscriberRegistry::notePong(const drogon::WebSocketConnectionPtr& conn) 
     }
 }
 
+void WsSubscriberRegistry::setFilter(const drogon::WebSocketConnectionPtr& conn,
+                                     std::set<std::string> types) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& s : connections_) {
+        if (s.conn == conn) {
+            s.filter = std::move(types);
+            return;
+        }
+    }
+}
+
 void WsSubscriberRegistry::setMaxPendingBytes(std::uint64_t bytes) {
     std::lock_guard<std::mutex> lock(mutex_);
     max_pending_bytes_ = bytes;
 }
 
-void WsSubscriberRegistry::fanOut(const std::string& payload) {
+void WsSubscriberRegistry::fanOut(const std::string& update_type, const std::string& payload) {
     std::vector<drogon::WebSocketConnectionPtr> alive;
     std::vector<drogon::WebSocketConnectionPtr> slow;
     {
@@ -51,6 +63,9 @@ void WsSubscriberRegistry::fanOut(const std::string& payload) {
         for (auto& s : connections_) {
             if (!s.conn->connected()) {
                 continue;
+            }
+            if (!s.filter.empty() && s.filter.count(update_type) == 0) {
+                continue;  // подписка отфильтровала этот тип (в backlog не считаем — не шлём)
             }
             s.bytes_since_pong += payload.size();
             if (max_pending_bytes_ != 0 && s.bytes_since_pong > max_pending_bytes_) {

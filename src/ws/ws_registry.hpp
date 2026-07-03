@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -27,7 +28,9 @@ class WsSubscriberRegistry {
     void disconnect(const drogon::WebSocketConnectionPtr& conn);
     // Клиент ответил pong'ом — жив и вычитывает; сбрасываем его счётчик backlog'а.
     void notePong(const drogon::WebSocketConnectionPtr& conn);
-    void fanOut(const std::string& payload);
+    // Фильтр подписки соединения: пустой set = все типы (default).
+    void setFilter(const drogon::WebSocketConnectionPtr& conn, std::set<std::string> types);
+    void fanOut(const std::string& update_type, const std::string& payload);
     std::size_t size();
 
     // Лимит «байт с последнего pong» до отключения. 0 — back-pressure выключен.
@@ -37,6 +40,7 @@ class WsSubscriberRegistry {
     struct Subscriber {
         drogon::WebSocketConnectionPtr conn;
         std::uint64_t bytes_since_pong = 0;
+        std::set<std::string> filter;  // пусто = все типы апдейтов
     };
 
     std::mutex mutex_;
