@@ -310,6 +310,13 @@ paths:
           type: integer
           default: 20
           maximum: 100
+      - name: offset
+        in: query
+        schema:
+          type: integer
+          default: 0
+          maximum: 900
+        description: Смещение по главному списку; meta.next_offset для следующей страницы
       responses:
         '200':
           description: Чаты по порядку списка; сразу после старта возможен частичный список
@@ -373,6 +380,14 @@ paths:
       summary: Отправить текстовое сообщение
       parameters:
       - $ref: '#/components/parameters/chatId'
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+        description: 'Повтор с тем же ключом вернёт кэшированный ответ (Idempotency-Replayed: true), не
+          дублируя отправку; ключ в полёте -> 409 IDEMPOTENCY_KEY_REUSED. Кэш in-memory (не переживает
+          рестарт), LRU 1024.'
       requestBody:
         required: true
         content:
@@ -547,6 +562,12 @@ paths:
         required: true
         schema:
           type: string
+      - name: Range
+        in: header
+        required: false
+        schema:
+          type: string
+        description: bytes=a-b / bytes=-N (одиночный диапазон) -> 206 Partial Content; невалидный -> 416
       responses:
         '200':
           description: Файл докачан — стрим содержимого
@@ -570,6 +591,10 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '404':
           $ref: '#/components/responses/NotFound'
+        '206':
+          description: Partial Content (Range)
+        '416':
+          description: Range Not Satisfiable
   /v1/chats/{chatId}/messages/{messageId}/reactions:
     post:
       tags:
@@ -893,6 +918,7 @@ components:
               - SERVICE_STARTING
               - UPSTREAM_TIMEOUT
               - TELEGRAM_ERROR
+              - IDEMPOTENCY_KEY_REUSED
             message:
               type: string
             tdlib_code:

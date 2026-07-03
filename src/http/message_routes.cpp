@@ -10,11 +10,15 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <mutex>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <unordered_map>
 #include <vector>
 
 namespace api = td::td_api;
@@ -30,6 +34,111 @@ constexpr char kBearerFilter[] = "tgw::http::BearerAuthFilter";
 // formattedText из text (+опц. parse_mode "markdown"|"html"). parseTextEntities — offline-метод
 // TDLib: исполняется синхронно через ClientManager::execute, event-loop не задействован.
 // При ошибке разметки/неизвестном режиме возвращает nullptr и заполняет err.
+// Разбор "Range: bytes=a-b" (одиночный диапазон). true — диапазон валиден и заполнен.
+bool parseByteRange(const std::string& header, std::uintmax_t file_size, std::uintmax_t& offset,
+                    std::uintmax_t& length) {
+    constexpr std::string_view kPrefix = "bytes=";
+    if (header.size() <= kPrefix.size() || header.compare(0, kPrefix.size(), kPrefix) != 0 ||
+        file_size == 0) {
+        return false;
+    }
+    const std::string spec = header.substr(kPrefix.size());
+    const auto dash = spec.find('-');
+    if (dash == std::string::npos || spec.find(',') != std::string::npos) {
+        return false;  // multi-range не поддерживаем
+    }
+    const std::string from = spec.substr(0, dash);
+    const std::string to = spec.substr(dash + 1);
+    try {
+        if (from.empty()) {  // суффикс: bytes=-N (последние N байт)
+            if (to.empty()) {
+                return false;
+            }
+            const std::uintmax_t n = std::stoull(to);
+            if (n == 0) {
+                return false;
+            }
+            length = std::min<std::uintmax_t>(n, file_size);
+            offset = file_size - length;
+            return true;
+        }
+        offset = std::stoull(from);
+        if (offset >= file_size) {
+            return false;
+        }
+        const std::uintmax_t last =
+            to.empty() ? (file_size - 1) : std::min<std::uintmax_t>(std::stoull(to), file_size - 1);
+        if (last < offset) {
+            return false;
+        }
+        length = last - offset + 1;
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+// Idempotency-Key (decision C5): LRU-кэш «ключ -> завершённый ответ» для безопасных ретраев
+// отправки. Ключ занятый, но без ответа (запрос в полёте) -> 409 IDEMPOTENCY_KEY_REUSED.
+// In-memory: переживает ретраи клиента, не рестарт процесса (документировано).
+class IdempotencyCache {
+   public:
+    static IdempotencyCache& instance() {
+        static IdempotencyCache cache;
+        return cache;
+    }
+
+    // 0 = ключ свободен (занят за вами), 1 = в полёте (409), 2 = есть ответ (replay).
+    int claim(const std::string& key, int& status, std::string& body) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = entries_.find(key);
+        if (it == entries_.end()) {
+            evictIfNeeded();
+            entries_[key];  // pending
+            order_.push_back(key);
+            return 0;
+        }
+        if (!it->second.done) {
+            return 1;
+        }
+        status = it->second.status;
+        body = it->second.body;
+        return 2;
+    }
+
+    void store(const std::string& key, int status, std::string body) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = entries_.find(key);
+        if (it != entries_.end()) {
+            it->second.done = true;
+            it->second.status = status;
+            it->second.body = std::move(body);
+        }
+    }
+
+    void release(const std::string& key) {  // при ошибке валидации — освобождаем слот
+        std::lock_guard<std::mutex> lock(mutex_);
+        entries_.erase(key);
+    }
+
+   private:
+    struct Entry {
+        bool done = false;
+        int status = 0;
+        std::string body;
+    };
+    void evictIfNeeded() {
+        while (order_.size() >= kMaxEntries && !order_.empty()) {
+            entries_.erase(order_.front());
+            order_.pop_front();
+        }
+    }
+    static constexpr std::size_t kMaxEntries = 1024;
+    std::mutex mutex_;
+    std::unordered_map<std::string, Entry> entries_;
+    std::deque<std::string> order_;
+};
+
 api::object_ptr<api::formattedText> makeFormattedText(const std::string& text,
                                                       const std::string& parse_mode,
                                                       std::string& err) {
@@ -146,18 +255,23 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
         "/v1/chats",
         [&bridge, client_id](const drogon::HttpRequestPtr& req, HttpCallback&& cb) {
             const std::int32_t limit = queryInt(req, "limit", 20, 100);
-            [](tgw::bridge::TdBridge& td, std::int32_t cid, std::int32_t lim,
+            const std::int32_t offset = queryInt(req, "offset", 0, 900);
+            [](tgw::bridge::TdBridge& td, std::int32_t cid, std::int32_t lim, std::int32_t off,
                HttpCallback callback) -> drogon::AsyncTask {
-                co_await td.invoke(cid, makeLoadChats(lim));  // прогрев, результат игнорируем
-                auto chatsObj = co_await td.invoke(cid, makeGetChats(lim));
+                // Пагинация: у getChats нет offset — берём off+lim id из главного списка и
+                // отрезаем первые off (для main-list размеров это дёшево; лимит offset 900).
+                const std::int32_t want = off + lim;
+                co_await td.invoke(cid, makeLoadChats(want));  // прогрев, результат игнорируем
+                auto chatsObj = co_await td.invoke(cid, makeGetChats(want));
                 auto chats = tgw::bridge::expect<api::chats>(std::move(chatsObj));
                 if (!chats.ok()) {
                     callback(telegramError(*chats.error, drogon::k502BadGateway));
                     co_return;
                 }
                 Json::Value arr(Json::arrayValue);
-                for (const std::int64_t id : chats.value->chat_ids_) {
-                    auto chatObj = co_await td.invoke(cid, api::make_object<api::getChat>(id));
+                const auto& ids = chats.value->chat_ids_;
+                for (std::size_t i = static_cast<std::size_t>(off); i < ids.size(); ++i) {
+                    auto chatObj = co_await td.invoke(cid, api::make_object<api::getChat>(ids[i]));
                     auto chat = tgw::bridge::expect<api::chat>(std::move(chatObj));
                     if (chat.ok()) {
                         arr.append(tgw::dto::toJson(*chat.value));
@@ -166,9 +280,13 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 Json::Value body;
                 body["ok"] = true;
                 body["data"] = arr;
+                // next_offset — если список, вероятно, не исчерпан.
+                if (ids.size() == static_cast<std::size_t>(want)) {
+                    body["meta"]["next_offset"] = want;
+                }
                 callback(jsonResponse(std::move(body), drogon::k200OK));
                 co_return;
-            }(bridge, client_id, limit, std::move(cb));
+            }(bridge, client_id, limit, offset, std::move(cb));
         },
         {drogon::Get, kBearerFilter});
 
@@ -234,12 +352,39 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                                 drogon::k400BadRequest));
                 return;
             }
+            // Idempotency-Key: повтор с тем же ключом отдаёт кэшированный ответ, не дублируя
+            // отправку; ключ в полёте -> 409 IDEMPOTENCY_KEY_REUSED.
+            const std::string idem_key = req->getHeader("Idempotency-Key");
+            if (!idem_key.empty()) {
+                int cached_status = 0;
+                std::string cached_body;
+                const int state =
+                    IdempotencyCache::instance().claim(idem_key, cached_status, cached_body);
+                if (state == 1) {
+                    cb(serviceError("IDEMPOTENCY_KEY_REUSED",
+                                    "request with this Idempotency-Key is in flight",
+                                    drogon::k409Conflict));
+                    return;
+                }
+                if (state == 2) {
+                    auto resp = drogon::HttpResponse::newHttpResponse();
+                    resp->setStatusCode(static_cast<drogon::HttpStatusCode>(cached_status));
+                    resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+                    resp->addHeader("Idempotency-Replayed", "true");
+                    resp->setBody(cached_body);
+                    cb(resp);
+                    return;
+                }
+            }
             std::string parse_err;
             auto formatted = makeFormattedText(
                 (*json)["text"].asString(),
                 (*json)["parse_mode"].isString() ? (*json)["parse_mode"].asString() : "",
                 parse_err);
             if (formatted == nullptr) {
+                if (!idem_key.empty()) {
+                    IdempotencyCache::instance().release(idem_key);
+                }
                 cb(serviceError("VALIDATION_ERROR", parse_err, drogon::k400BadRequest));
                 return;
             }
@@ -259,9 +404,13 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
             fn->input_message_content_ = std::move(content);
 
             launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
-                         [](api::object_ptr<api::Object> obj) {
+                         [idem_key](api::object_ptr<api::Object> obj) {
                              auto message = tgw::bridge::expect<api::message>(std::move(obj));
                              if (!message.ok()) {
+                                 if (!idem_key.empty()) {
+                                     // Ошибку не кэшируем — даём ретраю шанс.
+                                     IdempotencyCache::instance().release(idem_key);
+                                 }
                                  return telegramError(*message.error, drogon::k502BadGateway);
                              }
                              Json::Value data;
@@ -271,7 +420,12 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                              Json::Value body;
                              body["ok"] = true;
                              body["data"] = data;
-                             return jsonResponse(std::move(body), drogon::k202Accepted);
+                             auto resp = jsonResponse(std::move(body), drogon::k202Accepted);
+                             if (!idem_key.empty()) {
+                                 IdempotencyCache::instance().store(idem_key, resp->statusCode(),
+                                                                    std::string(resp->body()));
+                             }
+                             return resp;
                          });
         },
         {drogon::Post, kBearerFilter});
@@ -333,7 +487,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
             }
             const auto fileId = static_cast<std::int32_t>(fileId64);
             [](tgw::bridge::TdBridge& td, std::int32_t cid, std::int32_t fid,
-               HttpCallback callback) -> drogon::AsyncTask {
+               drogon::HttpRequestPtr request, HttpCallback callback) -> drogon::AsyncTask {
                 auto fileObj = co_await td.invoke(cid, api::make_object<api::getFile>(fid));
                 auto file = tgw::bridge::expect<api::file>(std::move(fileObj));
                 if (!file.ok()) {
@@ -342,6 +496,26 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 }
                 const auto& local = file.value->local_;
                 if (local != nullptr && local->is_downloading_completed_ && !local->path_.empty()) {
+                    // Range/206: одиночный диапазон разбираем сами (decision C6).
+                    const std::string range = request->getHeader("Range");
+                    if (!range.empty()) {
+                        std::error_code size_ec;
+                        const std::uintmax_t fsize =
+                            std::filesystem::file_size(local->path_, size_ec);
+                        std::uintmax_t offset = 0;
+                        std::uintmax_t length = 0;
+                        if (!size_ec && parseByteRange(range, fsize, offset, length)) {
+                            auto resp = drogon::HttpResponse::newFileResponse(
+                                local->path_, static_cast<size_t>(offset),
+                                static_cast<size_t>(length), true);
+                            callback(resp);
+                            co_return;
+                        }
+                        auto resp = drogon::HttpResponse::newHttpResponse();
+                        resp->setStatusCode(drogon::k416RequestedRangeNotSatisfiable);
+                        callback(resp);
+                        co_return;
+                    }
                     callback(drogon::HttpResponse::newFileResponse(local->path_));
                     co_return;
                 }
@@ -352,7 +526,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 body["data"] = tgw::dto::toJson(*file.value);
                 callback(jsonResponse(std::move(body), drogon::k202Accepted));
                 co_return;
-            }(bridge, client_id, fileId, std::move(cb));
+            }(bridge, client_id, fileId, req, std::move(cb));
         },
         {drogon::Get, kBearerFilter});
 
