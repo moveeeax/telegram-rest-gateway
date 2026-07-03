@@ -4,8 +4,11 @@
 #include "ws/ws_registry.hpp"
 
 #include <chrono>
+#include <json/reader.h>
 #include <json/value.h>
 #include <json/writer.h>
+#include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -31,16 +34,25 @@ std::string extractBearer(const drogon::HttpRequestPtr& req) {
     return "";
 }
 
+std::string& sessionIdRef() {
+    static std::string session_id = "default";
+    return session_id;
+}
+
 std::string helloFrame() {
     Json::Value frame;
     frame["type"] = "hello";
-    frame["session_id"] = "default";
+    frame["session_id"] = sessionIdRef();
     Json::StreamWriterBuilder builder;
     builder["indentation"] = "";
     return Json::writeString(builder, frame);
 }
 
 }  // namespace
+
+void UpdatesWs::setSessionId(std::string session_id) {
+    sessionIdRef() = std::move(session_id);
+}
 
 void UpdatesWs::handleNewConnection(const drogon::HttpRequestPtr& req,
                                     const drogon::WebSocketConnectionPtr& conn) {
@@ -54,14 +66,41 @@ void UpdatesWs::handleNewConnection(const drogon::HttpRequestPtr& req,
     conn->send(helloFrame());
 }
 
-void UpdatesWs::handleNewMessage(const drogon::WebSocketConnectionPtr& conn,
-                                 std::string&& /*message*/,
+void UpdatesWs::handleNewMessage(const drogon::WebSocketConnectionPtr& conn, std::string&& message,
                                  const drogon::WebSocketMessageType& type) {
     // Pong = клиент дочитал поток до нашего пинга — снимаем его backlog-счётчик.
-    // Прочие входящие фреймы (подписки и т.п.) игнорируем, не падаем (§6.5).
     if (type == drogon::WebSocketMessageType::Pong) {
         WsSubscriberRegistry::instance().notePong(conn);
+        return;
     }
+    // Подписка с фильтром: {"type":"subscribe","update_types":["updateNewMessage",...]}.
+    // Пустой массив = все типы. Прочие/битые фреймы игнорируем, не падаем (§6.5).
+    if (type != drogon::WebSocketMessageType::Text) {
+        return;
+    }
+    Json::Value frame;
+    Json::CharReaderBuilder builder;
+    std::string errs;
+    std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+    if (!reader->parse(message.data(), message.data() + message.size(), &frame, &errs)) {
+        return;
+    }
+    if (frame["type"].asString() != "subscribe" || !frame["update_types"].isArray()) {
+        return;
+    }
+    std::set<std::string> types;
+    for (const auto& t : frame["update_types"]) {
+        if (t.isString()) {
+            types.insert(t.asString());
+        }
+    }
+    WsSubscriberRegistry::instance().setFilter(conn, types);
+    Json::Value ack;
+    ack["type"] = "subscribed";
+    ack["update_types"] = frame["update_types"];
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "";
+    conn->send(Json::writeString(w, ack));
 }
 
 void UpdatesWs::handleConnectionClosed(const drogon::WebSocketConnectionPtr& conn) {

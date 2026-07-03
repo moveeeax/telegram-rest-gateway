@@ -85,6 +85,61 @@ std::optional<ForwardableUpdate> buildForwardable(const api::Object& update) {
             data["message_ids"] = idArray(upd.message_ids_);
             return ForwardableUpdate{"updateDeleteMessages", std::move(data)};
         }
+        case api::updateMessageEdited::ID: {
+            const auto& upd = static_cast<const api::updateMessageEdited&>(update);
+            Json::Value data;
+            data["chat_id"] = std::to_string(upd.chat_id_);
+            data["message_id"] = std::to_string(upd.message_id_);
+            data["edit_date"] = upd.edit_date_;
+            return ForwardableUpdate{"updateMessageEdited", std::move(data)};
+        }
+        case api::updateMessageContent::ID: {
+            const auto& upd = static_cast<const api::updateMessageContent&>(update);
+            Json::Value data;
+            data["chat_id"] = std::to_string(upd.chat_id_);
+            data["message_id"] = std::to_string(upd.message_id_);
+            if (upd.new_content_ != nullptr) {
+                data["new_content"] = tgw::dto::contentToJson(*upd.new_content_);
+            }
+            return ForwardableUpdate{"updateMessageContent", std::move(data)};
+        }
+        case api::updateChatReadInbox::ID: {
+            const auto& upd = static_cast<const api::updateChatReadInbox&>(update);
+            Json::Value data;
+            data["chat_id"] = std::to_string(upd.chat_id_);
+            data["last_read_inbox_message_id"] = std::to_string(upd.last_read_inbox_message_id_);
+            data["unread_count"] = upd.unread_count_;
+            return ForwardableUpdate{"updateChatReadInbox", std::move(data)};
+        }
+        case api::updateUserStatus::ID: {
+            const auto& upd = static_cast<const api::updateUserStatus&>(update);
+            Json::Value data;
+            data["user_id"] = std::to_string(upd.user_id_);
+            if (upd.status_ != nullptr) {
+                const Json::Value status = tgw::dto::userStatusToJson(*upd.status_);
+                data["status"] = status["status"];
+                if (status.isMember("was_online")) {
+                    data["was_online"] = status["was_online"];
+                }
+            }
+            return ForwardableUpdate{"updateUserStatus", std::move(data)};
+        }
+        case api::updateChatAction::ID: {
+            const auto& upd = static_cast<const api::updateChatAction&>(update);
+            Json::Value data;
+            data["chat_id"] = std::to_string(upd.chat_id_);
+            if (upd.sender_id_ != nullptr &&
+                upd.sender_id_->get_id() == api::messageSenderUser::ID) {
+                data["user_id"] = std::to_string(
+                    static_cast<const api::messageSenderUser&>(*upd.sender_id_).user_id_);
+            }
+            // Детализацию действия сводим к двум состояниям: печатает / перестал.
+            data["action"] =
+                (upd.action_ != nullptr && upd.action_->get_id() == api::chatActionCancel::ID)
+                    ? "cancel"
+                    : "typing";
+            return ForwardableUpdate{"updateChatAction", std::move(data)};
+        }
         default:
             return std::nullopt;
     }
@@ -112,7 +167,7 @@ void UpdateRouter::onUpdate(api::object_ptr<api::Object> update) {
     tgw::metrics::Counters::instance().updates_forwarded_total.fetch_add(1,
                                                                          std::memory_order_relaxed);
     const std::string payload = compact(frame);
-    WsSubscriberRegistry::instance().fanOut(payload);
+    WsSubscriberRegistry::instance().fanOut(forwardable->update_type, payload);
 
     if (event_publisher_) {
         // Ключ: "<session_id>:<chat_id>" — префикс id аккаунта, порядок в рамках чата
