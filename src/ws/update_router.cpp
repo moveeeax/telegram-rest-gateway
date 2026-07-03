@@ -85,6 +85,61 @@ std::optional<ForwardableUpdate> buildForwardable(const api::Object& update) {
             data["message_ids"] = idArray(upd.message_ids_);
             return ForwardableUpdate{"updateDeleteMessages", std::move(data)};
         }
+        case api::updateMessageEdited::ID: {
+            const auto& upd = static_cast<const api::updateMessageEdited&>(update);
+            Json::Value data;
+            data["chat_id"] = std::to_string(upd.chat_id_);
+            data["message_id"] = std::to_string(upd.message_id_);
+            data["edit_date"] = upd.edit_date_;
+            return ForwardableUpdate{"updateMessageEdited", std::move(data)};
+        }
+        case api::updateMessageContent::ID: {
+            const auto& upd = static_cast<const api::updateMessageContent&>(update);
+            Json::Value data;
+            data["chat_id"] = std::to_string(upd.chat_id_);
+            data["message_id"] = std::to_string(upd.message_id_);
+            if (upd.new_content_ != nullptr) {
+                data["new_content"] = tgw::dto::contentToJson(*upd.new_content_);
+            }
+            return ForwardableUpdate{"updateMessageContent", std::move(data)};
+        }
+        case api::updateChatReadInbox::ID: {
+            const auto& upd = static_cast<const api::updateChatReadInbox&>(update);
+            Json::Value data;
+            data["chat_id"] = std::to_string(upd.chat_id_);
+            data["last_read_inbox_message_id"] = std::to_string(upd.last_read_inbox_message_id_);
+            data["unread_count"] = upd.unread_count_;
+            return ForwardableUpdate{"updateChatReadInbox", std::move(data)};
+        }
+        case api::updateUserStatus::ID: {
+            const auto& upd = static_cast<const api::updateUserStatus&>(update);
+            Json::Value data;
+            data["user_id"] = std::to_string(upd.user_id_);
+            if (upd.status_ != nullptr) {
+                const Json::Value status = tgw::dto::userStatusToJson(*upd.status_);
+                data["status"] = status["status"];
+                if (status.isMember("was_online")) {
+                    data["was_online"] = status["was_online"];
+                }
+            }
+            return ForwardableUpdate{"updateUserStatus", std::move(data)};
+        }
+        case api::updateChatAction::ID: {
+            const auto& upd = static_cast<const api::updateChatAction&>(update);
+            Json::Value data;
+            data["chat_id"] = std::to_string(upd.chat_id_);
+            if (upd.sender_id_ != nullptr &&
+                upd.sender_id_->get_id() == api::messageSenderUser::ID) {
+                data["user_id"] = std::to_string(
+                    static_cast<const api::messageSenderUser&>(*upd.sender_id_).user_id_);
+            }
+            // Детализацию действия сводим к двум состояниям: печатает / перестал.
+            data["action"] =
+                (upd.action_ != nullptr && upd.action_->get_id() == api::chatActionCancel::ID)
+                    ? "cancel"
+                    : "typing";
+            return ForwardableUpdate{"updateChatAction", std::move(data)};
+        }
         default:
             return std::nullopt;
     }
@@ -106,12 +161,28 @@ void UpdateRouter::onUpdate(api::object_ptr<api::Object> update) {
     frame["type"] = "update";
     frame["update_type"] = forwardable->update_type;
     frame["seq"] = static_cast<Json::UInt64>(seq_.fetch_add(1, std::memory_order_relaxed) + 1);
-    frame["session_id"] = "default";
+    frame["session_id"] = session_id_;
     frame["data"] = std::move(forwardable->data);
 
     tgw::metrics::Counters::instance().updates_forwarded_total.fetch_add(1,
                                                                          std::memory_order_relaxed);
-    WsSubscriberRegistry::instance().fanOut(compact(frame));
+    const std::string payload = compact(frame);
+    WsSubscriberRegistry::instance().fanOut(forwardable->update_type, payload);
+
+    if (event_publisher_) {
+        // Ключ: "<session_id>:<chat_id>" — префикс id аккаунта, порядок в рамках чата
+        // (партиционирование Kafka по ключу). Нет chat_id — только id аккаунта.
+        std::string key = session_id_;
+        const Json::Value& data = frame["data"];
+        if (data.isMember("chat_id") && data["chat_id"].isString()) {
+            key += ":" + data["chat_id"].asString();
+        } else if (data.isMember("message") && data["message"].isMember("chat_id") &&
+                   data["message"]["chat_id"].isString()) {
+            // updateMessageSendSucceeded/Failed: chat_id вложен в message
+            key += ":" + data["message"]["chat_id"].asString();
+        }
+        event_publisher_(key, payload);
+    }
 }
 
 }  // namespace tgw::ws

@@ -57,6 +57,18 @@ std::string renderMetrics(tgw::bridge::TdBridge& bridge, tgw::auth::AuthStateMan
         << "# TYPE tgw_ws_slow_disconnects_total counter\n"
         << "tgw_ws_slow_disconnects_total " << c.ws_slow_disconnects_total.load() << "\n";
 
+    out << "# HELP tgw_kafka_produced_total Events acknowledged by Kafka\n"
+        << "# TYPE tgw_kafka_produced_total counter\n"
+        << "tgw_kafka_produced_total " << c.kafka_produced_total.load() << "\n";
+
+    out << "# HELP tgw_kafka_failed_total Events failed after librdkafka retries\n"
+        << "# TYPE tgw_kafka_failed_total counter\n"
+        << "tgw_kafka_failed_total " << c.kafka_failed_total.load() << "\n";
+
+    out << "# HELP tgw_kafka_dropped_total Events dropped on full producer queue\n"
+        << "# TYPE tgw_kafka_dropped_total counter\n"
+        << "tgw_kafka_dropped_total " << c.kafka_dropped_total.load() << "\n";
+
     return out.str();
 }
 

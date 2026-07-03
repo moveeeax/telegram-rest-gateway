@@ -138,6 +138,11 @@ Config Config::load() {
         c.s3_sync_interval_seconds = static_cast<int>(std::stol(s3_interval));
     }
 
+    // Kafka-события: brokers пуст — выключено.
+    c.kafka.brokers = envOrFile("TGW_KAFKA_BROKERS");
+    c.kafka.topic = envOrFile("TGW_KAFKA_TOPIC", c.kafka.topic);
+    c.kafka.client_id = envOrFile("TGW_KAFKA_CLIENT_ID", "tgw-" + c.session_id);
+
     // Bearer-токены: по строке на токен, #-комментарии и пустые строки игнорируются.
     std::istringstream tokens(envOrFile("BEARER_TOKENS"));
     std::string line;

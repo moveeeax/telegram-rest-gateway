@@ -1,5 +1,6 @@
 #pragma once
 
+#include "events/kafka_sink.hpp"
 #include "util/s3_client.hpp"
 
 #include <cstddef>
@@ -39,7 +40,7 @@ struct Config {
     std::string listen_address = "127.0.0.1";
     std::uint16_t listen_port = 8080;
 
-    std::string application_version = "1.0.0";
+    std::string application_version = "1.1.0";
 
     // API-токены клиентов (Bearer). Пусто = fail-closed: все защищённые эндпоинты дадут 401.
     std::vector<std::string> bearer_tokens;
@@ -58,6 +59,10 @@ struct Config {
     // тянется из S3 (при отсутствии локального), периодически и на shutdown заливается обратно.
     tgw::util::S3Config s3;
     int s3_sync_interval_seconds = 300;
+
+    // Kafka-канал событий: каждый форвардящийся апдейт (allowlist WS) публикуется сообщением.
+    // brokers пуст — выключено. Ключ сообщения: "<session_id>:<chat_id>".
+    tgw::events::KafkaConfig kafka;
 
     // Загружает конфиг из окружения. Кидает std::runtime_error, если нет обязательных
     // api_id/api_hash/database_encryption_key.

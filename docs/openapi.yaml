@@ -1,123 +1,124 @@
 openapi: 3.0.3
 info:
   title: telegram-rest-gateway
-  description: |
-    Self-hosted REST/WebSocket-шлюз к пользовательскому Telegram-аккаунту (TDLib + Drogon).
-
-    **Конвенции:**
-    - Успех: `{"ok": true, "data": ..., "meta": {...}}`; ошибка: `{"ok": false, "error": {...}}`.
-    - Все 64-битные идентификаторы (`chat_id`, `message_id`, `user_id`, `file_id`) — **строки**
-      (JSON number теряет точность в JS).
-    - Аутентификация: `Authorization: Bearer <token>` на всех путях, кроме `/v1/health`,
-      `/v1/ready` и `/ui`.
-    - Отправка сообщения возвращает `202` с временным id; финальный id приходит апдейтом
-      `updateMessageSendSucceeded` по WebSocket `/v1/updates`.
-  version: 1.0.0
+  description: "Self-hosted REST/WebSocket-шлюз к пользовательскому Telegram-аккаунту (TDLib + Drogon).\n\
+    \n**Конвенции:**\n- Успех: `{\"ok\": true, \"data\": ..., \"meta\": {...}}`; ошибка: `{\"ok\": false,\
+    \ \"error\": {...}}`.\n- Все 64-битные идентификаторы (`chat_id`, `message_id`, `user_id`, `file_id`)\
+    \ — **строки**\n  (JSON number теряет точность в JS).\n- Аутентификация: `Authorization: Bearer <token>`\
+    \ на всех путях, кроме `/v1/health`,\n  `/v1/ready` и `/ui`.\n- Отправка сообщения возвращает `202`\
+    \ с временным id; финальный id приходит апдейтом\n  `updateMessageSendSucceeded` по WebSocket `/v1/updates`.\n"
+  version: 1.1.0
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
-
 servers:
-  - url: http://localhost:8080
-
+- url: http://localhost:8080
 tags:
-  - name: system
-  - name: auth
-  - name: account
-  - name: chats
-  - name: messages
-  - name: files
-  - name: reactions
-  - name: updates
-
+- name: system
+- name: auth
+- name: account
+- name: chats
+- name: messages
+- name: files
+- name: reactions
+- name: updates
 security:
-  - bearerAuth: []
-
+- bearerAuth: []
 paths:
   /v1/health:
     get:
-      tags: [system]
+      tags:
+      - system
       summary: Живость процесса
       security: []
       responses:
-        "200":
+        '200':
           description: Процесс жив
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
-                  status: { type: string, example: alive }
-
+                  ok:
+                    type: boolean
+                  status:
+                    type: string
+                    example: alive
   /v1/ready:
     get:
-      tags: [system]
+      tags:
+      - system
       summary: Готовность (авторизован в Telegram)
       security: []
       responses:
-        "200":
+        '200':
           description: Авторизован, приёмник свежий
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Ready" }
-        "503":
+              schema:
+                $ref: '#/components/schemas/Ready'
+        '503':
           description: Не готов (не авторизован / стартует)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Ready" }
-
+              schema:
+                $ref: '#/components/schemas/Ready'
   /metrics:
     get:
-      tags: [system]
+      tags:
+      - system
       summary: Prometheus-метрики
       description: Text exposition format. Без Bearer (скрейпится изнутри периметра).
       security: []
       responses:
-        "200":
+        '200':
           description: Метрики
           content:
             text/plain: {}
-
   /ui:
     get:
-      tags: [system]
+      tags:
+      - system
       summary: Веб-страница входа (QR / телефон)
       description: Самодостаточный HTML; Bearer-токен вводится в самой форме.
       security: []
       responses:
-        "200":
+        '200':
           description: HTML-страница
           content:
             text/html: {}
-
   /v1/auth/state:
     get:
-      tags: [auth]
+      tags:
+      - auth
       summary: Состояние авторизации Telegram
       responses:
-        "200":
+        '200':
           description: Текущее состояние конечного автомата
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthStateEnvelope" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-
+              schema:
+                $ref: '#/components/schemas/AuthStateEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
   /v1/auth/session:
     post:
-      tags: [auth]
+      tags:
+      - auth
       summary: Инициализация сессии (идемпотентно)
       responses:
-        "200":
+        '200':
           description: Состояние после инициализации
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthStateEnvelope" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-
+              schema:
+                $ref: '#/components/schemas/AuthStateEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
   /v1/auth/phone:
     post:
-      tags: [auth]
+      tags:
+      - auth
       summary: Отправить номер телефона
       requestBody:
         required: true
@@ -125,40 +126,54 @@ paths:
           application/json:
             schema:
               type: object
-              required: [phone_number]
+              required:
+              - phone_number
               properties:
-                phone_number: { type: string, example: "+79001234567" }
+                phone_number:
+                  type: string
+                  example: '+79001234567'
       responses:
-        "200":
+        '200':
           description: Принято; обычно переход в `wait_code`
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthStateEnvelope" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-        "409": { $ref: "#/components/responses/AuthConflict" }
-
+              schema:
+                $ref: '#/components/schemas/AuthStateEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/AuthConflict'
   /v1/auth/qr:
     post:
-      tags: [auth]
+      tags:
+      - auth
       summary: Начать QR-логин
-      description: |
-        Переводит автомат в `wait_other_device_confirmation`; ссылка `qr_link` (tg://login?...)
+      description: 'Переводит автомат в `wait_other_device_confirmation`; ссылка `qr_link` (tg://login?...)
+
         доступна в `/v1/auth/state` и ротируется TDLib (~30 с) — опрашивайте state и
+
         перерисовывайте QR. Надёжный путь: Telegram может молча не доставлять коды
+
         для кастомных api_id.
+
+        '
       responses:
-        "200":
+        '200':
           description: QR-режим активен, `qr_link` в data
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthStateEnvelope" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-        "409": { $ref: "#/components/responses/AuthConflict" }
-
+              schema:
+                $ref: '#/components/schemas/AuthStateEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/AuthConflict'
   /v1/auth/code:
     post:
-      tags: [auth]
+      tags:
+      - auth
       summary: Отправить код подтверждения
       requestBody:
         required: true
@@ -166,35 +181,45 @@ paths:
           application/json:
             schema:
               type: object
-              required: [code]
+              required:
+              - code
               properties:
-                code: { type: string, example: "12345" }
+                code:
+                  type: string
+                  example: '12345'
       responses:
-        "200":
+        '200':
           description: Принято; `ready` или `wait_password` (2FA)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthStateEnvelope" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-        "409": { $ref: "#/components/responses/AuthConflict" }
-
+              schema:
+                $ref: '#/components/schemas/AuthStateEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/AuthConflict'
   /v1/auth/code/resend:
     post:
-      tags: [auth]
+      tags:
+      - auth
       summary: Повторно запросить код
       responses:
-        "200":
+        '200':
           description: Запрошено; `code_info.next_type` подскажет канал доставки
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthStateEnvelope" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-        "409": { $ref: "#/components/responses/AuthConflict" }
-
+              schema:
+                $ref: '#/components/schemas/AuthStateEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/AuthConflict'
   /v1/auth/password:
     post:
-      tags: [auth]
+      tags:
+      - auth
       summary: Отправить облачный пароль (2FA)
       requestBody:
         required: true
@@ -202,367 +227,734 @@ paths:
           application/json:
             schema:
               type: object
-              required: [password]
+              required:
+              - password
               properties:
-                password: { type: string, format: password }
+                password:
+                  type: string
+                  format: password
       responses:
-        "200":
+        '200':
           description: Принято; при успехе `ready`
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthStateEnvelope" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-        "409": { $ref: "#/components/responses/AuthConflict" }
-
+              schema:
+                $ref: '#/components/schemas/AuthStateEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/AuthConflict'
   /v1/auth/session/export:
     get:
-      tags: [auth]
+      tags:
+      - auth
       summary: Экспорт session string
-      description: |
-        Base64 от `td.binlog` — для stateless-запуска через `TGW_SESSION`/`TGW_SESSION_FILE`.
+      description: 'Base64 от `td.binlog` — для stateless-запуска через `TGW_SESSION`/`TGW_SESSION_FILE`.
+
         **Полноценный доступ к аккаунту — хранить как секрет.**
+
+        '
       responses:
-        "200":
+        '200':
           description: Session string
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
+                  ok:
+                    type: boolean
                   data:
                     type: object
                     properties:
-                      session_b64: { type: string }
-                      note: { type: string }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-
+                      session_b64:
+                        type: string
+                      note:
+                        type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
   /v1/me:
     get:
-      tags: [account]
+      tags:
+      - account
       summary: Информация об аккаунте
       responses:
-        "200":
+        '200':
           description: Текущий пользователь
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
-                  data: { $ref: "#/components/schemas/User" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-        "409": { $ref: "#/components/responses/AuthConflict" }
-
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/AuthConflict'
   /v1/chats:
     get:
-      tags: [chats]
+      tags:
+      - chats
       summary: Список чатов (main list)
       parameters:
-        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 20
+          maximum: 100
+      - name: offset
+        in: query
+        schema:
+          type: integer
+          default: 0
+          maximum: 900
+        description: Смещение по главному списку; meta.next_offset для следующей страницы
       responses:
-        "200":
+        '200':
           description: Чаты по порядку списка; сразу после старта возможен частичный список
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
+                  ok:
+                    type: boolean
                   data:
                     type: array
-                    items: { $ref: "#/components/schemas/Chat" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-
+                    items:
+                      $ref: '#/components/schemas/Chat'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
   /v1/chats/{chatId}/messages:
     get:
-      tags: [messages]
+      tags:
+      - messages
       summary: История сообщений (курсорная пагинация)
       parameters:
-        - { $ref: "#/components/parameters/chatId" }
-        - { name: limit, in: query, schema: { type: integer, default: 30, maximum: 100 } }
-        - name: from_id
-          in: query
-          description: id сообщения-курсора; 0/пусто — от последнего
-          schema: { type: string }
+      - $ref: '#/components/parameters/chatId'
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 30
+          maximum: 100
+      - name: from_id
+        in: query
+        description: id сообщения-курсора; 0/пусто — от последнего
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: Сообщения от новых к старым; `meta.next_cursor` — id самого старого
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
+                  ok:
+                    type: boolean
                   data:
                     type: array
-                    items: { $ref: "#/components/schemas/Message" }
+                    items:
+                      $ref: '#/components/schemas/Message'
                   meta:
                     type: object
                     properties:
-                      next_cursor: { type: string }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-        "404": { $ref: "#/components/responses/NotFound" }
+                      next_cursor:
+                        type: string
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
     post:
-      tags: [messages]
+      tags:
+      - messages
       summary: Отправить текстовое сообщение
       parameters:
-        - { $ref: "#/components/parameters/chatId" }
+      - $ref: '#/components/parameters/chatId'
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          type: string
+        description: 'Повтор с тем же ключом вернёт кэшированный ответ (Idempotency-Replayed: true), не
+          дублируя отправку; ключ в полёте -> 409 IDEMPOTENCY_KEY_REUSED. Кэш in-memory (не переживает
+          рестарт), LRU 1024.'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [text]
+              required:
+              - text
               properties:
-                text: { type: string }
+                text:
+                  type: string
+                parse_mode:
+                  type: string
+                  enum:
+                  - markdown
+                  - html
+                  description: Разметка текста (entities через parseTextEntities)
+                reply_to_message_id:
+                  type: string
+                  description: Ответ на сообщение
       responses:
-        "202":
+        '202':
           description: Принято; финальный id придёт по WS (`updateMessageSendSucceeded`)
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
+                  ok:
+                    type: boolean
                   data:
                     type: object
                     properties:
-                      chat_id: { type: string }
-                      temporary_message_id: { type: string }
-                      sending_state: { type: string, example: pending }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-
-  /v1/chats/{chatId}/messages/read:
-    post:
-      tags: [messages]
-      summary: Отметить сообщения прочитанными
+                      chat_id:
+                        type: string
+                      temporary_message_id:
+                        type: string
+                      sending_state:
+                        type: string
+                        example: pending
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    delete:
+      tags:
+      - messages
+      summary: Удалить сообщения
       parameters:
-        - { $ref: "#/components/parameters/chatId" }
+      - $ref: '#/components/parameters/chatId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [message_ids]
+              required:
+              - message_ids
               properties:
                 message_ids:
                   type: array
-                  items: { type: string }
+                  items:
+                    type: string
+                revoke:
+                  type: boolean
+                  default: true
+                  description: true — удалить у всех
       responses:
-        "200":
+        '200':
+          description: Удалено
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/chats/{chatId}/messages/read:
+    post:
+      tags:
+      - messages
+      summary: Отметить сообщения прочитанными
+      parameters:
+      - $ref: '#/components/parameters/chatId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - message_ids
+              properties:
+                message_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
           description: Отмечено
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-
+                  ok:
+                    type: boolean
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
   /v1/chats/{chatId}/files:
     post:
-      tags: [files]
+      tags:
+      - files
       summary: Загрузить файл в чат (документом)
       parameters:
-        - { $ref: "#/components/parameters/chatId" }
-        - { name: file_name, in: query, schema: { type: string } }
-        - { name: caption, in: query, schema: { type: string } }
+      - $ref: '#/components/parameters/chatId'
+      - name: file_name
+        in: query
+        schema:
+          type: string
+      - name: caption
+        in: query
+        schema:
+          type: string
+      - name: type
+        in: query
+        schema:
+          type: string
+          enum:
+          - document
+          - photo
+          - video
+          - voice
+          - audio
+          default: document
+        description: Как отправить файл
       requestBody:
         required: true
         content:
           application/octet-stream:
-            schema: { type: string, format: binary }
+            schema:
+              type: string
+              format: binary
       responses:
-        "202":
+        '202':
           description: Отправка запущена; финал по WS
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
+                  ok:
+                    type: boolean
                   data:
                     type: object
                     properties:
-                      chat_id: { type: string }
-                      temporary_message_id: { type: string }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-        "413": { description: Тело больше TGW_MAX_UPLOAD_BYTES }
-
+                      chat_id:
+                        type: string
+                      temporary_message_id:
+                        type: string
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '413':
+          description: Тело больше TGW_MAX_UPLOAD_BYTES
   /v1/files/{fileId}:
     get:
-      tags: [files]
+      tags:
+      - files
       summary: Скачать файл / статус загрузки
       parameters:
-        - name: fileId
-          in: path
-          required: true
-          schema: { type: string }
+      - name: fileId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: Range
+        in: header
+        required: false
+        schema:
+          type: string
+        description: bytes=a-b / bytes=-N (одиночный диапазон) -> 206 Partial Content; невалидный -> 416
       responses:
-        "200":
+        '200':
           description: Файл докачан — стрим содержимого
           content:
             application/octet-stream:
-              schema: { type: string, format: binary }
-        "202":
+              schema:
+                type: string
+                format: binary
+        '202':
           description: Докачка запущена; прогресс в data, готовность — апдейтом `updateFile` по WS
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
-                  data: { $ref: "#/components/schemas/FileStatus" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-        "404": { $ref: "#/components/responses/NotFound" }
-
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/FileStatus'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '206':
+          description: Partial Content (Range)
+        '416':
+          description: Range Not Satisfiable
   /v1/chats/{chatId}/messages/{messageId}/reactions:
     post:
-      tags: [reactions]
+      tags:
+      - reactions
       summary: Поставить emoji-реакцию
       parameters:
-        - { $ref: "#/components/parameters/chatId" }
-        - { $ref: "#/components/parameters/messageId" }
+      - $ref: '#/components/parameters/chatId'
+      - $ref: '#/components/parameters/messageId'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ReactionBody" }
+            schema:
+              $ref: '#/components/schemas/ReactionBody'
       responses:
-        "200":
+        '200':
           description: Реакция поставлена; live-изменения — `updateMessageInteractionInfo` по WS
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
+                  ok:
+                    type: boolean
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
     delete:
-      tags: [reactions]
+      tags:
+      - reactions
       summary: Снять emoji-реакцию
       parameters:
-        - { $ref: "#/components/parameters/chatId" }
-        - { $ref: "#/components/parameters/messageId" }
+      - $ref: '#/components/parameters/chatId'
+      - $ref: '#/components/parameters/messageId'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ReactionBody" }
+            schema:
+              $ref: '#/components/schemas/ReactionBody'
       responses:
-        "200":
+        '200':
           description: Реакция снята
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  ok: { type: boolean }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-
+                  ok:
+                    type: boolean
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
   /v1/updates:
     get:
-      tags: [updates]
-      summary: "WebSocket: поток апдейтов"
-      description: |
-        Upgrade до WebSocket. Аутентификация при рукопожатии: заголовок
+      tags:
+      - updates
+      summary: 'WebSocket: поток апдейтов'
+      description: 'Upgrade до WebSocket. Аутентификация при рукопожатии: заголовок
+
         `Authorization: Bearer <token>` **или** `Sec-WebSocket-Protocol: bearer.<token>`.
 
-        При подключении сервер шлёт `{"type":"hello","session_id":"default"}`, далее фреймы:
-        `{"type":"update","update_type":"...","seq":N,"session_id":"default","data":{...}}`.
 
-        Форвардятся: `updateNewMessage`, `updateMessageSendSucceeded`,
-        `updateMessageSendFailed`, `updateNewChat`, `updateDeleteMessages`,
-        `updateMessageInteractionInfo` (реакции). Входящие фреймы игнорируются.
+        При подключении сервер шлёт `{"type":"hello","session_id":"<TGW_SESSION_ID>"}`, далее фреймы:
+
+        `{"type":"update","update_type":"...","seq":N,"session_id":"...","data":{...}}`.
+
+
+        Форвардятся: `updateNewMessage`, `updateMessageSendSucceeded`, `updateMessageSendFailed`,
+
+        `updateNewChat`, `updateDeleteMessages`, `updateMessageInteractionInfo` (реакции),
+
+        `updateMessageEdited`, `updateMessageContent` (правки), `updateChatReadInbox` (прочитанность),
+
+        `updateUserStatus` (онлайн/оффлайн), `updateChatAction` (typing).
+
+
+        Фильтр подписки: клиент шлёт `{"type":"subscribe","update_types":["updateNewMessage",...]}`
+
+        (пустой массив = все) — сервер отвечает `{"type":"subscribed",...}` и дальше присылает только
+
+        выбранные типы. Kafka-канал фильтров не имеет — туда идёт всё.
+
+        '
       responses:
-        "101": { description: Switching Protocols }
-        "401": { $ref: "#/components/responses/Unauthenticated" }
-
+        '101':
+          description: Switching Protocols
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/chats/{chatId}/messages/{messageId}:
+    patch:
+      tags:
+      - messages
+      summary: Отредактировать текст сообщения
+      parameters:
+      - $ref: '#/components/parameters/chatId'
+      - $ref: '#/components/parameters/messageId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - text
+              properties:
+                text:
+                  type: string
+                parse_mode:
+                  type: string
+                  enum:
+                  - markdown
+                  - html
+      responses:
+        '200':
+          description: Отредактированное сообщение (DTO)
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/chats/{chatId}/messages/forward:
+    post:
+      tags:
+      - messages
+      summary: Переслать сообщения
+      parameters:
+      - $ref: '#/components/parameters/chatId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - from_chat_id
+              - message_ids
+              properties:
+                from_chat_id:
+                  type: string
+                message_ids:
+                  type: array
+                  items:
+                    type: string
+                send_copy:
+                  type: boolean
+                  default: false
+                remove_caption:
+                  type: boolean
+                  default: false
+      responses:
+        '202':
+          description: Принято; временные id в data.temporary_message_ids
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/resolve:
+    get:
+      tags:
+      - chats
+      summary: Резолв @username → чат/юзер (searchPublicChat)
+      parameters:
+      - name: username
+        in: query
+        required: true
+        schema:
+          type: string
+        description: С @ или без
+      responses:
+        '200':
+          description: Chat DTO (для юзера — private-чат с user_id)
+        '400': &id002
+          $ref: '#/components/responses/ValidationError'
+        '401': &id001
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/chats/{chatId}:
+    get:
+      tags:
+      - chats
+      summary: Карточка чата (getChat)
+      description: Только для чатов, известных клиенту (из списка/resolve) — иначе TELEGRAM_ERROR Chat
+        not found.
+      parameters:
+      - $ref: '#/components/parameters/chatId'
+      responses:
+        '200':
+          description: 'Chat DTO: id, title, type (private|group|supergroup|channel|secret), unread_count'
+        '401': *id001
+  /v1/users/{userId}:
+    get:
+      tags:
+      - account
+      summary: Карточка пользователя (getUser)
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: 'User DTO: id, имена, username, phone, is_contact, is_premium, status'
+        '401': *id001
+  /v1/chats/join:
+    post:
+      tags:
+      - chats
+      summary: Вступить в чат по invite-ссылке
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - invite_link
+              properties:
+                invite_link:
+                  type: string
+                  example: https://t.me/+abcdef
+      responses:
+        '200':
+          description: 'result: joined|request_sent|declined (+chat_id при joined)'
+        '400': *id002
+        '401': *id001
+  /v1/chats/{chatId}/members:
+    get:
+      tags:
+      - chats
+      summary: Участники чата (searchChatMembers)
+      description: Доступность списка — по правам Telegram (у каналов скрыт для подписчиков).
+      parameters:
+      - $ref: '#/components/parameters/chatId'
+      - name: query
+        in: query
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 50
+          maximum: 200
+      responses:
+        '200':
+          description: user_id/chat_id, status (creator|administrator|member|...), joined_date; meta.total_count
+        '401': *id001
+  /v1/contacts:
+    get:
+      tags:
+      - account
+      summary: Контакты (id)
+      responses:
+        '200':
+          description: data.user_ids (строки) + total_count; карточки — /v1/users/{id}
+        '401': *id001
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-
   parameters:
     chatId:
       name: chatId
       in: path
       required: true
-      schema: { type: string }
+      schema:
+        type: string
       description: 64-битный id чата строкой
     messageId:
       name: messageId
       in: path
       required: true
-      schema: { type: string }
-
+      schema:
+        type: string
   responses:
     Unauthenticated:
       description: Нет/неверный Bearer-токен
       content:
         application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+          schema:
+            $ref: '#/components/schemas/Error'
     ValidationError:
       description: Невалидное тело/параметры
       content:
         application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+          schema:
+            $ref: '#/components/schemas/Error'
     NotFound:
       description: Объект не найден
       content:
         application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+          schema:
+            $ref: '#/components/schemas/Error'
     AuthConflict:
       description: Операция неприменима в текущем auth-состоянии (409 AUTH_REQUIRED)
       content:
         application/json:
-          schema: { $ref: "#/components/schemas/Error" }
-
+          schema:
+            $ref: '#/components/schemas/Error'
   schemas:
     Error:
       type: object
       properties:
-        ok: { type: boolean, example: false }
+        ok:
+          type: boolean
+          example: false
         error:
           type: object
           properties:
             code:
               type: string
-              enum: [VALIDATION_ERROR, UNAUTHENTICATED, AUTH_REQUIRED, NOT_FOUND,
-                     FLOOD_WAIT, SERVICE_STARTING, UPSTREAM_TIMEOUT, TELEGRAM_ERROR]
-            message: { type: string }
-            tdlib_code: { type: integer }
-            tdlib_message: { type: string }
-
+              enum:
+              - VALIDATION_ERROR
+              - UNAUTHENTICATED
+              - AUTH_REQUIRED
+              - NOT_FOUND
+              - FLOOD_WAIT
+              - SERVICE_STARTING
+              - UPSTREAM_TIMEOUT
+              - TELEGRAM_ERROR
+              - IDEMPOTENCY_KEY_REUSED
+            message:
+              type: string
+            tdlib_code:
+              type: integer
+            tdlib_message:
+              type: string
     Ready:
       type: object
       properties:
-        ready: { type: boolean }
-        state: { type: string, example: ready }
-
+        ready:
+          type: boolean
+        state:
+          type: string
+          example: ready
     AuthStateEnvelope:
       type: object
       properties:
-        ok: { type: boolean }
+        ok:
+          type: boolean
         data:
           type: object
           properties:
             authorization_state:
               type: string
-              enum: [wait_tdlib_parameters, wait_phone_number, wait_code,
-                     wait_other_device_confirmation, wait_password, ready,
-                     logging_out, closing, closed]
-            ready: { type: boolean }
+              enum:
+              - wait_tdlib_parameters
+              - wait_phone_number
+              - wait_code
+              - wait_other_device_confirmation
+              - wait_password
+              - ready
+              - logging_out
+              - closing
+              - closed
+            ready:
+              type: boolean
             qr_link:
               type: string
               description: Только в wait_other_device_confirmation; ротируется ~30 с
@@ -570,59 +962,103 @@ components:
               type: object
               description: Только в wait_code
               properties:
-                type: { type: string, example: telegram_message }
-                next_type: { type: string }
-                length: { type: integer }
-                timeout: { type: integer }
-
+                type:
+                  type: string
+                  example: telegram_message
+                next_type:
+                  type: string
+                length:
+                  type: integer
+                timeout:
+                  type: integer
     User:
       type: object
       properties:
-        id: { type: string }
-        first_name: { type: string }
-        last_name: { type: string }
-
+        id:
+          type: string
+        first_name:
+          type: string
+        last_name:
+          type: string
     Chat:
       type: object
       properties:
-        id: { type: string }
-        title: { type: string }
-        unread_count: { type: integer }
-
+        id:
+          type: string
+        title:
+          type: string
+        unread_count:
+          type: integer
     Message:
       type: object
       properties:
-        id: { type: string }
-        chat_id: { type: string }
-        date: { type: integer, description: unixtime }
-        is_outgoing: { type: boolean }
+        id:
+          type: string
+        chat_id:
+          type: string
+        date:
+          type: integer
+          description: unixtime
+        is_outgoing:
+          type: boolean
         content:
           type: object
+          description: 'Дискриминатор type: text|photo|video|voice|audio|document|sticker|animation|video_note|unsupported.
+            Медиа несут file_id (для GET /v1/files/{id}), caption, mime_type, размеры/длительность.'
           properties:
-            type: { type: string, example: text }
-            supported: { type: boolean }
-            text: { type: string }
+            type:
+              type: string
+            supported:
+              type: boolean
+            text:
+              type: string
+            caption:
+              type: string
+            file_id:
+              type: string
+            size:
+              type: integer
+            mime_type:
+              type: string
+            file_name:
+              type: string
+            width:
+              type: integer
+            height:
+              type: integer
+            duration:
+              type: integer
         reactions:
           type: array
           items:
             type: object
             properties:
-              emoji: { type: string }
-              count: { type: integer }
-              is_chosen: { type: boolean }
-
+              emoji:
+                type: string
+              count:
+                type: integer
+              is_chosen:
+                type: boolean
     FileStatus:
       type: object
       properties:
-        file_id: { type: string }
-        size: { type: integer }
-        downloaded_size: { type: integer }
-        progress: { type: number }
-        local_available: { type: boolean }
-        remote_unique_id: { type: string }
-
+        file_id:
+          type: string
+        size:
+          type: integer
+        downloaded_size:
+          type: integer
+        progress:
+          type: number
+        local_available:
+          type: boolean
+        remote_unique_id:
+          type: string
     ReactionBody:
       type: object
-      required: [emoji]
+      required:
+      - emoji
       properties:
-        emoji: { type: string, example: "👍" }
+        emoji:
+          type: string
+          example: 👍
