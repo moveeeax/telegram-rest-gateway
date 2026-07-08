@@ -111,6 +111,22 @@ volume. Включается только при заполненных `bucket`
 `(session_id, seq)`; дыра в `seq` = потеря (см. `tgw_kafka_dropped_total`). Продюсер никогда
 не блокирует приём апдейтов Telegram: при переполнении очереди события дропаются с метрикой.
 
+## Деплой в Kubernetes (Helm)
+
+Чарт: [`deploy/helm/telegram-rest-gateway`](deploy/helm/telegram-rest-gateway). Особенности:
+одна сессия = один под (**strategy Recreate, реплики не масштабировать** — иначе
+`AUTH_KEY_DUPLICATED`), без PVC (сессии в S3), readiness на `/v1/health` (неавторизованный под
+должен принимать трафик для логина через `/ui`). Секреты — через `existingSecret`.
+
+```bash
+kubectl create secret generic telegram-rest-gateway \
+  --from-literal=API_ID=... --from-literal=API_HASH=... \
+  --from-literal=DATABASE_ENCRYPTION_KEY=... --from-literal=BEARER_TOKENS=... \
+  --from-literal=TGW_S3_ACCESS_KEY_ID=... --from-literal=TGW_S3_SECRET_ACCESS_KEY=...
+helm install tgw deploy/helm/telegram-rest-gateway \
+  --set 'accounts[0].sessionId=<account_id>'
+```
+
 ## Метрики
 
 `GET /metrics` — Prometheus text format (без Bearer): auth-состояние, WS-подписчики,

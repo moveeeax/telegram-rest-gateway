@@ -1,0 +1,22 @@
+telegram-rest-gateway развёрнут.
+
+Аккаунты (под на каждый; одна сессия = один под, strategy Recreate):
+{{- range .Values.accounts }}
+  - session_id={{ .sessionId }}  → Service {{ $.Release.Name }}-{{ .sessionId }}:{{ $.Values.service.port }}
+{{- end }}
+
+1) Секреты берутся из Secret "{{ .Values.existingSecret }}" (namespace {{ .Release.Namespace }}).
+   Ключи: API_ID, API_HASH, DATABASE_ENCRYPTION_KEY, BEARER_TOKENS,
+          TGW_S3_ACCESS_KEY_ID, TGW_S3_SECRET_ACCESS_KEY.
+
+2) Первый логин аккаунта (если сессии нет в S3):
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-<sessionId> 8080:{{ .Values.service.port }}
+   → открой http://localhost:8080/ui (QR или телефон). После логина сессия уедет в S3
+   при периодическом бэкапе/остановке пода — дальше поды полностью эфемерны.
+
+3) Мониторинг: GET /metrics (Prometheus text). Алертить стоит на:
+   tgw_ready == 0 (слетела авторизация), рост tgw_kafka_failed_total/dropped_total,
+   tgw_http_responses_5xx_total. ServiceMonitor: serviceMonitor.enabled=true.
+
+ВАЖНО: не масштабируй Deployment'ы (>1 реплики с одним session_id ⇒ Telegram
+отзовёт сессию, AUTH_KEY_DUPLICATED).

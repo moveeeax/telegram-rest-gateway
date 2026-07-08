@@ -1,0 +1,84 @@
+# telegram-rest-gateway — Helm values.
+#
+# КЛЮЧЕВОЕ ОГРАНИЧЕНИЕ TELEGRAM: одна сессия = ровно один работающий процесс.
+# Два пода с одним session_id => Telegram отзывает сессию (AUTH_KEY_DUPLICATED).
+# Поэтому: replicas всегда 1 на аккаунт, strategy Recreate, никакого HPA.
+
+image:
+  repository: docker.io/resert/telegram-rest-gateway
+  # По умолчанию — тег из Chart.appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Аккаунты: на каждый рендерится свой Deployment + Service (имя <release>-<sessionId>).
+# sessionId — операторская метка (у нас = Telegram account id): путь сессии в S3
+# telegram-sessions/<sessionId>/td.binlog и ключи Kafka-событий.
+accounts:
+  - sessionId: "default"
+    # Переопределения env на конкретный аккаунт (список name/value как в PodSpec).
+    extraEnv: []
+
+# Secret с секретами гейтвея. Чарт НЕ создаёт секретов из values по умолчанию —
+# заведи Secret заранее (kubectl create secret / sealed-secrets / external-secrets):
+#   API_ID, API_HASH, DATABASE_ENCRYPTION_KEY, BEARER_TOKENS,
+#   TGW_S3_ACCESS_KEY_ID, TGW_S3_SECRET_ACCESS_KEY
+existingSecret: "telegram-rest-gateway"
+
+# Общая (несекретная) конфигурация — идёт в ConfigMap, envFrom.
+config:
+  TGW_LISTEN_ADDRESS: "0.0.0.0"
+  TGW_LISTEN_PORT: "8080"
+  # S3-хранилище сессий (обязательно для stateless-подов: PVC у чарта нет).
+  TGW_S3_ENDPOINT: "https://s3.tarassov.me"
+  TGW_S3_REGION: "us-east-1"
+  TGW_S3_BUCKET: "tgw-s3-bucket"
+  TGW_S3_PATH_STYLE: "true"
+  # Kafka-события: пусто = выключено. Например redpanda.redpanda.svc:9093
+  TGW_KAFKA_BROKERS: ""
+  TGW_KAFKA_TOPIC: "tgw.updates"
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Ingress: включи и задай host-шаблон; {sessionId} подставляется на аккаунт.
+# Пример: hostTemplate: "tg-{sessionId}.tarassov.me"
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hostTemplate: "tg-{sessionId}.example.com"
+  tls:
+    enabled: false
+    secretNameTemplate: "tg-{sessionId}-tls"
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+# ServiceMonitor для Prometheus Operator (скрейпит /metrics без auth).
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Graceful shutdown: под должен успеть закрыть TDLib и запушить сессию в S3.
+terminationGracePeriodSeconds: 30
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  readOnlyRootFilesystem: false  # /data/session и /data/files пишутся (emptyDir)
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
