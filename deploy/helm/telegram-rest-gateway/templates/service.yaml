@@ -1,0 +1,19 @@
+{{- range $account := .Values.accounts }}
+{{- $ctx := dict "root" $ "account" $account }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tgw.accountName" $ctx }}
+  labels:
+    {{- include "tgw.labels" $ | nindent 4 }}
+    tgw.tarassov.me/session-id: {{ $account.sessionId | quote }}
+spec:
+  type: {{ $.Values.service.type }}
+  ports:
+    - name: http
+      port: {{ $.Values.service.port }}
+      targetPort: http
+  selector:
+    {{- include "tgw.accountSelector" $ctx | nindent 4 }}
+{{- end }}
