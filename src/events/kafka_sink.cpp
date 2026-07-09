@@ -75,9 +75,11 @@ void KafkaSink::produce(const std::string& key, const std::string& payload) {
                       << "): " << RdKafka::err2str(err);
         }
     }
-    producer_->poll(0);  // заодно обслуживаем delivery-report'ы
+    producer_->poll(0);  // обслуживаем delivery-report'ы ЗДЕСЬ ЖЕ (на потоке-приёмнике)
 }
 
+// Оставлен для совместимости, но НЕ должен вызываться с другого потока, чем produce():
+// конкурентный poll() с двух потоков портит кучу (см. main — отдельного поллера больше нет).
 void KafkaSink::poll() {
     producer_->poll(0);
 }
