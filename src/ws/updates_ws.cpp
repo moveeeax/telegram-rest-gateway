@@ -56,7 +56,8 @@ void UpdatesWs::setSessionId(std::string session_id) {
 
 void UpdatesWs::handleNewConnection(const drogon::HttpRequestPtr& req,
                                     const drogon::WebSocketConnectionPtr& conn) {
-    if (!tgw::auth::TokenStore::instance().verify(extractBearer(req))) {
+    const auto scopes = tgw::auth::TokenStore::instance().verify(extractBearer(req));
+    if (!scopes.has_value() || !tgw::auth::scopeAllows(*scopes, tgw::auth::Scope::Read)) {
         conn->forceClose();
         return;
     }
