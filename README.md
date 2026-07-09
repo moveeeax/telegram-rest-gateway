@@ -69,6 +69,7 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 | `TGW_LISTEN_ADDRESS` | `127.0.0.1` | Адрес прослушивания (в Docker — `0.0.0.0`) |
 | `TGW_LISTEN_PORT` | `8080` | Порт HTTP |
 | `TGW_SESSION` / `TGW_SESSION_FILE` | — | Session string (base64 от `td.binlog`) для stateless-запуска |
+| `BEARER_TOKENS` | — | По строке на токен: `<token>[ <scopes>]`; scopes: `read`,`write`,`admin` (без scopes = все) |
 | `TGW_WS_MAX_PENDING_BYTES` | `8388608` | WS back-pressure: лимит байт с последнего pong; 0 — выкл |
 | `TGW_MAX_MEMORY_BODY_BYTES` | `1048576` | Порог spool-на-диск для тел запросов (RSS при аплоадах) |
 | `TGW_KAFKA_BROKERS` | — | Kafka/Redpanda bootstrap; пусто — события в Kafka выключены |
@@ -99,6 +100,11 @@ volume. Включается только при заполненных `bucket`
 (Telegram account_id недоступен до логина, поэтому метку назначает оператор). Один и тот же
 `session_id` нельзя гонять в двух инстансах одновременно — Telegram убьёт сессию (`AUTH_KEY_DUPLICATED`).
 
+**Scoped-токены.** Строка `BEARER_TOKENS` вида `tgw_xxx read` выдаёт токен только на чтение
+(GET + WS), `read,write` — плюс мутации, но без `/v1/auth/*` (логин и session export — только
+`admin`/полный токен). Недостаточный скоуп → `403 INSUFFICIENT_SCOPE`. Агентам (MCP) выдавайте
+минимально необходимый скоуп.
+
 Секреты (`api_id`, `api_hash`, `database_encryption_key`, Bearer-токены, S3 credentials) — только
 через `*_FILE` / secret manager, никогда в образ/env напрямую.
 
@@ -110,6 +116,34 @@ volume. Включается только при заполненных `bucket`
 гарантирован партиционированием). Доставка at-least-once: дедупликация у консьюмера по
 `(session_id, seq)`; дыра в `seq` = потеря (см. `tgw_kafka_dropped_total`). Продюсер никогда
 не блокирует приём апдейтов Telegram: при переполнении очереди события дропаются с метрикой.
+
+## Архиватор: поиск по переписке
+
+[`archiver/`](archiver/README.md) — консьюмер Kafka-событий → SQLite+FTS5: полнотекстовый
+поиск по всей сохранённой истории (`GET :8090/search?q=`), включая правки и удалённые.
+Агенту доступен как MCP-tool `telegram_search_history`.
+
+## MCP: агентский коннектор
+
+[`mcp/`](mcp/README.md) — MCP-сервер (TypeScript, stdio): Claude Code/Desktop и любой
+MCP-клиент получают 14 инструментов аккаунта (сообщения, реакции, resolve, медиа).
+Один сервер = один аккаунт; токен = полный доступ, храни как секрет.
+
+## Деплой в Kubernetes (Helm)
+
+Чарт: [`deploy/helm/telegram-rest-gateway`](deploy/helm/telegram-rest-gateway). Особенности:
+одна сессия = один под (**strategy Recreate, реплики не масштабировать** — иначе
+`AUTH_KEY_DUPLICATED`), без PVC (сессии в S3), readiness на `/v1/health` (неавторизованный под
+должен принимать трафик для логина через `/ui`). Секреты — через `existingSecret`.
+
+```bash
+kubectl create secret generic telegram-rest-gateway \
+  --from-literal=API_ID=... --from-literal=API_HASH=... \
+  --from-literal=DATABASE_ENCRYPTION_KEY=... --from-literal=BEARER_TOKENS=... \
+  --from-literal=TGW_S3_ACCESS_KEY_ID=... --from-literal=TGW_S3_SECRET_ACCESS_KEY=...
+helm install tgw deploy/helm/telegram-rest-gateway \
+  --set 'accounts[0].sessionId=<account_id>'
+```
 
 ## Метрики
 

@@ -7,7 +7,7 @@ info:
     \ — **строки**\n  (JSON number теряет точность в JS).\n- Аутентификация: `Authorization: Bearer <token>`\
     \ на всех путях, кроме `/v1/health`,\n  `/v1/ready` и `/ui`.\n- Отправка сообщения возвращает `202`\
     \ с временным id; финальный id приходит апдейтом\n  `updateMessageSendSucceeded` по WebSocket `/v1/updates`.\n"
-  version: 1.1.0
+  version: 1.2.0
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
@@ -858,6 +858,8 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+      description: 'Токены со скоупами: read (GET + WS), write (мутации), admin (/v1/auth/*). Формат BEARER_TOKENS:
+        "<token>[ <scope,scope>]"; без скоупов = полный. Недостаточный скоуп -> 403 INSUFFICIENT_SCOPE.'
   parameters:
     chatId:
       name: chatId
@@ -919,6 +921,7 @@ components:
               - UPSTREAM_TIMEOUT
               - TELEGRAM_ERROR
               - IDEMPOTENCY_KEY_REUSED
+              - INSUFFICIENT_SCOPE
             message:
               type: string
             tdlib_code:

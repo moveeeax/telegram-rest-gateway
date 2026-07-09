@@ -1,0 +1,82 @@
+{{- range $account := .Values.accounts }}
+{{- $ctx := dict "root" $ "account" $account }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tgw.accountName" $ctx }}
+  labels:
+    {{- include "tgw.labels" $ | nindent 4 }}
+    tgw.tarassov.me/session-id: {{ $account.sessionId | quote }}
+spec:
+  # ОДНА сессия Telegram = ОДИН под. Recreate (не RollingUpdate!): при обновлении сначала
+  # гасится старый под (graceful push сессии в S3), потом стартует новый (restore из S3).
+  # Параллельные поды с одним session_id => Telegram отзовёт сессию (AUTH_KEY_DUPLICATED).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "tgw.accountSelector" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tgw.accountSelector" $ctx | nindent 8 }}
+        {{- with $.Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with $.Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      terminationGracePeriodSeconds: {{ $.Values.terminationGracePeriodSeconds }}
+      securityContext:
+        fsGroup: 65532
+      containers:
+        - name: gateway
+          image: "{{ $.Values.image.repository }}:{{ include "tgw.imageTag" $ }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: {{ include "tgw.fullname" $ }}-config
+            - secretRef:
+                name: {{ $.Values.existingSecret }}
+          env:
+            - name: TGW_SESSION_ID
+              value: {{ $account.sessionId | quote }}
+            {{- with $account.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # Readiness НАМЕРЕННО на /health, а не /ready: неавторизованный инстанс обязан
+          # получать трафик, иначе не добраться до /ui и /v1/auth/* для логина.
+          # Авторизованность мониторится метрикой tgw_ready (алерт), не readiness'ом.
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        # Эфемерно by design: сессия восстанавливается из S3 на старте,
+        # пушится в S3 периодически и на graceful shutdown.
+        - name: data
+          emptyDir: {}
+{{- end }}
