@@ -195,10 +195,10 @@ int main(int argc, char** argv) {
     tgw::http::registerMetricsRoutes(bridge, auth);  // GET /metrics (Prometheus)
     tgw::http::startUploadCleanup(upload_dir, std::chrono::hours(1));
 
-    // Периодический сервис Kafka-продюсера (delivery-report'ы при простое трафика).
-    if (kafka) {
-        drogon::app().getLoop()->runEvery(1.0, [sink = kafka.get()] { sink->poll(); });
-    }
+    // ВАЖНО: НЕ поллим продюсер с главного loop. produce()+poll(0) уже идут на потоке-приёмнике
+    // TDLib (единственный, кто трогает продюсер); отдельный runEvery-поллер на loop-потоке давал
+    // конкурентный доступ к RdKafka::Producer -> heap corruption на amd64 (arm64 терпел). Продюсер
+    // теперь single-owner: приёмник во время работы, shutdown-flush уже ПОСЛЕ join приёмника.
 
     // Периодический бэкап сессии в S3 (no-op если S3 не сконфигурирован). in_flight нужен, чтобы
     // на shutdown дождаться незавершённого фонового PUT перед финальным push.
