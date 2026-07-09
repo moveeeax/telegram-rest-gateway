@@ -65,3 +65,34 @@ curl -s localhost:8080/metrics | grep tgw_kafka                   # produced р�
 `GET /metrics` (Prometheus). Алерты: `tgw_ready == 0` (слетела авторизация),
 рост `tgw_kafka_failed_total`/`tgw_kafka_dropped_total`, `tgw_http_responses_5xx_total`.
 Включить сбор: `serviceMonitor.enabled=true` (нужен Prometheus Operator).
+
+
+## Архиватор и MCP в кластере (chart telegram-rest-gateway-tools)
+
+Отдельный чарт `deploy/helm/telegram-rest-gateway-tools`:
+- **archiver** — Deployment (replicas 1, Recreate — SQLite single-writer) + PVC (longhorn) +
+  Service :8090. Консьюмит кластерную Kafka, отдаёт `/search`.
+- **mcp** — по Deployment+Service на аккаунт (Streamable HTTP, stateful session), env
+  `TGW_BASE_URL` → gateway-Service, `TGW_ARCHIVER_URL` → archiver-Service.
+
+Секрет `tgw-tools`: `TGW_BEARER_TOKEN` (MCP→gateway, скоуп read,write), `MCP_HTTP_TOKEN`
+(клиент→MCP), `ARCHIVER_TOKEN` (доступ к /search).
+
+```bash
+kubectl -n tgw create secret generic tgw-tools \
+  --from-literal=TGW_BEARER_TOKEN=<agent-token> \
+  --from-literal=MCP_HTTP_TOKEN=<random> \
+  --from-literal=ARCHIVER_TOKEN=<random>
+helm upgrade --install tgw-tools deploy/helm/telegram-rest-gateway-tools -n tgw --wait
+```
+
+### Подключить Claude к MCP в кластере
+
+MCP отдаёт Streamable HTTP на `/mcp` (Bearer = `MCP_HTTP_TOKEN`). Наружу — через Ingress
+(`ingress.enabled=true`, `mcpHostTemplate`) или локально:
+
+```bash
+kubectl -n tgw port-forward svc/tgw-tools-mcp-<sessionId> 8080:8080
+claude mcp add --transport http telegram http://localhost:8080/mcp \
+  --header "Authorization: Bearer <MCP_HTTP_TOKEN>"
+```

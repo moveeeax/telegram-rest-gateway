@@ -1,0 +1,8 @@
+apiVersion: v2
+name: telegram-rest-gateway-tools
+description: >-
+  Archiver (Kafka -> SQLite/FTS5 search) and MCP servers (agent connector, Streamable HTTP)
+  for telegram-rest-gateway.
+type: application
+version: 0.1.0
+appVersion: "1.2.0"

@@ -1,0 +1,96 @@
+{{- if .Values.archiver.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-archiver
+  labels:
+    app.kubernetes.io/name: tgw-archiver
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.archiver.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.archiver.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-archiver
+  labels:
+    app.kubernetes.io/name: tgw-archiver
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  # SQLite — единственный writer: не допускаем два пода на один файл.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tgw-archiver
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tgw-archiver
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: archiver
+          image: {{ .Values.archiver.image | quote }}
+          imagePullPolicy: {{ .Values.archiver.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8090
+          env:
+            - name: ARCHIVER_KAFKA_BROKERS
+              value: {{ .Values.archiver.kafkaBrokers | quote }}
+            - name: ARCHIVER_KAFKA_TOPIC
+              value: {{ .Values.archiver.kafkaTopic | quote }}
+            - name: ARCHIVER_KAFKA_GROUP
+              value: {{ .Values.archiver.kafkaGroup | quote }}
+            - name: ARCHIVER_DB_PATH
+              value: "/data/archive.db"
+            - name: ARCHIVER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: ARCHIVER_TOKEN
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.archiver.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-archiver
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-archiver
+  labels:
+    app.kubernetes.io/name: tgw-archiver
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: tgw-archiver
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
