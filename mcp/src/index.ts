@@ -252,6 +252,33 @@ server.tool(
   },
 );
 
+// Поиск по архиву переписки (архиватор: Kafka -> SQLite FTS5). Регистрируется только
+// если задан TGW_ARCHIVER_URL — гейтвей сам историю не индексирует.
+const ARCHIVER_URL = (process.env.TGW_ARCHIVER_URL ?? "").replace(/\/$/, "");
+if (ARCHIVER_URL) {
+  server.tool(
+    "telegram_search_history",
+    "Полнотекстовый поиск по архиву переписки (все чаты, вся сохранённая история). Возвращает сниппеты с подсветкой <<...>>, chat_id и message_id для перехода к контексту через telegram_get_history.",
+    {
+      query: z.string().min(1).describe("Поисковые слова (AND-семантика)"),
+      chat_id: z.string().optional().describe("Ограничить одним чатом"),
+      limit: z.number().int().min(1).max(100).default(20),
+    },
+    async ({ query, chat_id, limit }) => {
+      const params = new URLSearchParams({ q: query, limit: String(limit) });
+      if (chat_id) params.set("chat_id", chat_id);
+      const headers: Record<string, string> = {};
+      if (process.env.TGW_ARCHIVER_TOKEN) {
+        headers.Authorization = `Bearer ${process.env.TGW_ARCHIVER_TOKEN}`;
+      }
+      const resp = await fetch(`${ARCHIVER_URL}/search?${params}`, { headers });
+      const json: any = await resp.json();
+      if (!json.ok) throw new Error(json.error ?? `HTTP ${resp.status}`);
+      return textResult(json.results);
+    },
+  );
+}
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error(`tgw-mcp: connected to ${BASE_URL}`);
