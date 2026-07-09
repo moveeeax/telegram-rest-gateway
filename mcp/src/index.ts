@@ -10,6 +10,10 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { randomUUID } from "node:crypto";
+import express from "express";
 import { z } from "zod";
 
 const BASE_URL = (process.env.TGW_BASE_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "");
@@ -46,6 +50,7 @@ function textResult(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
+function buildServer(): McpServer {
 const server = new McpServer({
   name: "telegram-rest-gateway",
   version: "0.1.0",
@@ -256,7 +261,7 @@ server.tool(
 // если задан TGW_ARCHIVER_URL — гейтвей сам историю не индексирует.
 const ARCHIVER_URL = (process.env.TGW_ARCHIVER_URL ?? "").replace(/\/$/, "");
 if (ARCHIVER_URL) {
-  server.tool(
+  server.tool(  // eslint-disable-line
     "telegram_search_history",
     "Полнотекстовый поиск по архиву переписки (все чаты, вся сохранённая история). Возвращает сниппеты с подсветкой <<...>>, chat_id и message_id для перехода к контексту через telegram_get_history.",
     {
@@ -279,6 +284,73 @@ if (ARCHIVER_URL) {
   );
 }
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
-console.error(`tgw-mcp: connected to ${BASE_URL}`);
+  return server;
+}
+
+// Транспорт: MCP_HTTP_PORT => Streamable HTTP (для кластера, удалённые агенты);
+// иначе stdio (локальный запуск как сабпроцесс MCP-клиента).
+const HTTP_PORT = process.env.MCP_HTTP_PORT;
+if (HTTP_PORT) {
+  const HTTP_TOKEN = process.env.MCP_HTTP_TOKEN ?? "";
+  const app = express();
+  app.use(express.json({ limit: "8mb" }));
+
+  const unauthorized = (req: express.Request, res: express.Response): boolean => {
+    if (HTTP_TOKEN && req.headers.authorization !== `Bearer ${HTTP_TOKEN}`) {
+      res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized" }, id: null });
+      return true;
+    }
+    return false;
+  };
+
+  app.get("/healthz", (_req, res) => {
+    res.json({ ok: true });
+  });
+
+  // Stateful Streamable HTTP: сессия создаётся на initialize, живёт по mcp-session-id
+  // (так работают удалённые MCP-клиенты — initialize -> session id -> дальнейшие запросы).
+  const transports: Record<string, StreamableHTTPServerTransport> = {};
+
+  app.post("/mcp", async (req, res) => {
+    if (unauthorized(req, res)) return;
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    let transport = sessionId ? transports[sessionId] : undefined;
+
+    if (!transport && isInitializeRequest(req.body)) {
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => {
+          transports[id] = transport!;
+        },
+      });
+      transport.onclose = () => {
+        if (transport!.sessionId) delete transports[transport!.sessionId];
+      };
+      await buildServer().connect(transport);
+    } else if (!transport) {
+      res.status(400).json({ jsonrpc: "2.0", error: { code: -32000, message: "no valid session" }, id: null });
+      return;
+    }
+    await transport.handleRequest(req, res, req.body);
+  });
+
+  // GET (SSE server->client) и DELETE (закрытие сессии) — по существующему session id.
+  const bySession = async (req: express.Request, res: express.Response) => {
+    if (unauthorized(req, res)) return;
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    const transport = sessionId ? transports[sessionId] : undefined;
+    if (!transport) {
+      res.status(400).send("invalid or missing session id");
+      return;
+    }
+    await transport.handleRequest(req, res);
+  };
+  app.get("/mcp", bySession);
+  app.delete("/mcp", bySession);
+
+  app.listen(Number(HTTP_PORT), () => console.error(`tgw-mcp: streamable-http on :${HTTP_PORT}`));
+} else {
+  const transport = new StdioServerTransport();
+  await buildServer().connect(transport);
+  console.error(`tgw-mcp: stdio connected to ${BASE_URL}`);
+}

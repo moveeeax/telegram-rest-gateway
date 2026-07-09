@@ -1,0 +1,119 @@
+{{- if .Values.mcp.enabled }}
+{{- range $account := .Values.mcp.accounts }}
+{{- $name := printf "%s-mcp-%s" $.Release.Name $account.sessionId }}
+{{- $gateway := replace "{sessionId}" $account.sessionId $.Values.gatewayServiceTemplate }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: tgw-mcp
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    tgw.tarassov.me/session-id: {{ $account.sessionId | quote }}
+spec:
+  # Streamable HTTP stateless — можно масштабировать; держим 1 для простоты.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tgw-mcp
+      tgw.tarassov.me/session-id: {{ $account.sessionId | quote }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tgw-mcp
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        tgw.tarassov.me/session-id: {{ $account.sessionId | quote }}
+    spec:
+      containers:
+        - name: mcp
+          image: {{ $.Values.mcp.image | quote }}
+          imagePullPolicy: {{ $.Values.mcp.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $.Values.mcp.httpPort }}
+          env:
+            - name: MCP_HTTP_PORT
+              value: {{ $.Values.mcp.httpPort | quote }}
+            - name: TGW_BASE_URL
+              value: "http://{{ $gateway }}:{{ $.Values.gatewayPort }}"
+            - name: TGW_ARCHIVER_URL
+              value: "http://{{ $.Release.Name }}-archiver:8090"
+            - name: TGW_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.existingSecret }}
+                  key: TGW_BEARER_TOKEN
+            - name: MCP_HTTP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.existingSecret }}
+                  key: MCP_HTTP_TOKEN
+            - name: TGW_ARCHIVER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.existingSecret }}
+                  key: ARCHIVER_TOKEN
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml $.Values.mcp.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: tgw-mcp
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    tgw.tarassov.me/session-id: {{ $account.sessionId | quote }}
+spec:
+  ports:
+    - name: http
+      port: {{ $.Values.mcp.httpPort }}
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: tgw-mcp
+    tgw.tarassov.me/session-id: {{ $account.sessionId | quote }}
+{{- if $.Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: tgw-mcp
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+  {{- with $.Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $.Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ replace "{sessionId}" $account.sessionId $.Values.ingress.mcpHostTemplate | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+  {{- if $.Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ replace "{sessionId}" $account.sessionId $.Values.ingress.mcpHostTemplate | quote }}]
+      secretName: {{ $name }}-tls
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
