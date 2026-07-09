@@ -1,7 +1,7 @@
 # Пример prod-values (без секретов). Секреты — в Secret existingSecret (см. DEPLOY.md).
 image:
   # CI не тегирует образ semver — пиньте неизменяемый short-sha релиза (тег image:<sha> в реестре).
-  tag: "364f197c"  # = v1.2.0
+  tag: "da77e294"  # неизменяемый short-sha develop с фиксом Kafka
 
 accounts:
   - sessionId: "1214732998"
