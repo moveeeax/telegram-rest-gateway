@@ -69,6 +69,7 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 | `TGW_LISTEN_ADDRESS` | `127.0.0.1` | Адрес прослушивания (в Docker — `0.0.0.0`) |
 | `TGW_LISTEN_PORT` | `8080` | Порт HTTP |
 | `TGW_SESSION` / `TGW_SESSION_FILE` | — | Session string (base64 от `td.binlog`) для stateless-запуска |
+| `BEARER_TOKENS` | — | По строке на токен: `<token>[ <scopes>]`; scopes: `read`,`write`,`admin` (без scopes = все) |
 | `TGW_WS_MAX_PENDING_BYTES` | `8388608` | WS back-pressure: лимит байт с последнего pong; 0 — выкл |
 | `TGW_MAX_MEMORY_BODY_BYTES` | `1048576` | Порог spool-на-диск для тел запросов (RSS при аплоадах) |
 | `TGW_KAFKA_BROKERS` | — | Kafka/Redpanda bootstrap; пусто — события в Kafka выключены |
@@ -98,6 +99,11 @@ volume. Включается только при заполненных `bucket`
 `telegram-sessions/<session_id>/td.binlog`. Задавай разный `TGW_SESSION_ID` на каждый аккаунт
 (Telegram account_id недоступен до логина, поэтому метку назначает оператор). Один и тот же
 `session_id` нельзя гонять в двух инстансах одновременно — Telegram убьёт сессию (`AUTH_KEY_DUPLICATED`).
+
+**Scoped-токены.** Строка `BEARER_TOKENS` вида `tgw_xxx read` выдаёт токен только на чтение
+(GET + WS), `read,write` — плюс мутации, но без `/v1/auth/*` (логин и session export — только
+`admin`/полный токен). Недостаточный скоуп → `403 INSUFFICIENT_SCOPE`. Агентам (MCP) выдавайте
+минимально необходимый скоуп.
 
 Секреты (`api_id`, `api_hash`, `database_encryption_key`, Bearer-токены, S3 credentials) — только
 через `*_FILE` / secret manager, никогда в образ/env напрямую.

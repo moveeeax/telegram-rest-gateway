@@ -2,27 +2,53 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace tgw::auth {
 
-// Хранилище API-токенов (§8.1). Хранит ТОЛЬКО SHA-256 токенов (не сам секрет),
-// сравнение — timing-safe по всем хешам без раннего выхода. Заполняется один раз на
-// старте (single-threaded), далее только чтение (потокобезопасно, hashes_ иммутабельны).
+// Скоупы API-токенов (§8.1+): read — GET-эндпоинты и WS-поток; write — мутации
+// (send/edit/delete/forward/react/upload/join); admin — /v1/auth/* (логин и, главное,
+// session export = полный захват аккаунта). Токен без скоупов в конфиге = все три
+// (обратная совместимость).
+enum class Scope : std::uint8_t {
+    Read = 1U << 0U,
+    Write = 1U << 1U,
+    Admin = 1U << 2U,
+};
+using ScopeMask = std::uint8_t;
+constexpr ScopeMask kAllScopes = 0x7;
+
+constexpr bool scopeAllows(ScopeMask mask, Scope s) {
+    return (mask & static_cast<ScopeMask>(s)) != 0;
+}
+
+// Хранилище API-токенов. Формат строки BEARER_TOKENS:
+//   "<token>"                  — полный доступ (read,write,admin)
+//   "<token> read"             — только чтение (для агентов/дашбордов)
+//   "<token> read,write"       — чтение и мутации, но без /v1/auth/*
+// Хранит ТОЛЬКО SHA-256 токенов; сравнение — по всем записям без раннего выхода,
+// CRYPTO_memcmp. Заполняется один раз на старте, далее только чтение.
 class TokenStore {
    public:
     static TokenStore& instance();
 
-    void load(const std::vector<std::string>& tokens);
-    bool verify(std::string_view presented) const;
+    void load(const std::vector<std::string>& entries);
+    // nullopt — токен неизвестен; иначе маска скоупов токена.
+    std::optional<ScopeMask> verify(std::string_view presented) const;
 
-    std::size_t size() const { return hashes_.size(); }
-    bool empty() const { return hashes_.empty(); }
+    std::size_t size() const { return entries_.size(); }
+    bool empty() const { return entries_.empty(); }
 
    private:
-    std::vector<std::array<unsigned char, 32>> hashes_;
+    struct Entry {
+        std::array<unsigned char, 32> hash;
+        ScopeMask scopes;
+    };
+    std::vector<Entry> entries_;
 };
 
 }  // namespace tgw::auth

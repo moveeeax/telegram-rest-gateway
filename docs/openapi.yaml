@@ -858,6 +858,8 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+      description: 'Токены со скоупами: read (GET + WS), write (мутации), admin (/v1/auth/*). Формат BEARER_TOKENS:
+        "<token>[ <scope,scope>]"; без скоупов = полный. Недостаточный скоуп -> 403 INSUFFICIENT_SCOPE.'
   parameters:
     chatId:
       name: chatId
@@ -919,6 +921,7 @@ components:
               - UPSTREAM_TIMEOUT
               - TELEGRAM_ERROR
               - IDEMPOTENCY_KEY_REUSED
+              - INSUFFICIENT_SCOPE
             message:
               type: string
             tdlib_code:
