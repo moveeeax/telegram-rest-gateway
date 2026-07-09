@@ -96,3 +96,28 @@ kubectl -n tgw port-forward svc/tgw-tools-mcp-<sessionId> 8080:8080
 claude mcp add --transport http telegram http://localhost:8080/mcp \
   --header "Authorization: Bearer <MCP_HTTP_TOKEN>"
 ```
+
+
+## Внешний доступ (Ingress + TLS + IP-allowlist)
+
+Сервисы отдают полный контроль над аккаунтом и всю историю — **в интернет напрямую не выставляем**.
+Прод-вариант: nginx Ingress + Let's Encrypt (cert-manager) + external-dns, **жёстко ограниченный
+IP-allowlist'ом**. Выставляются gateway (`/ui`+API) и MCP; архиватор остаётся ClusterIP (MCP ходит
+в него внутри кластера).
+
+Аннотации (см. `values-prod-example.yaml` обоих чартов):
+- `cert-manager.io/cluster-issuer: letsencrypt-prod` — TLS-сертификат.
+- `external-dns.alpha.kubernetes.io/target: <LB-IP>` — external-dns создаёт DNS A-запись (host
+  берётся из rules).
+- `nginx.ingress.kubernetes.io/whitelist-source-range: <ip>/32` — **обязательно**; пускает только
+  доверенные IP (остальным 403).
+- `nginx.ingress.kubernetes.io/ssl-redirect: "true"`.
+- Для MCP: `proxy-buffering: "off"`, `proxy-read/send-timeout: "3600"` (Streamable HTTP/SSE).
+
+cert-manager проходит ACME HTTP-01 через отдельный `cm-acme-http-solver` ingress (без whitelist),
+поэтому allowlist выпуску сертификата не мешает. Хосты: `tg-<sessionId>`, `mcp-<sessionId>`.
+
+Проверка: с доверенного IP — 200; с любого другого — 403 (whitelist). TLS — Let's Encrypt.
+
+> Даже за allowlist'ом: `/v1/health`, `/v1/ready`, `/ui`, `/metrics` без Bearer — допустимо, т.к.
+> доступ уже ограничен по IP. Не расширяй whitelist без необходимости.
