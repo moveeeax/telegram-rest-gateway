@@ -1,0 +1,31 @@
+# Пример prod-values (без секретов). Секреты — в Secret existingSecret (см. DEPLOY.md).
+image:
+  # CI не тегирует образ semver — пиньте неизменяемый short-sha релиза (тег image:<sha> в реестре).
+  tag: "364f197c"  # = v1.2.0
+
+accounts:
+  - sessionId: "1214732998"
+  - sessionId: "1389231240"
+
+existingSecret: "telegram-rest-gateway"
+
+config:
+  TGW_LISTEN_ADDRESS: "0.0.0.0"
+  TGW_LISTEN_PORT: "8080"
+  TGW_S3_ENDPOINT: "https://s3.tarassov.me"
+  TGW_S3_REGION: "us-east-1"
+  TGW_S3_BUCKET: "tgw-s3-bucket"
+  TGW_S3_PATH_STYLE: "true"
+  # Kafka в кластере (namespace kafka, CLIENT-листенер PLAINTEXT на 9092).
+  TGW_KAFKA_BROKERS: "kafka.kafka.svc.cluster.local:9092"
+  TGW_KAFKA_TOPIC: "tgw.updates"
+
+serviceMonitor:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
