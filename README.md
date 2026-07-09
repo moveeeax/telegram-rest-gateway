@@ -111,6 +111,12 @@ volume. Включается только при заполненных `bucket`
 `(session_id, seq)`; дыра в `seq` = потеря (см. `tgw_kafka_dropped_total`). Продюсер никогда
 не блокирует приём апдейтов Telegram: при переполнении очереди события дропаются с метрикой.
 
+## Архиватор: поиск по переписке
+
+[`archiver/`](archiver/README.md) — консьюмер Kafka-событий → SQLite+FTS5: полнотекстовый
+поиск по всей сохранённой истории (`GET :8090/search?q=`), включая правки и удалённые.
+Агенту доступен как MCP-tool `telegram_search_history`.
+
 ## MCP: агентский коннектор
 
 [`mcp/`](mcp/README.md) — MCP-сервер (TypeScript, stdio): Claude Code/Desktop и любой
