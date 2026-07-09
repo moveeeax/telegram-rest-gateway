@@ -111,6 +111,12 @@ volume. Включается только при заполненных `bucket`
 `(session_id, seq)`; дыра в `seq` = потеря (см. `tgw_kafka_dropped_total`). Продюсер никогда
 не блокирует приём апдейтов Telegram: при переполнении очереди события дропаются с метрикой.
 
+## MCP: агентский коннектор
+
+[`mcp/`](mcp/README.md) — MCP-сервер (TypeScript, stdio): Claude Code/Desktop и любой
+MCP-клиент получают 14 инструментов аккаунта (сообщения, реакции, resolve, медиа).
+Один сервер = один аккаунт; токен = полный доступ, храни как секрет.
+
 ## Деплой в Kubernetes (Helm)
 
 Чарт: [`deploy/helm/telegram-rest-gateway`](deploy/helm/telegram-rest-gateway). Особенности:
