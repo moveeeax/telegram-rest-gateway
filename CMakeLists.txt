@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 # Версия сервиса (идёт в application_version setTdlibParameters и X-TDLib-Version).
 project(telegram-rest-gateway
-    VERSION 1.2.0
+    VERSION 1.2.1
     LANGUAGES CXX)
 
 # --- Стандарт: C++20 на НАШИХ таргетах (корутины Drogon). TDLib собирается своим C++17. ---
