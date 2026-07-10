@@ -60,6 +60,45 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.existingSecret }}
                   key: ARCHIVER_TOKEN
+            {{- if .Values.archiver.postgres.enabled }}
+            - name: ARCHIVER_PG_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.archiver.postgres.urlSecret.name }}
+                  key: {{ .Values.archiver.postgres.urlSecret.key }}
+            {{- end }}
+            {{- if .Values.archiver.s3.enabled }}
+            - name: ARCHIVER_S3_ENDPOINT
+              value: {{ .Values.archiver.s3.endpoint | quote }}
+            - name: ARCHIVER_S3_REGION
+              value: {{ .Values.archiver.s3.region | quote }}
+            - name: ARCHIVER_S3_BUCKET
+              value: {{ .Values.archiver.s3.bucket | quote }}
+            - name: ARCHIVER_S3_PREFIX
+              value: {{ .Values.archiver.s3.prefix | quote }}
+            {{- with .Values.archiver.s3.publicBase }}
+            - name: ARCHIVER_S3_PUBLIC_BASE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: ARCHIVER_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.archiver.s3.credentialsSecret.name }}
+                  key: {{ .Values.archiver.s3.credentialsSecret.accessKey }}
+            - name: ARCHIVER_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.archiver.s3.credentialsSecret.name }}
+                  key: {{ .Values.archiver.s3.credentialsSecret.secretKey }}
+            # Гейтвей (per-account) для скачивания файлов перед оффлоадом в S3.
+            - name: ARCHIVER_GATEWAY_TEMPLATE
+              value: {{ .Values.archiver.gateway.template | quote }}
+            - name: ARCHIVER_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.archiver.gateway.tokenSecret.name }}
+                  key: {{ .Values.archiver.gateway.tokenSecret.key }}
+            {{- end }}
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 3
@@ -93,4 +132,38 @@ spec:
   selector:
     app.kubernetes.io/name: tgw-archiver
     app.kubernetes.io/instance: {{ .Release.Name }}
+{{- if and .Values.ingress.enabled .Values.ingress.archiverHost }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-archiver
+  labels:
+    app.kubernetes.io/name: tgw-archiver
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.archiverHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-archiver
+                port:
+                  name: http
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.ingress.archiverHost | quote }}]
+      secretName: {{ .Release.Name }}-archiver-tls
+  {{- end }}
+{{- end }}
 {{- end }}

@@ -16,6 +16,25 @@ archiver:
   # SQLite-файл — единственный writer, поэтому PVC + Recreate + replicas 1.
   storage: "2Gi"
   storageClass: ""
+  # Внешний PostgreSQL вместо SQLite (URL из секрета). enabled=false → SQLite на PVC.
+  postgres:
+    enabled: false
+    urlSecret: { name: tgw-tools, key: ARCHIVER_PG_URL }
+  # Оффлоад медиа в S3: файл качается из гейтвея и кладётся в бакет, в истории — ссылка.
+  s3:
+    enabled: false
+    endpoint: ""
+    region: us-east-1
+    bucket: ""
+    prefix: "media/"
+    publicBase: ""   # база для media_url (напр. https://host/bucket); пусто → s3://bucket/key
+    credentialsSecret:
+      name: telegram-rest-gateway
+      accessKey: TGW_S3_ACCESS_KEY_ID
+      secretKey: TGW_S3_SECRET_ACCESS_KEY
+  gateway:
+    template: "http://tgw-{sessionId}:8080"   # per-account сервис гейтвея (для скачивания файлов)
+    tokenSecret: { name: tgw-tools, key: TGW_BEARER_TOKEN }
   resources:
     requests: { cpu: 25m, memory: 64Mi }
     limits: { memory: 256Mi }
@@ -39,5 +58,6 @@ ingress:
   className: ""
   annotations: {}
   mcpHostTemplate: "mcp-{sessionId}.example.com"
+  archiverHost: ""  # хост Ingress архиватора (/search); пусто = не выводить наружу
   tls:
     enabled: false

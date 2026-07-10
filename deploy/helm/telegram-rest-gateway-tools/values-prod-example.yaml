@@ -1,0 +1,19 @@
+# Пример: MCP наружу через Ingress с IP-allowlist; архиватор остаётся внутренним.
+mcp:
+  image: "docker.io/resert/telegram-rest-gateway-mcp:v1.2.0-2"
+ingress:
+  enabled: true
+  className: nginx
+  mcpHostTemplate: "mcp-{sessionId}.example.com"
+  archiverHost: "tgw-archive.example.com"
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    external-dns.alpha.kubernetes.io/target: "<LB-IP>"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/whitelist-source-range: "<your.ip>/32"
+    # Streamable HTTP / SSE — без буферизации, длинные таймауты.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  tls:
+    enabled: true

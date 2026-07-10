@@ -29,3 +29,19 @@ resources:
     memory: 64Mi
   limits:
     memory: 256Mi
+
+# Внешний доступ: Ingress (nginx) + Let's Encrypt (cert-manager) + external-dns,
+# ЖЁСТКО ограниченный IP-allowlist'ом (сервисы отдают контроль над аккаунтом — за периметром).
+ingress:
+  enabled: true
+  className: nginx
+  hostTemplate: "tg-{sessionId}.example.com"
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    external-dns.alpha.kubernetes.io/target: "<LB-IP>"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # ОБЯЗАТЕЛЬНО: список доверенных IP. Голый Bearer в интернет не выставляем.
+    nginx.ingress.kubernetes.io/whitelist-source-range: "<your.ip>/32"
+  tls:
+    enabled: true
+    secretNameTemplate: "tg-{sessionId}-tls"

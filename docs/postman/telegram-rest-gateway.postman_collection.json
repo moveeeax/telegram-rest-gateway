@@ -1,0 +1,1059 @@
+{
+  "info": {
+    "name": "telegram-rest-gateway",
+    "description": "REST API self-hosted гейтвея к пользовательскому Telegram-аккаунту (TDLib + Drogon).\n\nНастрой переменные окружения: baseUrl, token (Bearer), и по мере работы chatId/messageId/fileId/userId.\nВсе 64-битные id — строки. Auth: Bearer на всех /v1/**, кроме health/ready/metrics/ui.\nСкоупы токена: read (GET+WS), write (мутации), admin (/v1/auth/*, session export).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "chatId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "messageId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "fileId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "username",
+      "value": "telegram",
+      "type": "string"
+    },
+    {
+      "key": "inviteLink",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "System",
+      "description": "",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "health"
+              ]
+            },
+            "description": "Живость процесса.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Ready",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "ready"
+              ]
+            },
+            "description": "Готовность (авторизован в Telegram).",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Metrics (Prometheus)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "metrics"
+              ]
+            },
+            "description": "Prometheus text exposition.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "description": "",
+      "item": [
+        {
+          "name": "State",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/state",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "state"
+              ]
+            },
+            "description": "Состояние конечного автомата авторизации."
+          },
+          "response": []
+        },
+        {
+          "name": "Session init",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/session",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "session"
+              ]
+            },
+            "description": "Идемпотентная инициализация."
+          },
+          "response": []
+        },
+        {
+          "name": "Phone",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/phone",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "phone"
+              ]
+            },
+            "description": "Отправить номер → Telegram присылает код (для кастомного api_id часто НЕ доходит — используй QR).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+79001234567\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "QR login",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/qr",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "qr"
+              ]
+            },
+            "description": "QR-логин: в state появится qr_link (tg://login), сканируй с телефона."
+          },
+          "response": []
+        },
+        {
+          "name": "Code",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/code",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "code"
+              ]
+            },
+            "description": "Код подтверждения. → ready или wait_password (2FA).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"12345\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Code resend",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/code/resend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "code",
+                "resend"
+              ]
+            },
+            "description": "Повторно запросить код."
+          },
+          "response": []
+        },
+        {
+          "name": "Password (2FA)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "password"
+              ]
+            },
+            "description": "Облачный пароль → ready.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"секрет\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Session export",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/auth/session/export",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "auth",
+                "session",
+                "export"
+              ]
+            },
+            "description": "base64 td.binlog для stateless-запуска (TGW_SESSION). СЕКРЕТ = доступ к аккаунту. Требует admin-скоуп."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Account",
+      "description": "",
+      "item": [
+        {
+          "name": "Me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "me"
+              ]
+            },
+            "description": "Инфо об аккаунте."
+          },
+          "response": []
+        },
+        {
+          "name": "User card",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/users/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "users",
+                "{{userId}}"
+              ]
+            },
+            "description": "Карточка пользователя."
+          },
+          "response": []
+        },
+        {
+          "name": "Contacts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/contacts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "contacts"
+              ]
+            },
+            "description": "id контактов."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Chats",
+      "description": "",
+      "item": [
+        {
+          "name": "List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats?limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Список чатов. offset — пагинация; meta.next_offset для след. страницы."
+          },
+          "response": []
+        },
+        {
+          "name": "Chat card",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}"
+              ]
+            },
+            "description": "Карточка чата (тип, название)."
+          },
+          "response": []
+        },
+        {
+          "name": "Resolve @username",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/resolve?username={{username}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "resolve"
+              ],
+              "query": [
+                {
+                  "key": "username",
+                  "value": "{{username}}"
+                }
+              ]
+            },
+            "description": "Публичный чат/юзер по @username → chat_id."
+          },
+          "response": []
+        },
+        {
+          "name": "Join by invite link",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/join",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "join"
+              ]
+            },
+            "description": "Вступить по invite-ссылке.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"invite_link\": \"{{inviteLink}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Members",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/members?",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "members"
+              ],
+              "query": [
+                {
+                  "key": "query",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Участники чата (по правам Telegram)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Messages",
+      "description": "",
+      "item": [
+        {
+          "name": "History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/messages?limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "messages"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "from_id",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "История, от новых к старым. from_id — курсор (meta.next_cursor). Медиа несут file_id."
+          },
+          "response": []
+        },
+        {
+          "name": "Send text",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "disabled": true
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "messages"
+              ]
+            },
+            "description": "Отправка текста → 202 + temporary_message_id (финал по WS). Опц. parse_mode (markdown/html), reply_to_message_id, заголовок Idempotency-Key.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Привет из Postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Send markdown reply",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "messages"
+              ]
+            },
+            "description": "MarkdownV2: спецсимволы вне разметки экранировать.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"*bold* \\\\_esc\\\\_\",\n  \"parse_mode\": \"markdown\",\n  \"reply_to_message_id\": \"{{messageId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Edit",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/messages/{{messageId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "messages",
+                "{{messageId}}"
+              ]
+            },
+            "description": "Правка текста своего сообщения.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"отредактировано\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "messages"
+              ]
+            },
+            "description": "Удаление. revoke=true — у всех.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message_ids\": [\n    \"{{messageId}}\"\n  ],\n  \"revoke\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mark read",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/messages/read",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "messages",
+                "read"
+              ]
+            },
+            "description": "Отметить прочитанными.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message_ids\": [\n    \"{{messageId}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Forward",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/messages/forward",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "messages",
+                "forward"
+              ]
+            },
+            "description": "Переслать в текущий чат из from_chat_id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"from_chat_id\": \"{{chatId}}\",\n  \"message_ids\": [\n    \"{{messageId}}\"\n  ],\n  \"send_copy\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Search in chat (native)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/search?q=привет&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "привет"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Нативный поиск Telegram по чату (searchChatMessages)."
+          },
+          "response": []
+        },
+        {
+          "name": "Search global (native)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/search?q=привет&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "привет"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Глобальный нативный поиск Telegram (searchMessages)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Files",
+      "description": "",
+      "item": [
+        {
+          "name": "Upload (binary)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/octet-stream"
+              }
+            ],
+            "body": {
+              "mode": "file",
+              "file": {
+                "src": "/path/to/file.jpg"
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/files?type=photo&file_name=file.jpg",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "files"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "photo"
+                },
+                {
+                  "key": "file_name",
+                  "value": "file.jpg"
+                },
+                {
+                  "key": "caption",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Сырое тело octet-stream. type=document|photo|video|voice|audio. → 202, финал по WS. Укажи файл во вкладке Body → binary."
+          },
+          "response": []
+        },
+        {
+          "name": "Download / status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Range",
+                "value": "bytes=0-1023",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/files/{{fileId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "files",
+                "{{fileId}}"
+              ]
+            },
+            "description": "Докачано → стрим байтов (200; поддержка Range→206). Иначе → 202 + прогресс, готовность по updateFile в WS."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Reactions",
+      "description": "",
+      "item": [
+        {
+          "name": "Set reaction",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/messages/{{messageId}}/reactions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "messages",
+                "{{messageId}}",
+                "reactions"
+              ]
+            },
+            "description": "Поставить emoji-реакцию.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emoji\": \"👍\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Remove reaction",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/messages/{{messageId}}/reactions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "messages",
+                "{{messageId}}",
+                "reactions"
+              ]
+            },
+            "description": "Снять реакцию.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emoji\": \"👍\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "WebSocket /v1/updates",
+      "description": "",
+      "item": [
+        {
+          "name": "Updates stream (info)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/updates",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "updates"
+              ]
+            },
+            "description": "WebSocket-поток апдейтов. В Postman создай отдельный WebSocket Request к ws(s)://<host>/v1/updates с заголовком Authorization: Bearer <token> (или Sec-WebSocket-Protocol: bearer.<token>). После connect сервер шлёт hello, далее фреймы update. Фильтр: отправь {\"type\":\"subscribe\",\"update_types\":[...]}. Это HTTP-заглушка только для документации — обычным Send не сработает."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
