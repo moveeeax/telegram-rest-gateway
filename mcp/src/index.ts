@@ -186,6 +186,29 @@ server.tool(
 );
 
 server.tool(
+  "telegram_search_live",
+  "ЖИВОЙ поиск Telegram (серверный, searchMessages/searchChatMessages) — всегда актуальный, без индексатора. Без chat_id — глобально по всем чатам; с chat_id — внутри чата. Отличие от telegram_search_history: этот идёт напрямую в Telegram (свежие данные, но по правилам поиска Telegram и без удалённых сообщений).",
+  {
+    query: z.string().min(1).describe("Поисковая строка"),
+    chat_id: z.string().optional().describe("Ограничить одним чатом (иначе — глобально)"),
+    limit: z.number().int().min(1).max(100).default(20),
+    cursor: z.string().optional().describe("Курсор следующей страницы: next_offset (глобально) или next_from_id (по чату)"),
+  },
+  async ({ query, chat_id, limit, cursor }) => {
+    let path: string;
+    if (chat_id) {
+      const c = cursor ? `&from_id=${encodeURIComponent(cursor)}` : "";
+      path = `/v1/chats/${encodeURIComponent(chat_id)}/search?q=${encodeURIComponent(query)}&limit=${limit}${c}`;
+    } else {
+      const c = cursor ? `&offset=${encodeURIComponent(cursor)}` : "";
+      path = `/v1/search?q=${encodeURIComponent(query)}&limit=${limit}${c}`;
+    }
+    const r = await api(path);
+    return textResult({ results: r.data, total_count: r.meta?.total_count, next_cursor: r.meta?.next_from_id ?? r.meta?.next_offset ?? null });
+  },
+);
+
+server.tool(
   "telegram_resolve_username",
   "Найти публичный чат/канал/пользователя по @username. Возвращает chat_id для остальных инструментов.",
   { username: z.string().describe("С @ или без") },
