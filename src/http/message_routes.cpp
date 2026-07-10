@@ -788,6 +788,101 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
         },
         {drogon::Post, kBearerFilter});
 
+    // GET /v1/chats/{chatId}/search?q=&limit=&from_id= — НАТИВНЫЙ поиск Telegram по чату
+    // (searchChatMessages). В отличие от архиватора — прямой запрос к серверу Telegram.
+    // from_id — курсор (meta.next_from_id прошлого вызова; 0 = с начала).
+    app.registerHandler(
+        "/v1/chats/{chatId}/search",
+        [&bridge, client_id](const drogon::HttpRequestPtr& req, HttpCallback&& cb,
+                             std::string chatIdStr) {
+            std::int64_t chatId = 0;
+            if (!parseId(chatIdStr, chatId)) {
+                cb(serviceError("VALIDATION_ERROR", "invalid chat_id", drogon::k400BadRequest));
+                return;
+            }
+            const std::string query = req->getParameter("q");
+            if (query.empty()) {
+                cb(serviceError("VALIDATION_ERROR", "query param 'q' is required",
+                                drogon::k400BadRequest));
+                return;
+            }
+            std::int64_t fromId = 0;
+            parseId(req->getParameter("from_id"), fromId);
+            auto fn = api::make_object<api::searchChatMessages>();
+            fn->chat_id_ = chatId;
+            fn->query_ = query;
+            fn->from_message_id_ = fromId;
+            fn->offset_ = 0;
+            fn->limit_ = queryInt(req, "limit", 20, 100);
+            fn->filter_ = api::make_object<api::searchMessagesFilterEmpty>();
+            launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
+                         [](api::object_ptr<api::Object> obj) {
+                             auto found =
+                                 tgw::bridge::expect<api::foundChatMessages>(std::move(obj));
+                             if (!found.ok()) {
+                                 return telegramError(*found.error, drogon::k502BadGateway);
+                             }
+                             Json::Value arr(Json::arrayValue);
+                             for (const auto& m : found.value->messages_) {
+                                 if (m != nullptr) {
+                                     arr.append(tgw::dto::toJson(*m));
+                                 }
+                             }
+                             Json::Value body;
+                             body["ok"] = true;
+                             body["data"] = arr;
+                             body["meta"]["total_count"] = found.value->total_count_;
+                             if (found.value->next_from_message_id_ != 0) {
+                                 body["meta"]["next_from_id"] =
+                                     std::to_string(found.value->next_from_message_id_);
+                             }
+                             return jsonResponse(std::move(body), drogon::k200OK);
+                         });
+        },
+        {drogon::Get, kBearerFilter});
+
+    // GET /v1/search?q=&limit=&offset= — ГЛОБАЛЬНЫЙ нативный поиск Telegram по всем чатам
+    // (searchMessages). offset — строковый курсор (meta.next_offset). Пусто = с начала.
+    app.registerHandler(
+        "/v1/search",
+        [&bridge, client_id](const drogon::HttpRequestPtr& req, HttpCallback&& cb) {
+            const std::string query = req->getParameter("q");
+            if (query.empty()) {
+                cb(serviceError("VALIDATION_ERROR", "query param 'q' is required",
+                                drogon::k400BadRequest));
+                return;
+            }
+            auto fn = api::make_object<api::searchMessages>();
+            fn->query_ = query;
+            fn->offset_ = req->getParameter("offset");
+            fn->limit_ = queryInt(req, "limit", 20, 100);
+            fn->filter_ = api::make_object<api::searchMessagesFilterEmpty>();
+            fn->min_date_ = 0;
+            fn->max_date_ = 0;
+            launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
+                         [](api::object_ptr<api::Object> obj) {
+                             auto found = tgw::bridge::expect<api::foundMessages>(std::move(obj));
+                             if (!found.ok()) {
+                                 return telegramError(*found.error, drogon::k502BadGateway);
+                             }
+                             Json::Value arr(Json::arrayValue);
+                             for (const auto& m : found.value->messages_) {
+                                 if (m != nullptr) {
+                                     arr.append(tgw::dto::toJson(*m));
+                                 }
+                             }
+                             Json::Value body;
+                             body["ok"] = true;
+                             body["data"] = arr;
+                             body["meta"]["total_count"] = found.value->total_count_;
+                             if (!found.value->next_offset_.empty()) {
+                                 body["meta"]["next_offset"] = found.value->next_offset_;
+                             }
+                             return jsonResponse(std::move(body), drogon::k200OK);
+                         });
+        },
+        {drogon::Get, kBearerFilter});
+
     // Реакции. POST — поставить emoji-реакцию, DELETE — снять. Тело: {"emoji":"👍"}.
     // Фактическое изменение прилетит апдейтом updateMessageInteractionInfo по WebSocket.
     const auto okBuilder = [](api::object_ptr<api::Object> obj) -> drogon::HttpResponsePtr {
