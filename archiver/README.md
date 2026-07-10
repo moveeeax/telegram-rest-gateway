@@ -46,3 +46,16 @@ docker run -d --name tgw-archiver --restart unless-stopped --network <сеть-�
 MCP-сервер (`mcp/`) при заданном `TGW_ARCHIVER_URL` (+опц. `TGW_ARCHIVER_TOKEN`) регистрирует
 инструмент `telegram_search_history` — агент ищет по архиву и переходит к контексту через
 `telegram_get_history`.
+
+
+## Бэкенды и медиа
+
+- **Хранилище:** SQLite (дефолт) или PostgreSQL — задай `ARCHIVER_PG_URL` (`postgres://...`).
+  PG использует `tsvector`+GIN и `websearch_to_tsquery('simple', q)` со сниппетами `ts_headline`.
+- **Медиа в S3:** если заданы `ARCHIVER_S3_BUCKET` + `ARCHIVER_GATEWAY_TEMPLATE`, при каждом
+  сообщении с `file_id` файл качается из гейтвея (`GET /v1/files/{id}`) и кладётся в S3
+  (`ARCHIVER_S3_PREFIX<session>/<chat>/<message>/<file>`), в строку пишется `media_url`.
+  Выделенный воркер с очередью — не блокирует consumer. Env: `ARCHIVER_S3_ENDPOINT/_REGION/
+  _BUCKET/_ACCESS_KEY_ID/_SECRET_ACCESS_KEY/_PREFIX/_PUBLIC_BASE`, `ARCHIVER_GATEWAY_TOKEN`,
+  `ARCHIVER_MEDIA_MAX_BYTES` (default 100 MiB). `media_url` = `<PUBLIC_BASE>/<key>` или `s3://bucket/key`.
+- **Бэкфилл** пишет в текущий store и триггерит медиа-оффлоад — так наполняется свежая PG-база.
