@@ -93,4 +93,38 @@ spec:
   selector:
     app.kubernetes.io/name: tgw-archiver
     app.kubernetes.io/instance: {{ .Release.Name }}
+{{- if and .Values.ingress.enabled .Values.ingress.archiverHost }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-archiver
+  labels:
+    app.kubernetes.io/name: tgw-archiver
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.archiverHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-archiver
+                port:
+                  name: http
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.ingress.archiverHost | quote }}]
+      secretName: {{ .Release.Name }}-archiver-tls
+  {{- end }}
+{{- end }}
 {{- end }}

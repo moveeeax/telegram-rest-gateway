@@ -39,5 +39,6 @@ ingress:
   className: ""
   annotations: {}
   mcpHostTemplate: "mcp-{sessionId}.example.com"
+  archiverHost: ""  # хост Ingress архиватора (/search); пусто = не выводить наружу
   tls:
     enabled: false

@@ -5,6 +5,7 @@ ingress:
   enabled: true
   className: nginx
   mcpHostTemplate: "mcp-{sessionId}.example.com"
+  archiverHost: "tgw-archive.example.com"
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     external-dns.alpha.kubernetes.io/target: "<LB-IP>"
