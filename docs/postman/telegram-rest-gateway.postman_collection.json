@@ -803,6 +803,66 @@
             }
           },
           "response": []
+        },
+        {
+          "name": "Search in chat (native)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chats/{{chatId}}/search?q=привет&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chats",
+                "{{chatId}}",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "привет"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Нативный поиск Telegram по чату (searchChatMessages)."
+          },
+          "response": []
+        },
+        {
+          "name": "Search global (native)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/search?q=привет&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "привет"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Глобальный нативный поиск Telegram (searchMessages)."
+          },
+          "response": []
         }
       ]
     },

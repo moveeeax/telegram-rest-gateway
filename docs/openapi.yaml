@@ -853,6 +853,64 @@ paths:
         '200':
           description: data.user_ids (строки) + total_count; карточки — /v1/users/{id}
         '401': *id001
+  /v1/chats/{chatId}/search:
+    get:
+      tags:
+      - messages
+      summary: Нативный поиск Telegram по чату (searchChatMessages)
+      description: Прямой запрос к серверу Telegram (в отличие от архиватора). Курсор — meta.next_from_id.
+      parameters:
+      - $ref: '#/components/parameters/chatId'
+      - name: q
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 20
+          maximum: 100
+      - name: from_id
+        in: query
+        schema:
+          type: string
+        description: Курсор (meta.next_from_id)
+      responses:
+        '200':
+          description: Сообщения (DTO) + meta.total_count/next_from_id
+        '400': &id003
+          $ref: '#/components/responses/ValidationError'
+        '401': &id004
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/search:
+    get:
+      tags:
+      - messages
+      summary: Глобальный нативный поиск Telegram по всем чатам (searchMessages)
+      parameters:
+      - name: q
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 20
+          maximum: 100
+      - name: offset
+        in: query
+        schema:
+          type: string
+        description: Строковый курсор (meta.next_offset)
+      responses:
+        '200':
+          description: Сообщения (DTO) + meta.total_count/next_offset
+        '400': *id003
+        '401': *id004
 components:
   securitySchemes:
     bearerAuth:
