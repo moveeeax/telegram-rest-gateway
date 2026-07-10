@@ -109,6 +109,7 @@ export class MediaOffloader {
     for (let attempt = 0; attempt < 6; attempt++) {
       const resp = await fetch(`${base}/v1/files/${encodeURIComponent(job.file_id)}`, {
         headers: this.gwToken ? { Authorization: `Bearer ${this.gwToken}` } : {},
+        signal: AbortSignal.timeout(60000), // не морозим воркер на зависшем скачивании
       });
       const ct = resp.headers.get("content-type") ?? "";
       if (resp.status === 202 || ct.includes("application/json")) {

@@ -134,7 +134,20 @@ CREATE TABLE IF NOT EXISTS seq_state (session_id TEXT PRIMARY KEY, last_seq INTE
 export class PostgresStore implements Store {
   private pool: Pool;
   constructor(url: string) {
-    this.pool = new Pool({ connectionString: url, max: 4 });
+    // keepAlive + idleTimeout: не даём простаивающему соединению «протухнуть» (сеть/CNPG рвут
+    // idle-TCP молча). query/statement_timeout: висящий на мёртвом коннекте запрос падает, а не
+    // блокирует хендлер навсегда. pool.on('error'): фоновая ошибка коннекта не копится.
+    this.pool = new Pool({
+      connectionString: url,
+      max: 8,
+      idleTimeoutMillis: 10000,
+      connectionTimeoutMillis: 5000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 5000,
+      statement_timeout: 20000,
+      query_timeout: 20000,
+    });
+    this.pool.on("error", (err) => console.error("pg pool error:", err.message));
   }
   async init(): Promise<void> {
     await this.pool.query(`

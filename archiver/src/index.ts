@@ -108,7 +108,7 @@ let backfill: BackfillState = { running: false, chats_total: 0, chats_done: 0, m
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function gwGet(base: string, token: string, path: string): Promise<any> {
-  const resp = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  const resp = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000) });
   const json: any = await resp.json();
   if (!json.ok) throw new Error(`${json.error?.code ?? resp.status}: ${json.error?.message ?? "gw error"}`);
   return json;
