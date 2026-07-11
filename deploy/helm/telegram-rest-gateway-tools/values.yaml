@@ -28,6 +28,7 @@ archiver:
     bucket: ""
     prefix: "media/"
     publicBase: ""   # база для media_url (напр. https://host/bucket); пусто → s3://bucket/key
+    forcePathStyle: true   # false → virtual-hosted addressing (чистый AWS S3 без точек в имени бакета)
     # По умолчанию тот же секрет, что existingSecret (tgw-tools). Ключи S3 — в нём же.
     credentialsSecret:
       name: tgw-tools

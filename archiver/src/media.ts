@@ -5,7 +5,7 @@
  *
  * Env:
  *   ARCHIVER_S3_ENDPOINT/_REGION/_BUCKET/_ACCESS_KEY_ID/_SECRET_ACCESS_KEY/_PREFIX/_PUBLIC_BASE
- *   ARCHIVER_S3_FORCE_PATH_STYLE — "true"/"false"; default: true если задан ENDPOINT (MinIO)
+ *   ARCHIVER_S3_FORCE_PATH_STYLE — "true"/"false"; default: true (false → virtual-hosted AWS)
  *   ARCHIVER_GATEWAY_TEMPLATE — напр. http://tgw-{sessionId}:8080 (per-account сервис)
  *   ARCHIVER_GATEWAY_TOKEN    — Bearer (read) для скачивания файлов
  *   ARCHIVER_MEDIA_MAX_BYTES  — не грузить файлы больше (default 100 MiB)
@@ -13,7 +13,7 @@
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import type { Store } from "./store.js";
 
-export type MediaJob = { session_id: string; chat_id: string; message_id: string; file_id: string; file_name?: string; mime_type?: string };
+export type MediaJob = { session_id: string; chat_id: string; message_id: string; file_id: string; file_name?: string; mime_type?: string; attempts?: number };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const QUEUE_CAP = 50000;
@@ -54,8 +54,9 @@ export class MediaOffloader {
       secretAccessKey: process.env.ARCHIVER_S3_SECRET_ACCESS_KEY ?? "",
       prefix: (process.env.ARCHIVER_S3_PREFIX ?? "media/").replace(/^\/+/, ""),
       publicBase: (process.env.ARCHIVER_S3_PUBLIC_BASE ?? "").replace(/\/$/, ""),
-      // MinIO / custom endpoint → path-style; pure AWS → virtual-hosted unless overridden.
-      forcePathStyle: envBool("ARCHIVER_S3_FORCE_PATH_STYLE") ?? Boolean(endpoint),
+      // path-style по умолчанию (исторический дефолт; virtual-hosted ломает бакеты
+      // с точками в имени на чистом AWS) — virtual-hosted только явным опт-аутом
+      forcePathStyle: envBool("ARCHIVER_S3_FORCE_PATH_STYLE") ?? true,
       gwTemplate,
       gwToken: process.env.ARCHIVER_GATEWAY_TOKEN ?? "",
       maxBytes: Number(process.env.ARCHIVER_MEDIA_MAX_BYTES ?? String(100 * 1024 * 1024)),
@@ -123,8 +124,16 @@ export class MediaOffloader {
       try {
         const result = await this.process(job);
         if (result === "retry") {
-          // «ещё качается» / временно недоступен — разрешим повтор при следующем событии
-          this.seen.delete(key);
+          // «ещё качается» — возвращаем в конец очереди (для updateNewMessage без
+          // последующих правок другого события с этим ключом не будет)
+          const tries = (job.attempts ?? 0) + 1;
+          if (tries < 5) {
+            this.queue.push({ ...job, attempts: tries });
+          } else {
+            // сдаёмся; ключ снимаем — повтор возможен при следующем событии
+            console.error(`media: gave up on ${key} after ${tries} requeues`);
+            this.seen.delete(key);
+          }
         }
         // "done" и "skip" (oversized) оставляют ключ в seen
       } catch (e: any) {
@@ -156,11 +165,9 @@ export class MediaOffloader {
         const body = await resp.text().catch(() => "");
         throw new Error(`download ${resp.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
       }
+      // 200 + application/json — легитимный файл (пользователь прислал .json):
+      // ошибки гейтвея приходят с не-2xx статусом и отсечены выше.
       const ct = resp.headers.get("content-type") ?? "";
-      if (ct.includes("application/json")) {
-        const body = await resp.text().catch(() => "");
-        throw new Error(`download unexpected json body: ${body.slice(0, 200)}`);
-      }
       const ab = await resp.arrayBuffer();
       if (ab.byteLength > this.maxBytes) {
         console.error(`media: skip oversized ${this.jobKey(job)} (${ab.byteLength} > ${this.maxBytes})`);
