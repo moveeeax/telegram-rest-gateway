@@ -76,6 +76,8 @@ spec:
               value: {{ .Values.archiver.s3.bucket | quote }}
             - name: ARCHIVER_S3_PREFIX
               value: {{ .Values.archiver.s3.prefix | quote }}
+            - name: ARCHIVER_S3_FORCE_PATH_STYLE
+              value: {{ .Values.archiver.s3.forcePathStyle | quote }}
             {{- with .Values.archiver.s3.publicBase }}
             - name: ARCHIVER_S3_PUBLIC_BASE
               value: {{ . | quote }}

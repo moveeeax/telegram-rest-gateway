@@ -57,11 +57,14 @@ MCP-сервер (`mcp/`) при заданном `TGW_ARCHIVER_URL` (+опц. `
   (`ARCHIVER_S3_PREFIX<session>/<chat>/<message>/<file>`), в строку пишется `media_url`.
   Выделенный воркер с очередью — не блокирует consumer. Env: `ARCHIVER_S3_ENDPOINT/_REGION/
   _BUCKET/_ACCESS_KEY_ID/_SECRET_ACCESS_KEY/_PREFIX/_PUBLIC_BASE`, `ARCHIVER_S3_FORCE_PATH_STYLE`
-  (default: true если задан ENDPOINT), `ARCHIVER_GATEWAY_TOKEN`, `ARCHIVER_MEDIA_MAX_BYTES`
+  (default: true; `false` → virtual-hosted AWS), `ARCHIVER_GATEWAY_TOKEN`, `ARCHIVER_MEDIA_MAX_BYTES`
   (default 100 MiB). `media_url` = `<PUBLIC_BASE>/<key>` или `s3://bucket/key`.
-  Ретраи: transient/download/S3 ошибки и «ещё качается» (202) снимают ключ из in-process `seen`;
-  oversized — постоянный skip до рестарта. Kafka: storage-ошибки не глотаются (offset не
-  коммитится); битый JSON — poison pill, коммитится.
+  Ретраи: «ещё качается» (202) — до 5 повторных постановок в очередь, затем ключ снимается
+  из in-process `seen` (повтор при следующем событии); transient/download/S3 ошибки снимают
+  ключ сразу; oversized — постоянный skip до рестарта. Kafka: storage-ошибки ретраятся
+  с бэкоффом (5 попыток, с heartbeat), после — событие скипается с коммитом offset'а
+  (счётчик `dropped_events` в `/stats`, пропуски добираются бэкфиллом); битый JSON —
+  poison pill, коммитится.
 - **Бэкфилл** пишет в текущий store и триггерит медиа-оффлоад — так наполняется свежая PG-база.
   `gateway_url` ограничен: должен совпадать с `ARCHIVER_GATEWAY_TEMPLATE` (если задан) либо
   быть localhost / cluster DNS / private IP. Через внешний Ingress `/backfill` не публикуется.

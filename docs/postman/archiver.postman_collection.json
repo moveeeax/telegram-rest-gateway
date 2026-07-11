@@ -32,7 +32,7 @@
             "method": "GET",
             "header": [],
             "url": { "raw": "{{baseUrl}}/stats", "host": ["{{baseUrl}}"], "path": ["stats"] },
-            "description": "Счётчики: messages, chats, processed_events и статус медиа-оффлоада (pending/uploaded/failed)."
+            "description": "Счётчики: messages, chats, processed_events, dropped_events и статус медиа-оффлоада (pending/uploaded/failed).\n\n⚠ Через прод-Ingress не доступен (наружу выставлены только /search и /health) — используй kubectl port-forward и окружение archiver-local."
           },
           "response": []
         }
@@ -77,7 +77,7 @@
               "raw": "{\n  \"gateway_url\": \"{{gatewayUrl}}\",\n  \"token\": \"{{gatewayToken}}\",\n  \"session_id\": \"{{sessionId}}\",\n  \"throttle_ms\": 300,\n  \"max_per_chat\": 1000000\n}"
             },
             "url": { "raw": "{{baseUrl}}/backfill", "host": ["{{baseUrl}}"], "path": ["backfill"] },
-            "description": "Запускает фоновый обход истории через гейтвей и пишет её в хранилище архиватора.\n\nТело:\n- gateway_url — база per-account гейтвея (напр. http://tgw-<sessionId>:8080 внутри кластера, или https://tg-<sessionId>.tarassov.me через Ingress).\n- token — Bearer гейтвея (read).\n- session_id — id аккаунта (сессии).\n- throttle_ms — пауза между страницами (по умолчанию 300).\n- max_per_chat — лимит сообщений на чат (по умолчанию ~безлимит).\n\n409, если бэкфилл уже идёт."
+            "description": "Запускает фоновый обход истории через гейтвей и пишет её в хранилище архиватора.\n\n⚠ Через прод-Ingress не доступен (наружу выставлены только /search и /health) — используй kubectl port-forward и окружение archiver-local.\n\nТело:\n- gateway_url — база per-account гейтвея. Anti-SSRF: должен совпадать с ARCHIVER_GATEWAY_TEMPLATE (если задан), иначе — только localhost / cluster DNS / private IP. Внешние URL гейтвея (через Ingress) не принимаются; внутри кластера — http://tgw-<sessionId>:8080.\n- token — Bearer гейтвея (read).\n- session_id — id аккаунта (сессии).\n- throttle_ms — пауза между страницами (по умолчанию 300; 0 = без троттлинга).\n- max_per_chat — лимит сообщений на чат (по умолчанию ~безлимит).\n\n409, если бэкфилл уже идёт."
           },
           "response": []
         },
@@ -87,7 +87,7 @@
             "method": "GET",
             "header": [],
             "url": { "raw": "{{baseUrl}}/backfill", "host": ["{{baseUrl}}"], "path": ["backfill"] },
-            "description": "Текущее состояние бэкфилла (running, chats_done/chats_total, messages_added, error) и статус медиа-оффлоада. Стейт — in-memory: обнуляется при рестарте пода."
+            "description": "Текущее состояние бэкфилла (running, chats_done/chats_total, messages_added, error) и статус медиа-оффлоада. Стейт — in-memory: обнуляется при рестарте пода.\n\n⚠ Через прод-Ingress не доступен — используй kubectl port-forward."
           },
           "response": []
         }
