@@ -5,6 +5,7 @@
  *
  * Env:
  *   ARCHIVER_S3_ENDPOINT/_REGION/_BUCKET/_ACCESS_KEY_ID/_SECRET_ACCESS_KEY/_PREFIX/_PUBLIC_BASE
+ *   ARCHIVER_S3_FORCE_PATH_STYLE — "true"/"false"; default: true если задан ENDPOINT (MinIO)
  *   ARCHIVER_GATEWAY_TEMPLATE — напр. http://tgw-{sessionId}:8080 (per-account сервис)
  *   ARCHIVER_GATEWAY_TOKEN    — Bearer (read) для скачивания файлов
  *   ARCHIVER_MEDIA_MAX_BYTES  — не грузить файлы больше (default 100 MiB)
@@ -15,6 +16,15 @@ import type { Store } from "./store.js";
 export type MediaJob = { session_id: string; chat_id: string; message_id: string; file_id: string; file_name?: string; mime_type?: string };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const QUEUE_CAP = 50000;
+
+type ProcessResult = "done" | "retry" | "skip";
+
+function envBool(name: string): boolean | undefined {
+  const v = process.env[name];
+  if (v === undefined || v === "") return undefined;
+  return v === "1" || v.toLowerCase() === "true";
+}
 
 export class MediaOffloader {
   private queue: MediaJob[] = [];
@@ -29,19 +39,23 @@ export class MediaOffloader {
   private maxBytes: number;
   uploaded = 0;
   failed = 0;
+  lastError: string | null = null;
 
   static fromEnv(store: Store): MediaOffloader | null {
     const bucket = process.env.ARCHIVER_S3_BUCKET ?? "";
     const gwTemplate = process.env.ARCHIVER_GATEWAY_TEMPLATE ?? "";
     if (!bucket || !gwTemplate) return null; // медиа-оффлоад выключен
+    const endpoint = process.env.ARCHIVER_S3_ENDPOINT ?? "";
     return new MediaOffloader(store, {
-      endpoint: process.env.ARCHIVER_S3_ENDPOINT ?? "",
+      endpoint,
       region: process.env.ARCHIVER_S3_REGION ?? "us-east-1",
       bucket,
       accessKeyId: process.env.ARCHIVER_S3_ACCESS_KEY_ID ?? "",
       secretAccessKey: process.env.ARCHIVER_S3_SECRET_ACCESS_KEY ?? "",
       prefix: (process.env.ARCHIVER_S3_PREFIX ?? "media/").replace(/^\/+/, ""),
       publicBase: (process.env.ARCHIVER_S3_PUBLIC_BASE ?? "").replace(/\/$/, ""),
+      // MinIO / custom endpoint → path-style; pure AWS → virtual-hosted unless overridden.
+      forcePathStyle: envBool("ARCHIVER_S3_FORCE_PATH_STYLE") ?? Boolean(endpoint),
       gwTemplate,
       gwToken: process.env.ARCHIVER_GATEWAY_TOKEN ?? "",
       maxBytes: Number(process.env.ARCHIVER_MEDIA_MAX_BYTES ?? String(100 * 1024 * 1024)),
@@ -52,7 +66,7 @@ export class MediaOffloader {
     this.s3 = new S3Client({
       endpoint: cfg.endpoint || undefined,
       region: cfg.region,
-      forcePathStyle: true, // MinIO
+      forcePathStyle: Boolean(cfg.forcePathStyle),
       credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
     });
     this.bucket = cfg.bucket;
@@ -64,15 +78,28 @@ export class MediaOffloader {
     void this.loop();
   }
 
+  private jobKey(job: MediaJob): string {
+    return `${job.session_id}:${job.chat_id}:${job.message_id}`;
+  }
+
   enqueue(job: MediaJob): void {
-    const key = `${job.session_id}:${job.chat_id}:${job.message_id}`;
+    const key = this.jobKey(job);
     if (this.seen.has(key)) return; // уже в работе/обработано в этом процессе
+    if (this.queue.length >= QUEUE_CAP) {
+      console.error(`media: queue full (${QUEUE_CAP}), not enqueueing ${key}`);
+      return; // не помечаем seen — попробуем при следующем событии
+    }
     this.seen.add(key);
-    if (this.queue.length < 50000) this.queue.push(job);
+    this.queue.push(job);
   }
 
   stats() {
-    return { pending: this.queue.length, uploaded: this.uploaded, failed: this.failed };
+    return {
+      pending: this.queue.length,
+      uploaded: this.uploaded,
+      failed: this.failed,
+      last_error: this.lastError,
+    };
   }
 
   stop() {
@@ -92,16 +119,25 @@ export class MediaOffloader {
         await sleep(500);
         continue;
       }
+      const key = this.jobKey(job);
       try {
-        await this.process(job);
-      } catch (e) {
+        const result = await this.process(job);
+        if (result === "retry") {
+          // «ещё качается» / временно недоступен — разрешим повтор при следующем событии
+          this.seen.delete(key);
+        }
+        // "done" и "skip" (oversized) оставляют ключ в seen
+      } catch (e: any) {
         this.failed++;
+        this.lastError = `${key}: ${String(e?.message ?? e)}`;
+        console.error(`media: failed ${key}:`, e);
+        this.seen.delete(key); // retriable: auth/S3/network — снова при следующем событии
       }
       await sleep(50); // мягкий троттлинг
     }
   }
 
-  private async process(job: MediaJob): Promise<void> {
+  private async process(job: MediaJob): Promise<ProcessResult> {
     const base = this.gwTemplate.replace("{sessionId}", job.session_id).replace(/\/$/, "");
     // Скачиваем файл из гейтвея; 202 = ещё качается TDLib — несколько ретраев.
     let bytes: Buffer | null = null;
@@ -111,24 +147,36 @@ export class MediaOffloader {
         headers: this.gwToken ? { Authorization: `Bearer ${this.gwToken}` } : {},
         signal: AbortSignal.timeout(60000), // не морозим воркер на зависшем скачивании
       });
-      const ct = resp.headers.get("content-type") ?? "";
-      if (resp.status === 202 || ct.includes("application/json")) {
-        await sleep(2000 * (attempt + 1)); // ждём докачки
+      // Только 202 = «ещё качается». JSON-ошибки (401/404/500) не маскируем под pending.
+      if (resp.status === 202) {
+        await sleep(2000 * (attempt + 1));
         continue;
       }
-      if (!resp.ok) throw new Error(`download ${resp.status}`);
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        throw new Error(`download ${resp.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
+      }
+      const ct = resp.headers.get("content-type") ?? "";
+      if (ct.includes("application/json")) {
+        const body = await resp.text().catch(() => "");
+        throw new Error(`download unexpected json body: ${body.slice(0, 200)}`);
+      }
       const ab = await resp.arrayBuffer();
-      if (ab.byteLength > this.maxBytes) return; // слишком большой — пропускаем
+      if (ab.byteLength > this.maxBytes) {
+        console.error(`media: skip oversized ${this.jobKey(job)} (${ab.byteLength} > ${this.maxBytes})`);
+        return "skip";
+      }
       bytes = Buffer.from(ab);
       if (ct) contentType = ct;
       break;
     }
-    if (!bytes) return; // так и не докачался — оставим file_id, попробуем при следующем событии
+    if (!bytes) return "retry"; // так и не докачался — оставим file_id, попробуем при следующем событии
 
     const safeName = (job.file_name || "file").replace(/[^\w.\-]+/g, "_");
     const key = `${this.prefix}${job.session_id}/${job.chat_id}/${job.message_id}/${safeName}`;
     await this.s3.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: bytes, ContentType: contentType }));
     await this.store.setMediaUrl(job.session_id, job.chat_id, job.message_id, this.urlFor(key));
     this.uploaded++;
+    return "done";
   }
 }

@@ -1,4 +1,6 @@
-# Пример: MCP наружу через Ingress с IP-allowlist; архиватор остаётся внутренним.
+# Пример: MCP и архиватор (/search + /health) наружу через Ingress с IP-allowlist.
+# /backfill и /stats архиватора наружу не выставляются (path-restrict в template).
+# Если архиватор только внутри кластера — оставь archiverHost: "".
 mcp:
   image: "docker.io/resert/telegram-rest-gateway-mcp:v1.2.0-2"
 ingress:

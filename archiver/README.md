@@ -56,6 +56,12 @@ MCP-сервер (`mcp/`) при заданном `TGW_ARCHIVER_URL` (+опц. `
   сообщении с `file_id` файл качается из гейтвея (`GET /v1/files/{id}`) и кладётся в S3
   (`ARCHIVER_S3_PREFIX<session>/<chat>/<message>/<file>`), в строку пишется `media_url`.
   Выделенный воркер с очередью — не блокирует consumer. Env: `ARCHIVER_S3_ENDPOINT/_REGION/
-  _BUCKET/_ACCESS_KEY_ID/_SECRET_ACCESS_KEY/_PREFIX/_PUBLIC_BASE`, `ARCHIVER_GATEWAY_TOKEN`,
-  `ARCHIVER_MEDIA_MAX_BYTES` (default 100 MiB). `media_url` = `<PUBLIC_BASE>/<key>` или `s3://bucket/key`.
+  _BUCKET/_ACCESS_KEY_ID/_SECRET_ACCESS_KEY/_PREFIX/_PUBLIC_BASE`, `ARCHIVER_S3_FORCE_PATH_STYLE`
+  (default: true если задан ENDPOINT), `ARCHIVER_GATEWAY_TOKEN`, `ARCHIVER_MEDIA_MAX_BYTES`
+  (default 100 MiB). `media_url` = `<PUBLIC_BASE>/<key>` или `s3://bucket/key`.
+  Ретраи: transient/download/S3 ошибки и «ещё качается» (202) снимают ключ из in-process `seen`;
+  oversized — постоянный skip до рестарта. Kafka: storage-ошибки не глотаются (offset не
+  коммитится); битый JSON — poison pill, коммитится.
 - **Бэкфилл** пишет в текущий store и триггерит медиа-оффлоад — так наполняется свежая PG-база.
+  `gateway_url` ограничен: должен совпадать с `ARCHIVER_GATEWAY_TEMPLATE` (если задан) либо
+  быть localhost / cluster DNS / private IP. Через внешний Ingress `/backfill` не публикуется.

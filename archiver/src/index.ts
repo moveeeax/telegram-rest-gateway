@@ -16,6 +16,8 @@ const TOPIC = process.env.ARCHIVER_KAFKA_TOPIC ?? "tgw.updates";
 const GROUP = process.env.ARCHIVER_KAFKA_GROUP ?? "tgw-archiver";
 const PORT = Number(process.env.ARCHIVER_HTTP_PORT ?? "8090");
 const TOKEN = process.env.ARCHIVER_TOKEN ?? "";
+const GW_TEMPLATE = process.env.ARCHIVER_GATEWAY_TEMPLATE ?? "";
+const MAX_BODY_BYTES = 64 * 1024;
 
 const store = makeStore();
 await store.init();
@@ -55,15 +57,66 @@ function maybeOffload(r: MessageRow): void {
   }
 }
 
+/** Clamp limit like C++ queryInt: invalid/<1 → default; cap at max. */
+function queryLimit(raw: string | null, def = 20, max = 100): number {
+  const n = Number(raw ?? String(def));
+  if (!Number.isFinite(n) || n < 1) return def;
+  return Math.min(Math.floor(n), max);
+}
+
+/** Allow only the configured gateway template host (anti-SSRF for /backfill). */
+function isAllowedGatewayUrl(url: string, sessionId: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+
+  if (GW_TEMPLATE) {
+    const expected = GW_TEMPLATE.replaceAll("{sessionId}", sessionId).replace(/\/$/, "");
+    let expectedUrl: URL;
+    try {
+      expectedUrl = new URL(expected);
+    } catch {
+      return false;
+    }
+    return (
+      parsed.protocol === expectedUrl.protocol &&
+      parsed.hostname === expectedUrl.hostname &&
+      (parsed.port || defaultPort(parsed.protocol)) === (expectedUrl.port || defaultPort(expectedUrl.protocol)) &&
+      (parsed.pathname === "/" || parsed.pathname === "")
+    );
+  }
+
+  // Без шаблона — только localhost / cluster DNS / private IP (не открытый интернет).
+  const host = parsed.hostname.toLowerCase();
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return true;
+  if (host.endsWith(".svc") || host.endsWith(".svc.cluster.local") || host.endsWith(".cluster.local")) return true;
+  if (isPrivateIp(host)) return true;
+  return false;
+}
+
+function defaultPort(protocol: string): string {
+  return protocol === "https:" ? "443" : "80";
+}
+
+function isPrivateIp(host: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 169 && b === 254) return true;
+  return false;
+}
+
 async function handleEvent(frame: any): Promise<void> {
   const sessionId = String(frame.session_id ?? "default");
   const data = frame.data ?? {};
-
-  if (typeof frame.seq === "number") {
-    const prev = await store.getSeq(sessionId);
-    if (prev !== undefined && frame.seq > prev + 1) console.warn(`seq gap for ${sessionId}: ${prev} -> ${frame.seq}`);
-    if (prev === undefined || frame.seq > prev) await store.setSeq(sessionId, frame.seq);
-  }
 
   switch (frame.update_type) {
     case "updateNewMessage": {
@@ -97,7 +150,15 @@ async function handleEvent(frame: any): Promise<void> {
       await store.upsertChat(sessionId, String(data.id ?? ""), data.title ?? "", data.type ?? "");
       break;
     default:
-      return;
+      // unknown type — still advance seq below if present
+      break;
+  }
+
+  // seq после успешной обработки, иначе transient PG-ошибка + redelivery ломает gap-detect
+  if (typeof frame.seq === "number") {
+    const prev = await store.getSeq(sessionId);
+    if (prev !== undefined && frame.seq > prev + 1) console.warn(`seq gap for ${sessionId}: ${prev} -> ${frame.seq}`);
+    if (prev === undefined || frame.seq > prev) await store.setSeq(sessionId, frame.seq);
   }
   processed += 1;
 }
@@ -161,6 +222,15 @@ function authorized(req: http.IncomingMessage): boolean {
   return req.headers.authorization === `Bearer ${TOKEN}`;
 }
 
+async function readBody(req: http.IncomingMessage, maxBytes: number): Promise<{ ok: true; body: string } | { ok: false; tooLarge: true }> {
+  let body = "";
+  for await (const chunk of req) {
+    body += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    if (body.length > maxBytes) return { ok: false, tooLarge: true };
+  }
+  return { ok: true, body };
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -180,17 +250,30 @@ const server = http.createServer((req, res) => {
         if (!q.trim()) return send(400, { ok: false, error: "query param 'q' is required" });
         const rows = await store.search({
           q, chat_id: url.searchParams.get("chat_id"), session_id: url.searchParams.get("session_id"),
-          limit: Math.min(Number(url.searchParams.get("limit") ?? "20"), 100),
+          limit: queryLimit(url.searchParams.get("limit"), 20, 100),
         });
         return send(200, { ok: true, results: rows });
       }
       if (url.pathname === "/backfill" && req.method === "POST") {
         if (backfill.running) return send(409, { ok: false, error: "backfill already running", state: backfill });
-        let body = ""; for await (const c of req) body += c;
-        let cfg: any = {}; try { cfg = JSON.parse(body || "{}"); } catch { return send(400, { ok: false, error: "bad json body" }); }
+        const raw = await readBody(req, MAX_BODY_BYTES);
+        if (!raw.ok) return send(413, { ok: false, error: "body too large" });
+        let cfg: any = {}; try { cfg = JSON.parse(raw.body || "{}"); } catch { return send(400, { ok: false, error: "bad json body" }); }
         if (!cfg.gateway_url || !cfg.token || !cfg.session_id) return send(400, { ok: false, error: "gateway_url, token, session_id are required" });
-        void runBackfill(String(cfg.gateway_url).replace(/\/$/, ""), String(cfg.token), String(cfg.session_id), Number(cfg.throttle_ms ?? 300), Number(cfg.max_per_chat ?? 1000000));
-        return send(200, { ok: true, started: true, session_id: cfg.session_id });
+        const sessionId = String(cfg.session_id);
+        const gatewayUrl = String(cfg.gateway_url).replace(/\/$/, "");
+        if (!isAllowedGatewayUrl(gatewayUrl, sessionId)) {
+          return send(400, {
+            ok: false,
+            error: GW_TEMPLATE
+              ? "gateway_url must match ARCHIVER_GATEWAY_TEMPLATE for this session_id"
+              : "gateway_url must be localhost, cluster DNS, or private IP",
+          });
+        }
+        const throttleMs = queryLimit(String(cfg.throttle_ms ?? "300"), 300, 60_000);
+        const maxPerChat = queryLimit(String(cfg.max_per_chat ?? "1000000"), 1_000_000, 5_000_000);
+        void runBackfill(gatewayUrl, String(cfg.token), sessionId, throttleMs, maxPerChat);
+        return send(200, { ok: true, started: true, session_id: sessionId });
       }
       if (url.pathname === "/backfill") return send(200, { ok: true, backfill, media: media?.stats() ?? null });
       return send(404, { ok: false, error: "not found" });
@@ -212,8 +295,26 @@ async function main() {
   await consumer.run({
     eachMessage: async ({ message }) => {
       if (!message.value) return;
-      try { await handleEvent(JSON.parse(message.value.toString())); }
-      catch (e) { console.error("bad event:", e); }
+      let frame: unknown;
+      try {
+        frame = JSON.parse(message.value.toString());
+      } catch (e) {
+        // poison pill — коммитим, иначе consumer зациклится на битом сообщении
+        console.error("bad event (invalid json):", e);
+        return;
+      }
+      // storage/transient: retry with backoff, then rethrow so kafkajs does not commit
+      const attempts = 5;
+      for (let i = 0; i < attempts; i++) {
+        try {
+          await handleEvent(frame);
+          return;
+        } catch (e) {
+          console.error(`event handling failed (attempt ${i + 1}/${attempts}):`, e);
+          if (i === attempts - 1) throw e;
+          await sleep(1000 * (i + 1));
+        }
+      }
     },
   });
 }

@@ -152,8 +152,17 @@ spec:
   rules:
     - host: {{ .Values.ingress.archiverHost | quote }}
       http:
+        # Только read-only: /search и /health. /backfill и /stats остаются ClusterIP-only
+        # (SSRF-поверхность backfill и внутренние счётчики наружу не выставляем).
         paths:
-          - path: /
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: {{ .Release.Name }}-archiver
+                port:
+                  name: http
+          - path: /search
             pathType: Prefix
             backend:
               service:
