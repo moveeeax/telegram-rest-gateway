@@ -22,6 +22,8 @@ export type MediaJob = {
   mime_type?: string;
   /** Сколько раз process() уже завершался retriable-неудачей (0 = первая попытка). */
   attempts?: number;
+  /** Не брать в работу раньше этого времени (epoch ms) — бэкофф между requeue. */
+  notBefore?: number;
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -143,7 +145,9 @@ export class MediaOffloader {
   private requeueOrGiveUp(job: MediaJob, key: string, reason: string): void {
     const tries = (job.attempts ?? 0) + 1;
     if (tries < MAX_JOB_ATTEMPTS) {
-      this.queue.push({ ...job, attempts: tries });
+      // растущая пауза между попытками: иначе на пустой очереди весь бюджет
+      // сгорает за минуты, а TDLib может качать большой файл десятки минут
+      this.queue.push({ ...job, attempts: tries, notBefore: Date.now() + 60_000 * tries });
       return;
     }
     this.failed++;
@@ -164,6 +168,12 @@ export class MediaOffloader {
     while (this.running) {
       const job = this.queue.shift();
       if (!job) {
+        await sleep(500);
+        continue;
+      }
+      if (job.notBefore && job.notBefore > Date.now()) {
+        // бэкофф ещё не истёк — в конец очереди (ротация не мешает due-джобам)
+        this.queue.push(job);
         await sleep(500);
         continue;
       }

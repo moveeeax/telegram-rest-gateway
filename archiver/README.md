@@ -60,7 +60,8 @@ MCP-сервер (`mcp/`) при заданном `TGW_ARCHIVER_URL` (+опц. `
   (default: true; `false` → virtual-hosted AWS), `ARCHIVER_GATEWAY_TOKEN`, `ARCHIVER_MEDIA_MAX_BYTES`
   (default 100 MiB). `media_url` = `<PUBLIC_BASE>/<key>` или `s3://bucket/key`.
   Ретраи media: до **5 attempts** на job (202 pending, 5xx/network/timeout/S3 —
-  requeue в конец очереди). 401/403/404 — permanent fail (ключ в `seen`, без цикла).
+  requeue в конец очереди с растущей паузой 1–4 мин; суммарно джоба живёт ~15 мин —
+  хватает на большие файлы). 401/403/404 — permanent fail (ключ в `seen`, без цикла).
   После исчерпания attempts — `failed++`, ключ снимается (`seen`), повтор при следующем
   событии. Oversized — постоянный skip до рестарта. Kafka: storage-ошибки ретраятся
   с бэкоффом (5 попыток + heartbeat), затем drop+commit (`dropped_events` в `/stats`);
