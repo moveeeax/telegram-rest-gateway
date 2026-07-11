@@ -64,11 +64,21 @@ function maybeOffload(r: MessageRow): void {
   }
 }
 
-/** Clamp limit like C++ queryInt: invalid/<1 → default; cap at max. */
-function queryLimit(raw: string | null, def = 20, max = 100): number {
-  const n = Number(raw ?? String(def));
-  if (!Number.isFinite(n) || n < 1) return def;
+/** Clamp limit like C++ queryInt: invalid/<min → default; cap at max. */
+function queryLimit(raw: string | null, def = 20, max = 100, min = 1): number {
+  // пустая строка коэрсится Number'ом в 0 — это не «явный ноль», а мусор → default
+  if (raw === null || raw.trim() === "") return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < min) return def;
   return Math.min(Math.floor(n), max);
+}
+
+/** Метаданные события для логов — БЕЗ содержимого (текст переписки в логи не пишем). */
+function frameMeta(frame: any): string {
+  const data = frame?.data ?? {};
+  const chatId = data.chat_id ?? data.message?.chat_id;
+  const msgId = data.id ?? data.message_id ?? data.message?.id;
+  return `type=${frame?.update_type} session=${frame?.session_id} chat=${chatId ?? "-"} msg=${msgId ?? "-"} seq=${frame?.seq ?? "-"}`;
 }
 
 /** Allow only the configured gateway template host (anti-SSRF for /backfill). */
@@ -293,9 +303,8 @@ const server = http.createServer((req, res) => {
               : "gateway_url must be localhost, cluster DNS, or private IP",
           });
         }
-        // queryLimit не подходит: 0 (без троттлинга) — валидное значение
-        const throttleRaw = Number(cfg.throttle_ms ?? 300);
-        const throttleMs = Number.isFinite(throttleRaw) && throttleRaw >= 0 ? Math.min(Math.floor(throttleRaw), 60_000) : 300;
+        // min=0: явный 0 (без троттлинга) валиден, а falsy-мусор ("", false, []) → default
+        const throttleMs = queryLimit(String(cfg.throttle_ms ?? 300), 300, 60_000, 0);
         const maxPerChat = queryLimit(String(cfg.max_per_chat ?? "1000000"), 1_000_000, 5_000_000);
         void runBackfill(gatewayUrl, String(cfg.token), sessionId, throttleMs, maxPerChat);
         return send(200, { ok: true, started: true, session_id: sessionId });
@@ -329,8 +338,9 @@ async function main() {
         return;
       }
       if (typeof frame !== "object" || frame === null || Array.isArray(frame)) {
-        // валидный JSON, но не plain-object (null/число/строка/массив) — poison pill
-        console.error("bad event (not an object):", frame);
+        // валидный JSON, но не plain-object (null/число/строка/массив) — poison pill;
+        // содержимое не логируем — только тип
+        console.error("bad event (not an object):", Array.isArray(frame) ? "array" : typeof frame);
         return;
       }
       // storage/transient: ретраи с бэкоффом, после — drop+commit одного события
@@ -347,8 +357,7 @@ async function main() {
             dropped += 1;
             consecutiveDrops += 1;
             console.error(
-              `event dropped after retries (consecutive_drops=${consecutiveDrops}/${DROP_CIRCUIT}):`,
-              message.value.toString().slice(0, 500),
+              `event dropped after retries (consecutive_drops=${consecutiveDrops}/${DROP_CIRCUIT}): ${frameMeta(frame)}`,
             );
             if (consecutiveDrops >= DROP_CIRCUIT) {
               // fail-closed: не «молча» проглатываем весь топик при PG/disk outage
