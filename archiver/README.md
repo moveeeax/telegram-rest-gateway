@@ -59,12 +59,14 @@ MCP-сервер (`mcp/`) при заданном `TGW_ARCHIVER_URL` (+опц. `
   _BUCKET/_ACCESS_KEY_ID/_SECRET_ACCESS_KEY/_PREFIX/_PUBLIC_BASE`, `ARCHIVER_S3_FORCE_PATH_STYLE`
   (default: true; `false` → virtual-hosted AWS), `ARCHIVER_GATEWAY_TOKEN`, `ARCHIVER_MEDIA_MAX_BYTES`
   (default 100 MiB). `media_url` = `<PUBLIC_BASE>/<key>` или `s3://bucket/key`.
-  Ретраи: «ещё качается» (202) — до 5 повторных постановок в очередь, затем ключ снимается
-  из in-process `seen` (повтор при следующем событии); transient/download/S3 ошибки снимают
-  ключ сразу; oversized — постоянный skip до рестарта. Kafka: storage-ошибки ретраятся
-  с бэкоффом (5 попыток, с heartbeat), после — событие скипается с коммитом offset'а
-  (счётчик `dropped_events` в `/stats`, пропуски добираются бэкфиллом); битый JSON —
-  poison pill, коммитится.
+  Ретраи media: до **5 attempts** на job (202 pending, 5xx/network/timeout/S3 —
+  requeue в конец очереди). 401/403/404 — permanent fail (ключ в `seen`, без цикла).
+  После исчерпания attempts — `failed++`, ключ снимается (`seen`), повтор при следующем
+  событии. Oversized — постоянный skip до рестарта. Kafka: storage-ошибки ретраятся
+  с бэкоффом (5 попыток + heartbeat), затем drop+commit (`dropped_events` в `/stats`);
+  **N подряд drop'ов** (`ARCHIVER_DROP_CIRCUIT`, default 20) — fail-closed (process exit,
+  lag растёт, k8s рестартит; не «молча» проглатываем топик при outage PG). Битый JSON /
+  non-object — poison pill, коммитится.
 - **Бэкфилл** пишет в текущий store и триггерит медиа-оффлоад — так наполняется свежая PG-база.
   `gateway_url` ограничен: должен совпадать с `ARCHIVER_GATEWAY_TEMPLATE` (если задан) либо
   быть localhost / cluster DNS / private IP. Через внешний Ingress `/backfill` не публикуется.

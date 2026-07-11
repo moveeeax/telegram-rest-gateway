@@ -18,6 +18,11 @@ const PORT = Number(process.env.ARCHIVER_HTTP_PORT ?? "8090");
 const TOKEN = process.env.ARCHIVER_TOKEN ?? "";
 const GW_TEMPLATE = process.env.ARCHIVER_GATEWAY_TEMPLATE ?? "";
 const MAX_BODY_BYTES = 64 * 1024;
+/** После N подряд drop'ов (storage outage) — fail-closed: крашим consumer, lag растёт, k8s рестартит. */
+const DROP_CIRCUIT =
+  Number.isFinite(Number(process.env.ARCHIVER_DROP_CIRCUIT)) && Number(process.env.ARCHIVER_DROP_CIRCUIT) > 0
+    ? Math.floor(Number(process.env.ARCHIVER_DROP_CIRCUIT))
+    : 20;
 
 const store = makeStore();
 await store.init();
@@ -26,6 +31,7 @@ if (media) console.error("archiver: media offload enabled (S3)");
 
 let processed = 0;
 let dropped = 0;
+let consecutiveDrops = 0;
 
 type Content = { type?: string; text?: string; caption?: string; file_id?: string; file_name?: string; mime_type?: string };
 
@@ -252,7 +258,15 @@ const server = http.createServer((req, res) => {
 
       if (url.pathname === "/stats") {
         const s = await store.stats();
-        return send(200, { ok: true, ...s, processed_events: processed, dropped_events: dropped, media: media?.stats() ?? null });
+        return send(200, {
+          ok: true,
+          ...s,
+          processed_events: processed,
+          dropped_events: dropped,
+          consecutive_drops: consecutiveDrops,
+          drop_circuit: DROP_CIRCUIT,
+          media: media?.stats() ?? null,
+        });
       }
       if (url.pathname === "/search") {
         const q = url.searchParams.get("q") ?? "";
@@ -314,24 +328,34 @@ async function main() {
         console.error("bad event (invalid json):", e);
         return;
       }
-      if (typeof frame !== "object" || frame === null) {
-        // валидный JSON, но не объект (null/число/строка) — тот же poison pill
+      if (typeof frame !== "object" || frame === null || Array.isArray(frame)) {
+        // валидный JSON, но не plain-object (null/число/строка/массив) — poison pill
         console.error("bad event (not an object):", frame);
         return;
       }
-      // storage/transient: ретраи с бэкоффом, после — скип с коммитом: одно
-      // «отравленное» событие не должно останавливать партицию навсегда
-      // (пропуски видны в dropped_events и добираются бэкфиллом)
+      // storage/transient: ретраи с бэкоффом, после — drop+commit одного события
+      // (не вешаем партицию навсегда). Серия consecutive drops → fail-closed.
       const attempts = 5;
       for (let i = 0; i < attempts; i++) {
         try {
           await handleEvent(frame);
+          consecutiveDrops = 0;
           return;
         } catch (e) {
           console.error(`event handling failed (attempt ${i + 1}/${attempts}):`, e);
           if (i === attempts - 1) {
             dropped += 1;
-            console.error("event dropped after retries:", message.value.toString().slice(0, 500));
+            consecutiveDrops += 1;
+            console.error(
+              `event dropped after retries (consecutive_drops=${consecutiveDrops}/${DROP_CIRCUIT}):`,
+              message.value.toString().slice(0, 500),
+            );
+            if (consecutiveDrops >= DROP_CIRCUIT) {
+              // fail-closed: не «молча» проглатываем весь топик при PG/disk outage
+              throw new Error(
+                `archiver: ${consecutiveDrops} consecutive drops (storage likely down) — aborting consumer`,
+              );
+            }
             return;
           }
           // иначе брокер может выкинуть консьюмера из группы за время бэкоффа
