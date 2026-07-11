@@ -28,8 +28,10 @@ archiver:
     bucket: ""
     prefix: "media/"
     publicBase: ""   # база для media_url (напр. https://host/bucket); пусто → s3://bucket/key
+    forcePathStyle: true   # false → virtual-hosted addressing (чистый AWS S3 без точек в имени бакета)
+    # По умолчанию тот же секрет, что existingSecret (tgw-tools). Ключи S3 — в нём же.
     credentialsSecret:
-      name: telegram-rest-gateway
+      name: tgw-tools
       accessKey: TGW_S3_ACCESS_KEY_ID
       secretKey: TGW_S3_SECRET_ACCESS_KEY
   gateway:
@@ -58,6 +60,6 @@ ingress:
   className: ""
   annotations: {}
   mcpHostTemplate: "mcp-{sessionId}.example.com"
-  archiverHost: ""  # хост Ingress архиватора (/search); пусто = не выводить наружу
+  archiverHost: ""  # хост Ingress архиватора (только /search + /health); пусто = ClusterIP
   tls:
     enabled: false

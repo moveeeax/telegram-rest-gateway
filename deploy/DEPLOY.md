@@ -102,9 +102,10 @@ claude mcp add --transport http telegram http://localhost:8080/mcp \
 
 Сервисы отдают полный контроль над аккаунтом и всю историю — **в интернет напрямую не выставляем**.
 Прод-вариант: nginx Ingress + Let's Encrypt (cert-manager) + external-dns, **жёстко ограниченный
-IP-allowlist'ом**. Выставляются gateway (`/ui`+API), MCP и архиватор (`/search`, хост `ingress.archiverHost` — один,
-не per-account). Все за одним IP-allowlist'ом. Если архиватор наружу не нужен — оставь
-`archiverHost` пустым (тогда только ClusterIP, MCP всё равно ходит в него внутри кластера).
+IP-allowlist'ом**. Выставляются gateway (`/ui`+API), MCP и архиватор (только `/search` и `/health`,
+хост `ingress.archiverHost` — один, не per-account; `/backfill` и `/stats` остаются ClusterIP).
+Все за одним IP-allowlist'ом. Если архиватор наружу не нужен — оставь `archiverHost` пустым
+(тогда только ClusterIP, MCP всё равно ходит в него внутри кластера).
 
 Аннотации (см. `values-prod-example.yaml` обоих чартов):
 - `cert-manager.io/cluster-issuer: letsencrypt-prod` — TLS-сертификат.

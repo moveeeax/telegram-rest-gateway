@@ -76,6 +76,8 @@ spec:
               value: {{ .Values.archiver.s3.bucket | quote }}
             - name: ARCHIVER_S3_PREFIX
               value: {{ .Values.archiver.s3.prefix | quote }}
+            - name: ARCHIVER_S3_FORCE_PATH_STYLE
+              value: {{ .Values.archiver.s3.forcePathStyle | quote }}
             {{- with .Values.archiver.s3.publicBase }}
             - name: ARCHIVER_S3_PUBLIC_BASE
               value: {{ . | quote }}
@@ -152,8 +154,17 @@ spec:
   rules:
     - host: {{ .Values.ingress.archiverHost | quote }}
       http:
+        # Только read-only: /search и /health. /backfill и /stats остаются ClusterIP-only
+        # (SSRF-поверхность backfill и внутренние счётчики наружу не выставляем).
         paths:
-          - path: /
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: {{ .Release.Name }}-archiver
+                port:
+                  name: http
+          - path: /search
             pathType: Prefix
             backend:
               service:
