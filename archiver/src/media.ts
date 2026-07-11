@@ -13,17 +13,45 @@
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import type { Store } from "./store.js";
 
-export type MediaJob = { session_id: string; chat_id: string; message_id: string; file_id: string; file_name?: string; mime_type?: string; attempts?: number };
+export type MediaJob = {
+  session_id: string;
+  chat_id: string;
+  message_id: string;
+  file_id: string;
+  file_name?: string;
+  mime_type?: string;
+  /** Сколько раз process() уже завершался retriable-неудачей (0 = первая попытка). */
+  attempts?: number;
+  /** Не брать в работу раньше этого времени (epoch ms) — бэкофф между requeue. */
+  notBefore?: number;
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const QUEUE_CAP = 50000;
+/** Максимум вызовов process() на job (1 первая + requeue). */
+const MAX_JOB_ATTEMPTS = 5;
 
 type ProcessResult = "done" | "retry" | "skip";
+
+/** Permanent: 401/403/404 и явные non-retriable. Не requeue'им, ключ остаётся в seen. */
+class MediaError extends Error {
+  constructor(
+    message: string,
+    readonly permanent: boolean,
+  ) {
+    super(message);
+    this.name = "MediaError";
+  }
+}
 
 function envBool(name: string): boolean | undefined {
   const v = process.env[name];
   if (v === undefined || v === "") return undefined;
   return v === "1" || v.toLowerCase() === "true";
+}
+
+function isPermanentError(e: unknown): boolean {
+  return e instanceof MediaError && e.permanent;
 }
 
 export class MediaOffloader {
@@ -113,6 +141,29 @@ export class MediaOffloader {
     return `s3://${this.bucket}/${key}`;
   }
 
+  /** In-queue requeue для 202 / 5xx / network / S3; после MAX_JOB_ATTEMPTS — give-up. */
+  private requeueOrGiveUp(job: MediaJob, key: string, reason: string): void {
+    const tries = (job.attempts ?? 0) + 1;
+    if (tries < MAX_JOB_ATTEMPTS) {
+      // растущая пауза между попытками: иначе на пустой очереди весь бюджет
+      // сгорает за минуты, а TDLib может качать большой файл десятки минут
+      this.queue.push({ ...job, attempts: tries, notBefore: Date.now() + 60_000 * tries });
+      return;
+    }
+    this.failed++;
+    this.lastError = `${key}: gave up after ${tries} attempts: ${reason}`;
+    console.error(`media: gave up on ${key} after ${tries} attempts: ${reason}`);
+    // снимаем seen — повтор возможен при следующем Kafka/backfill событии
+    this.seen.delete(key);
+  }
+
+  private markPermanentFail(key: string, reason: string): void {
+    this.failed++;
+    this.lastError = `${key}: ${reason}`;
+    console.error(`media: permanent fail ${key}: ${reason}`);
+    // ключ остаётся в seen — не крутим 401/404 бесконечно
+  }
+
   private async loop(): Promise<void> {
     while (this.running) {
       const job = this.queue.shift();
@@ -120,27 +171,29 @@ export class MediaOffloader {
         await sleep(500);
         continue;
       }
+      if (job.notBefore && job.notBefore > Date.now()) {
+        // бэкофф ещё не истёк — в конец очереди (ротация не мешает due-джобам)
+        this.queue.push(job);
+        await sleep(500);
+        continue;
+      }
       const key = this.jobKey(job);
       try {
         const result = await this.process(job);
         if (result === "retry") {
-          // «ещё качается» — возвращаем в конец очереди (для updateNewMessage без
-          // последующих правок другого события с этим ключом не будет)
-          const tries = (job.attempts ?? 0) + 1;
-          if (tries < 5) {
-            this.queue.push({ ...job, attempts: tries });
-          } else {
-            // сдаёмся; ключ снимаем — повтор возможен при следующем событии
-            console.error(`media: gave up on ${key} after ${tries} requeues`);
-            this.seen.delete(key);
-          }
+          // 202 / ещё не докачался — requeue в конец очереди
+          this.requeueOrGiveUp(job, key, "download still pending (202)");
         }
         // "done" и "skip" (oversized) оставляют ключ в seen
       } catch (e: any) {
-        this.failed++;
-        this.lastError = `${key}: ${String(e?.message ?? e)}`;
-        console.error(`media: failed ${key}:`, e);
-        this.seen.delete(key); // retriable: auth/S3/network — снова при следующем событии
+        const msg = String(e?.message ?? e);
+        if (isPermanentError(e)) {
+          this.markPermanentFail(key, msg);
+        } else {
+          // 5xx / network / timeout / S3 — тот же in-queue requeue, что и для 202
+          console.error(`media: retriable fail ${key}:`, e);
+          this.requeueOrGiveUp(job, key, msg);
+        }
       }
       await sleep(50); // мягкий троттлинг
     }
@@ -148,14 +201,20 @@ export class MediaOffloader {
 
   private async process(job: MediaJob): Promise<ProcessResult> {
     const base = this.gwTemplate.replace("{sessionId}", job.session_id).replace(/\/$/, "");
-    // Скачиваем файл из гейтвея; 202 = ещё качается TDLib — несколько ретраев.
+    // Скачиваем файл из гейтвея; 202 = ещё качается TDLib — несколько ретраев внутри process.
     let bytes: Buffer | null = null;
     let contentType = job.mime_type || "application/octet-stream";
     for (let attempt = 0; attempt < 6; attempt++) {
-      const resp = await fetch(`${base}/v1/files/${encodeURIComponent(job.file_id)}`, {
-        headers: this.gwToken ? { Authorization: `Bearer ${this.gwToken}` } : {},
-        signal: AbortSignal.timeout(60000), // не морозим воркер на зависшем скачивании
-      });
+      let resp: Response;
+      try {
+        resp = await fetch(`${base}/v1/files/${encodeURIComponent(job.file_id)}`, {
+          headers: this.gwToken ? { Authorization: `Bearer ${this.gwToken}` } : {},
+          signal: AbortSignal.timeout(60000), // не морозим воркер на зависшем скачивании
+        });
+      } catch (e: any) {
+        // network / timeout — retriable на уровне job (requeue)
+        throw new MediaError(`download network: ${String(e?.message ?? e)}`, false);
+      }
       // Только 202 = «ещё качается». JSON-ошибки (401/404/500) не маскируем под pending.
       if (resp.status === 202) {
         await sleep(2000 * (attempt + 1));
@@ -163,7 +222,9 @@ export class MediaOffloader {
       }
       if (!resp.ok) {
         const body = await resp.text().catch(() => "");
-        throw new Error(`download ${resp.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
+        const detail = body ? `: ${body.slice(0, 200)}` : "";
+        const permanent = resp.status === 401 || resp.status === 403 || resp.status === 404;
+        throw new MediaError(`download ${resp.status}${detail}`, permanent);
       }
       // 200 + application/json — легитимный файл (пользователь прислал .json):
       // ошибки гейтвея приходят с не-2xx статусом и отсечены выше.
@@ -177,11 +238,16 @@ export class MediaOffloader {
       if (ct) contentType = ct;
       break;
     }
-    if (!bytes) return "retry"; // так и не докачался — оставим file_id, попробуем при следующем событии
+    // так и не докачался (серия 202) — caller requeue'ит job в очередь
+    if (!bytes) return "retry";
 
     const safeName = (job.file_name || "file").replace(/[^\w.\-]+/g, "_");
     const key = `${this.prefix}${job.session_id}/${job.chat_id}/${job.message_id}/${safeName}`;
-    await this.s3.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: bytes, ContentType: contentType }));
+    try {
+      await this.s3.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: bytes, ContentType: contentType }));
+    } catch (e: any) {
+      throw new MediaError(`s3 put: ${String(e?.message ?? e)}`, false);
+    }
     await this.store.setMediaUrl(job.session_id, job.chat_id, job.message_id, this.urlFor(key));
     this.uploaded++;
     return "done";

@@ -18,6 +18,11 @@ const PORT = Number(process.env.ARCHIVER_HTTP_PORT ?? "8090");
 const TOKEN = process.env.ARCHIVER_TOKEN ?? "";
 const GW_TEMPLATE = process.env.ARCHIVER_GATEWAY_TEMPLATE ?? "";
 const MAX_BODY_BYTES = 64 * 1024;
+/** После N подряд drop'ов (storage outage) — fail-closed: крашим consumer, lag растёт, k8s рестартит. */
+const DROP_CIRCUIT =
+  Number.isFinite(Number(process.env.ARCHIVER_DROP_CIRCUIT)) && Number(process.env.ARCHIVER_DROP_CIRCUIT) > 0
+    ? Math.floor(Number(process.env.ARCHIVER_DROP_CIRCUIT))
+    : 20;
 
 const store = makeStore();
 await store.init();
@@ -26,6 +31,7 @@ if (media) console.error("archiver: media offload enabled (S3)");
 
 let processed = 0;
 let dropped = 0;
+let consecutiveDrops = 0;
 
 type Content = { type?: string; text?: string; caption?: string; file_id?: string; file_name?: string; mime_type?: string };
 
@@ -58,11 +64,21 @@ function maybeOffload(r: MessageRow): void {
   }
 }
 
-/** Clamp limit like C++ queryInt: invalid/<1 → default; cap at max. */
-function queryLimit(raw: string | null, def = 20, max = 100): number {
-  const n = Number(raw ?? String(def));
-  if (!Number.isFinite(n) || n < 1) return def;
+/** Clamp limit like C++ queryInt: invalid/<min → default; cap at max. */
+function queryLimit(raw: string | null, def = 20, max = 100, min = 1): number {
+  // пустая строка коэрсится Number'ом в 0 — это не «явный ноль», а мусор → default
+  if (raw === null || raw.trim() === "") return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < min) return def;
   return Math.min(Math.floor(n), max);
+}
+
+/** Метаданные события для логов — БЕЗ содержимого (текст переписки в логи не пишем). */
+function frameMeta(frame: any): string {
+  const data = frame?.data ?? {};
+  const chatId = data.chat_id ?? data.message?.chat_id;
+  const msgId = data.id ?? data.message_id ?? data.message?.id;
+  return `type=${frame?.update_type} session=${frame?.session_id} chat=${chatId ?? "-"} msg=${msgId ?? "-"} seq=${frame?.seq ?? "-"}`;
 }
 
 /** Allow only the configured gateway template host (anti-SSRF for /backfill). */
@@ -252,7 +268,15 @@ const server = http.createServer((req, res) => {
 
       if (url.pathname === "/stats") {
         const s = await store.stats();
-        return send(200, { ok: true, ...s, processed_events: processed, dropped_events: dropped, media: media?.stats() ?? null });
+        return send(200, {
+          ok: true,
+          ...s,
+          processed_events: processed,
+          dropped_events: dropped,
+          consecutive_drops: consecutiveDrops,
+          drop_circuit: DROP_CIRCUIT,
+          media: media?.stats() ?? null,
+        });
       }
       if (url.pathname === "/search") {
         const q = url.searchParams.get("q") ?? "";
@@ -279,9 +303,8 @@ const server = http.createServer((req, res) => {
               : "gateway_url must be localhost, cluster DNS, or private IP",
           });
         }
-        // queryLimit не подходит: 0 (без троттлинга) — валидное значение
-        const throttleRaw = Number(cfg.throttle_ms ?? 300);
-        const throttleMs = Number.isFinite(throttleRaw) && throttleRaw >= 0 ? Math.min(Math.floor(throttleRaw), 60_000) : 300;
+        // min=0: явный 0 (без троттлинга) валиден, а falsy-мусор ("", false, []) → default
+        const throttleMs = queryLimit(String(cfg.throttle_ms ?? 300), 300, 60_000, 0);
         const maxPerChat = queryLimit(String(cfg.max_per_chat ?? "1000000"), 1_000_000, 5_000_000);
         void runBackfill(gatewayUrl, String(cfg.token), sessionId, throttleMs, maxPerChat);
         return send(200, { ok: true, started: true, session_id: sessionId });
@@ -314,24 +337,34 @@ async function main() {
         console.error("bad event (invalid json):", e);
         return;
       }
-      if (typeof frame !== "object" || frame === null) {
-        // валидный JSON, но не объект (null/число/строка) — тот же poison pill
-        console.error("bad event (not an object):", frame);
+      if (typeof frame !== "object" || frame === null || Array.isArray(frame)) {
+        // валидный JSON, но не plain-object (null/число/строка/массив) — poison pill;
+        // содержимое не логируем — только тип
+        console.error("bad event (not an object):", Array.isArray(frame) ? "array" : typeof frame);
         return;
       }
-      // storage/transient: ретраи с бэкоффом, после — скип с коммитом: одно
-      // «отравленное» событие не должно останавливать партицию навсегда
-      // (пропуски видны в dropped_events и добираются бэкфиллом)
+      // storage/transient: ретраи с бэкоффом, после — drop+commit одного события
+      // (не вешаем партицию навсегда). Серия consecutive drops → fail-closed.
       const attempts = 5;
       for (let i = 0; i < attempts; i++) {
         try {
           await handleEvent(frame);
+          consecutiveDrops = 0;
           return;
         } catch (e) {
           console.error(`event handling failed (attempt ${i + 1}/${attempts}):`, e);
           if (i === attempts - 1) {
             dropped += 1;
-            console.error("event dropped after retries:", message.value.toString().slice(0, 500));
+            consecutiveDrops += 1;
+            console.error(
+              `event dropped after retries (consecutive_drops=${consecutiveDrops}/${DROP_CIRCUIT}): ${frameMeta(frame)}`,
+            );
+            if (consecutiveDrops >= DROP_CIRCUIT) {
+              // fail-closed: не «молча» проглатываем весь топик при PG/disk outage
+              throw new Error(
+                `archiver: ${consecutiveDrops} consecutive drops (storage likely down) — aborting consumer`,
+              );
+            }
             return;
           }
           // иначе брокер может выкинуть консьюмера из группы за время бэкоффа

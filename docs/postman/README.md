@@ -33,7 +33,7 @@
 
 ### Запросы
 - **System → Health** — живость (No Auth).
-- **System → Stats** — `messages`/`chats`/`processed_events`/`dropped_events` + статус медиа-оффлоада. Только port-forward (через Ingress не публикуется).
+- **System → Stats** — `messages`/`chats`/`processed_events`/`dropped_events`/`consecutive_drops` + статус медиа-оффлоада. Только port-forward (через Ingress не публикуется).
 - **Search → Search history** — `?q=…`; опциональные `chat_id`/`session_id` выключены по умолчанию — включи во вкладке Params.
 - **Backfill → Start** — POST; только port-forward (через Ingress не публикуется). В теле задай `gateway_url`/`token`/`session_id` (переменные `gatewayUrl`/`gatewayToken`/`sessionId`). `token` в теле — это Bearer **гейтвея** (read), не архиватора. `gateway_url` проходит anti-SSRF-проверку: он должен совпадать с `ARCHIVER_GATEWAY_TEMPLATE` (если задан) либо быть localhost / cluster DNS / private IP — внешний URL гейтвея через Ingress не подойдёт.
 - **Backfill → Status** — GET; стейт in-memory, обнуляется при рестарте пода.
