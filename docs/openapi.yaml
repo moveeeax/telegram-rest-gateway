@@ -7,7 +7,7 @@ info:
     \ — **строки**\n  (JSON number теряет точность в JS).\n- Аутентификация: `Authorization: Bearer <token>`\
     \ на всех путях, кроме `/v1/health`,\n  `/v1/ready` и `/ui`.\n- Отправка сообщения возвращает `202`\
     \ с временным id; финальный id приходит апдейтом\n  `updateMessageSendSucceeded` по WebSocket `/v1/updates`.\n"
-  version: 1.3.1
+  version: 1.3.2
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT

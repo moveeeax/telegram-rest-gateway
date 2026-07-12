@@ -12,6 +12,7 @@
 #include <exception>
 #include <future>
 #include <map>
+#include <mutex>
 #include <string>
 
 namespace tgw::util {
@@ -64,6 +65,19 @@ Endpoint parseEndpoint(const std::string& endpoint, const std::string& vhost_pre
     return Endpoint{scheme + "://" + hostport, hostport};
 }
 
+// Один долгоживущий loop-поток на ВСЕ S3-запросы. Создаётся лениво при первом вызове и
+// живёт до конца процесса. Раньше на каждый запрос создавался и тут же сносился отдельный
+// EventLoopThread — teardown loop'а при ещё живом HttpClient / in-flight запросе портил
+// кучу (heap corruption "malloc(): unsorted double linked list corrupted", креши на amd64).
+// Собственный loop (независимый от главного loop'а Drogon) остаётся доступным и до app().run(),
+// и после остановки — как и требуется для restore на старте и push на shutdown.
+trantor::EventLoop* s3Loop() {
+    static trantor::EventLoopThread thread("s3-client");
+    static std::once_flag once;
+    std::call_once(once, [] { thread.run(); });
+    return thread.getLoop();
+}
+
 }  // namespace
 
 S3Client::Result S3Client::send(const std::string& method, std::string_view body) const try {
@@ -96,21 +110,19 @@ S3Client::Result S3Client::send(const std::string& method, std::string_view body
         req->setBody(std::string(body));
     }
 
-    // ВАЖНО: send() вызывается на старте (до app().run()) и на shutdown (после остановки loop),
-    // когда главного event-loop Drogon нет. Синхронный HttpClient::sendRequest в этих точках
-    // завис бы навсегда. Поэтому крутим запрос на собственном коротком EventLoopThread.
-    trantor::EventLoopThread loop_thread;
-    loop_thread.run();
-    auto client = drogon::HttpClient::newHttpClient(ep.base, loop_thread.getLoop());
+    // send() вызывается на старте (до app().run()) и на shutdown (после остановки главного
+    // loop'а Drogon). Крутим запрос на собственном долгоживущем loop-потоке (s3Loop), который
+    // не зависит от жизненного цикла главного loop'а и НЕ пересоздаётся на каждый запрос.
+    auto client = drogon::HttpClient::newHttpClient(ep.base, s3Loop());
 
-    // promise держим в shared_ptr: колбэк исполняется на loop-потоке, и при размотке стека
-    // (исключение до future.get()) деструктор loop_thread делает quit()+join — колбэк не должен
-    // обращаться к уничтоженному promise на стеке.
+    // promise и client держим в shared_ptr и захватываем в колбэк: колбэк исполняется на
+    // s3-loop и обязан пережить in-flight запрос, даже если send() уже вышел по таймауту
+    // (иначе HttpClient уничтожится из-под работающего на нём запроса).
     auto promise = std::make_shared<std::promise<Result>>();
     auto future = promise->get_future();
     client->sendRequest(
         req,
-        [promise](drogon::ReqResult result, const drogon::HttpResponsePtr& resp) {
+        [promise, client](drogon::ReqResult result, const drogon::HttpResponsePtr& resp) {
             if (result != drogon::ReqResult::Ok || resp == nullptr) {
                 promise->set_value(Result{
                     0, "", "s3 transport error: " + std::to_string(static_cast<int>(result))});
@@ -120,16 +132,15 @@ S3Client::Result S3Client::send(const std::string& method, std::string_view body
         },
         30.0);
 
-    // Страховка от подвисшего loop-потока: 30s — таймаут Drogon (тем же потоком), +5s запас.
-    // Если поток умер, не дождавшись таймаута, future.get() иначе завис бы навсегда.
+    // Страховка: 30s — таймаут Drogon (колбэк придёт с ReqResult::Timeout), +5s запас.
+    // Drogon гарантирует вызов колбэка по таймауту, так что future всегда становится готовым.
     Result out;
     if (future.wait_for(std::chrono::seconds(35)) == std::future_status::timeout) {
         out = Result{0, "", "s3 request timed out (event loop hung)"};
     } else {
         out = future.get();
     }
-    loop_thread.getLoop()->quit();
-    loop_thread.wait();
+    // loop НЕ трогаем — он общий и живёт дальше; client уничтожится штатно (колбэк уже отработал).
     return out;
 } catch (const std::exception& e) {
     return Result{0, "", std::string("s3 request build failed: ") + e.what()};
