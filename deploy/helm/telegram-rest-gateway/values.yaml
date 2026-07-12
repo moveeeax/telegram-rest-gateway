@@ -72,7 +72,9 @@ tolerations: []
 affinity: {}
 
 # Graceful shutdown: под должен успеть закрыть TDLib и запушить сессию в S3.
-terminationGracePeriodSeconds: 30
+# Бюджет worst-case (main.cpp): 10s TDLib close + 10s Kafka flush + 45s ожидание фонового
+# s3-sync (kSendHangTimeout+10) + до 40s финальный PUT (send + один быстрый ретрай) ≈ 105s.
+terminationGracePeriodSeconds: 120
 
 securityContext:
   runAsNonRoot: true

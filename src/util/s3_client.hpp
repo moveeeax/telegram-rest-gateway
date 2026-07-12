@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <string>
 #include <string_view>
 
@@ -36,6 +37,21 @@ class S3Client {
 
     Result get() const;
     Result put(std::string_view body) const;
+
+    // Таймауты send(): kRequestTimeout — таймаут Drogon (колбэк гарантирован),
+    // kSendHangTimeout — страховка wait_for на случай зависшего loop'а (+5s запас).
+    // Внешние ожидания (shutdown в main) должны отталкиваться от kSendHangTimeout,
+    // а не дублировать число.
+    static constexpr std::chrono::seconds kRequestTimeout{30};
+    static constexpr std::chrono::seconds kSendHangTimeout{35};
+
+    // Штатно гасит общий s3 loop-поток (quit+join). Безопасно: внутри есть in-flight guard —
+    // при активных send() отказ (лог WARN), без UAF. Идеальный call site — после финального
+    // push, когда in-flight уже 0. Возвращает true, если s3-потоков гарантированно не осталось
+    // (loop не создавался или штатно погашен); false — жив активный send() или списанный
+    // зависший поток: вызывающему НЕЛЬЗЯ уходить в static destruction (return из main) —
+    // выходить через _Exit.
+    static bool shutdownIdleLoop();
 
    private:
     Result send(const std::string& method, std::string_view body) const;
