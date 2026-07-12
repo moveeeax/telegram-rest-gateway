@@ -23,8 +23,9 @@ S3RestoreResult restoreFromS3(const tgw::util::S3Config& s3, const std::string& 
 bool pushToS3(const tgw::util::S3Config& s3, const std::string& database_dir);
 
 // Планирует периодический push binlog на event-loop Drogon (только при изменении). Возвращает
-// флаг in_flight: перед финальным pushToS3 на shutdown нужно дождаться его сброса в false, иначе
-// запоздавший фоновый PUT может затереть в S3 чистый снапшот старым. no-op если S3 выключен.
+// флаг in_flight: на shutdown main ждёт сброса (hang-timeout send + запас), чтобы фоновый и
+// финальный PUT не шли одновременно; финальный pushToS3 делается ВСЕГДА (на живом loop'е
+// порядок PUT'ов гарантирует общее кэшированное соединение). no-op если S3 off.
 std::shared_ptr<std::atomic_bool> startS3Sync(tgw::util::S3Config s3, std::string database_dir,
                                               int interval_seconds);
 

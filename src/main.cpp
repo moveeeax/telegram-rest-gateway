@@ -12,6 +12,7 @@
 #include "http/metrics_routes.hpp"
 #include "http/routes.hpp"
 #include "http/upload_cleanup.hpp"
+#include "util/s3_client.hpp"
 #include "ws/update_router.hpp"
 #include "ws/updates_ws.hpp"
 #include "ws/ws_registry.hpp"
@@ -23,6 +24,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -42,7 +44,9 @@ constexpr std::uint16_t kDefaultPort = 8080;
 
 // Подкоманда для distroless HEALTHCHECK (нет shell/curl): локальный GET /v1/health.
 // Секретов не требует (Config не грузим), чтобы HEALTHCHECK работал всегда.
-int runHealthcheck() {
+// [[noreturn]]: выходим через _Exit, чтобы не гонять static destruction при намеренно
+// утёкшем EventLoopThread (см. ниже).
+[[noreturn]] void runHealthcheck() {
     std::uint16_t port = kDefaultPort;
     if (const char* env = std::getenv("TGW_LISTEN_PORT")) {
         port = static_cast<std::uint16_t>(std::atoi(env));
@@ -52,7 +56,9 @@ int runHealthcheck() {
     // EventLoopThread. Поток намеренно НЕ останавливаем и не разрушаем (new без delete):
     // quit()+wait() под ещё живым запросом (колбэк не успел за 2500 мс — медленный контейнер)
     // портит кучу — тот же teardown-паттерн, из-за которого util/s3_client перевели на
-    // долгоживущий loop. Процесс сейчас же завершится, поток заберёт ОС.
+    // долгоживущий loop. Завершаемся через _Exit: ОС заберёт потоки, static dtor'ы не трогаем
+    // (иначе ~mutex / Drogon statics могут пересечься с ещё живым s3/healthcheck loop-потоком;
+    // LSan в prod HEALTHCHECK не гоняем).
     auto* loop_thread = new trantor::EventLoopThread("healthcheck");
     loop_thread->run();
     auto client = drogon::HttpClient::newHttpClient("http://127.0.0.1:" + std::to_string(port),
@@ -78,14 +84,32 @@ int runHealthcheck() {
     if (future.wait_for(std::chrono::milliseconds(2500)) == std::future_status::ready) {
         ok = future.get();
     }
-    return ok ? EXIT_SUCCESS : EXIT_FAILURE;
+    // _Exit не флашит stdio: в distroless stdout — не-tty (полная буферизация), без явного
+    // flush диагностика упавшей пробы (LOG_ERROR trantor/drogon) терялась бы.
+    std::fflush(nullptr);
+    std::_Exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
+}
+
+// Единая точка выхода из main() после первого возможного обращения к S3 (все return —
+// через неё). Если s3 loop-поток нельзя гарантированно погасить (активный send() или ранее
+// списанный зависший поток), обычный return прогнал бы static destruction по живому потоку —
+// тот самый класс краша, который здесь чиним. Тогда выходим через _Exit: stdio флашим явно,
+// пропуск деструкторов локалов main безопасен (TDLib закрыт, Kafka сброшена к этому моменту).
+int exitCodeAfterS3(int code) {
+    if (tgw::util::S3Client::shutdownIdleLoop()) {
+        return code;
+    }
+    LOG_WARN << "s3 loop thread not cleanly stopped — exiting via _Exit "
+                "(skipping static destruction)";
+    std::fflush(nullptr);
+    std::_Exit(code);
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--healthcheck") {
-        return runHealthcheck();
+        runHealthcheck();  // noreturn (_Exit)
     }
 
     tgw::config::Config config;
@@ -108,6 +132,8 @@ int main(int argc, char** argv) {
 
     // S3-хранилище сессии: если сконфигурировано и локального binlog нет — тянем из S3 ДО
     // создания клиента (§stateless). Пишет td.binlog, дальше restoreSession увидит existing.
+    // С этого места любой выход из main — через exitCodeAfterS3 (гасит idle s3-loop; при
+    // зависшем/утёкшем потоке уходит в _Exit вместо static destruction).
     switch (tgw::auth::restoreFromS3(config.s3, config.database_directory)) {
         case tgw::auth::S3RestoreResult::Restored:
             LOG_INFO << "session restored from S3 (" << config.s3.bucket << "/" << config.s3.key
@@ -121,7 +147,7 @@ int main(int argc, char** argv) {
             break;
         case tgw::auth::S3RestoreResult::Error:
             std::cerr << "failed to restore session from S3\n";
-            return EXIT_FAILURE;
+            return exitCodeAfterS3(EXIT_FAILURE);
         case tgw::auth::S3RestoreResult::NotConfigured:
             break;  // S3 не используется — обычный путь
     }
@@ -136,7 +162,7 @@ int main(int argc, char** argv) {
             break;
         case tgw::auth::RestoreResult::Error:
             std::cerr << "invalid TGW_SESSION (bad base64 or write failure)\n";
-            return EXIT_FAILURE;
+            return exitCodeAfterS3(EXIT_FAILURE);
         case tgw::auth::RestoreResult::NoSession:
             break;  // чистый старт — логин через /v1/auth/*
     }
@@ -231,23 +257,37 @@ int main(int argc, char** argv) {
 
     // Финальный push сессии в S3: binlog закрыт TDLib и консистентен (no-op если S3 выключен).
     if (config.s3.enabled()) {
-        // Дожидаемся незавершённого фонового sync-PUT, иначе он мог бы затереть чистый снапшот
-        // старым. Loop уже остановлен, новые sync-задачи не спаунятся.
-        for (int i = 0; i < 200 && s3_sync_in_flight->load(std::memory_order_acquire); ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));  // максимум ~10 с
+        // Дожидаемся незавершённого фонового sync-PUT. Loop Drogon уже остановлен — новых
+        // runEvery не будет, но detached-поток мог стартовать до quit. Бюджет = hang-timeout
+        // send() + запас: до send() detached-поток ещё спаунится, читает и хэширует binlog,
+        // так что сам kSendHangTimeout верхней границей всего цикла не является.
+        constexpr auto kBgSyncWait =
+            tgw::util::S3Client::kSendHangTimeout + std::chrono::seconds(10);
+        constexpr auto kPoll = std::chrono::milliseconds(50);
+        std::chrono::milliseconds waited{0};
+        while (s3_sync_in_flight->load(std::memory_order_acquire) && waited < kBgSyncWait) {
+            std::this_thread::sleep_for(kPoll);
+            waited += kPoll;
         }
+        if (s3_sync_in_flight->load(std::memory_order_acquire)) {
+            LOG_ERROR << "background s3 sync still in flight after "
+                      << std::chrono::duration_cast<std::chrono::seconds>(kBgSyncWait).count()
+                      << "s (likely hung s3 loop) — pushing final snapshot anyway";
+        }
+        // Финальный push делаем ВСЕГДА — пропуск оставлял бы в S3 устаревший снапшот при
+        // следующем cold start. Порядок относительно фонового PUT безопасен: на живом loop'е
+        // оба идут через один кэшированный клиент (одно соединение — порядок гарантирован);
+        // обогнать может только брошенный PUT списанного зависшего контекста на другом
+        // соединении — от этого защищает лишь versioning бакета (send() пишет об этом ERROR
+        // при retire). Весь бюджет shutdown согласован с terminationGracePeriodSeconds
+        // в deploy/helm (см. values.yaml).
         if (tgw::auth::pushToS3(config.s3, config.database_directory)) {
             LOG_INFO << "session pushed to S3 on shutdown";
         } else {
             LOG_ERROR << "failed to push session to S3 on shutdown";
         }
-        // Штатный путь: S3-запросов больше нет — гасим s3 loop-поток, чтобы он не жил во время
-        // static destruction после return. Если sync-PUT так и не завершился за ~10 с выше,
-        // поток может ещё держать запрос — тогда loop не трогаем (teardown под живым запросом
-        // портит кучу), он утечёт вместе с процессом.
-        if (!s3_sync_in_flight->load(std::memory_order_acquire)) {
-            tgw::util::S3Client::shutdownIdleLoop();
-        }
     }
-    return EXIT_SUCCESS;
+    // Гасит idle s3-loop; при зависшем/утёкшем s3-потоке или незавершённом send() уходит в
+    // _Exit — обычный return прогнал бы static destruction по живому потоку.
+    return exitCodeAfterS3(EXIT_SUCCESS);
 }
