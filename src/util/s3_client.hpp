@@ -37,6 +37,11 @@ class S3Client {
     Result get() const;
     Result put(std::string_view body) const;
 
+    // Штатно гасит общий s3 loop-поток (quit+join). Вызывать ТОЛЬКО когда гарантированно нет
+    // in-flight S3-запросов (последним действием main() после финального push): teardown loop'а
+    // под живым запросом портит кучу. No-op, если loop не создавался или уже списан как зависший.
+    static void shutdownIdleLoop();
+
    private:
     Result send(const std::string& method, std::string_view body) const;
     S3Config config_;

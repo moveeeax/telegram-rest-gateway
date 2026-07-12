@@ -5,6 +5,7 @@
 #include <drogon/HttpClient.h>
 #include <drogon/HttpRequest.h>
 #include <trantor/net/EventLoopThread.h>
+#include <trantor/utils/Logger.h>
 
 #include <chrono>
 #include <cstdio>
@@ -65,17 +66,45 @@ Endpoint parseEndpoint(const std::string& endpoint, const std::string& vhost_pre
     return Endpoint{scheme + "://" + hostport, hostport};
 }
 
-// Один долгоживущий loop-поток на ВСЕ S3-запросы. Создаётся лениво при первом вызове и
-// живёт до конца процесса. Раньше на каждый запрос создавался и тут же сносился отдельный
+// Один долгоживущий IO-контекст (loop-поток + кэш HttpClient по endpoint'у) на ВСЕ
+// S3-запросы. Раньше на каждый запрос создавался и тут же сносился отдельный
 // EventLoopThread — teardown loop'а при ещё живом HttpClient / in-flight запросе портил
 // кучу (heap corruption "malloc(): unsorted double linked list corrupted", креши на amd64).
 // Собственный loop (независимый от главного loop'а Drogon) остаётся доступным и до app().run(),
 // и после остановки — как и требуется для restore на старте и push на shutdown.
-trantor::EventLoop* s3Loop() {
-    static trantor::EventLoopThread thread("s3-client");
-    static std::once_flag once;
-    std::call_once(once, [] { thread.run(); });
-    return thread.getLoop();
+//
+// Контекст НИКОГДА не разрушается (new без delete — намеренно): деструктор EventLoopThread
+// делает quit()+join, а на выходе процесса detached-поток s3-sync может ещё держать
+// in-flight PUT (main ждёт ~10 с, send() блокируется до 35 с) — это был бы тот же
+// teardown-под-живым-запросом, только при static destruction. Если loop завис (send() вышел
+// по 35-секундной страховке), контекст списывается (retireS3Io) и следующий запрос получает
+// свежий; старый утекает — один поток на инцидент, зато S3 не отравлен навсегда и никто
+// не делает join зависшего потока.
+struct S3Io {
+    trantor::EventLoopThread thread{"s3-client"};
+    std::mutex mu;
+    std::map<std::string, drogon::HttpClientPtr> clients;  // key: base URL endpoint'а
+};
+
+std::mutex g_s3_io_mu;
+S3Io* g_s3_io = nullptr;
+
+S3Io* acquireS3Io() {
+    const std::lock_guard lock(g_s3_io_mu);
+    if (g_s3_io == nullptr) {
+        g_s3_io = new S3Io;
+        g_s3_io->thread.run();
+    }
+    return g_s3_io;
+}
+
+// Списывает зависший контекст. Сравнение по указателю — чтобы два конкурентных таймаута
+// не списали и свежий контекст тоже.
+void retireS3Io(S3Io* io) {
+    const std::lock_guard lock(g_s3_io_mu);
+    if (g_s3_io == io) {
+        g_s3_io = nullptr;
+    }
 }
 
 }  // namespace
@@ -111,18 +140,29 @@ S3Client::Result S3Client::send(const std::string& method, std::string_view body
     }
 
     // send() вызывается на старте (до app().run()) и на shutdown (после остановки главного
-    // loop'а Drogon). Крутим запрос на собственном долгоживущем loop-потоке (s3Loop), который
-    // не зависит от жизненного цикла главного loop'а и НЕ пересоздаётся на каждый запрос.
-    auto client = drogon::HttpClient::newHttpClient(ep.base, s3Loop());
+    // loop'а Drogon). Крутим запрос на собственном долгоживущем loop-потоке, который не
+    // зависит от жизненного цикла главного loop'а. HttpClient кэшируется по endpoint'у:
+    // keep-alive-соединение вместо TCP+TLS-рукопожатия на каждый запрос.
+    S3Io* io = acquireS3Io();
+    drogon::HttpClientPtr client;
+    {
+        const std::lock_guard lock(io->mu);
+        auto& cached = io->clients[ep.base];
+        if (cached == nullptr) {
+            cached = drogon::HttpClient::newHttpClient(ep.base, io->thread.getLoop());
+        }
+        client = cached;
+    }
 
-    // promise и client держим в shared_ptr и захватываем в колбэк: колбэк исполняется на
-    // s3-loop и обязан пережить in-flight запрос, даже если send() уже вышел по таймауту
-    // (иначе HttpClient уничтожится из-под работающего на нём запроса).
+    // promise держим в shared_ptr: колбэк исполняется на s3-loop и обязан пережить in-flight
+    // запрос, даже если send() уже вышел по таймауту. client в колбэк НЕ захватываем — его
+    // держит io->clients (иначе цикл владения: HttpClient хранит колбэк, владеющий им самим,
+    // и при невызванном колбэке клиент с копией binlog в теле запроса тёк бы на каждой попытке).
     auto promise = std::make_shared<std::promise<Result>>();
     auto future = promise->get_future();
     client->sendRequest(
         req,
-        [promise, client](drogon::ReqResult result, const drogon::HttpResponsePtr& resp) {
+        [promise](drogon::ReqResult result, const drogon::HttpResponsePtr& resp) {
             if (result != drogon::ReqResult::Ok || resp == nullptr) {
                 promise->set_value(Result{
                     0, "", "s3 transport error: " + std::to_string(static_cast<int>(result))});
@@ -136,14 +176,30 @@ S3Client::Result S3Client::send(const std::string& method, std::string_view body
     // Drogon гарантирует вызов колбэка по таймауту, так что future всегда становится готовым.
     Result out;
     if (future.wait_for(std::chrono::seconds(35)) == std::future_status::timeout) {
+        // Сюда попадаем только если loop-поток завис: Drogon обязан был отдать колбэк на 30 с.
+        // Списываем контекст — следующий запрос пойдёт на свежем loop'е, а не в зависший.
+        retireS3Io(io);
+        LOG_ERROR << "s3 event loop hung (no callback in 35s): retiring io context, "
+                     "one thread intentionally leaked";
         out = Result{0, "", "s3 request timed out (event loop hung)"};
     } else {
         out = future.get();
     }
-    // loop НЕ трогаем — он общий и живёт дальше; client уничтожится штатно (колбэк уже отработал).
     return out;
 } catch (const std::exception& e) {
     return Result{0, "", std::string("s3 request build failed: ") + e.what()};
+}
+
+void S3Client::shutdownIdleLoop() {
+    S3Io* io = nullptr;
+    {
+        const std::lock_guard lock(g_s3_io_mu);
+        io = g_s3_io;
+        g_s3_io = nullptr;
+    }
+    // Порядок разрушения членов S3Io (обратный объявлению) здесь важен: сначала clients
+    // (HttpClient'ам ещё нужен живой loop), потом thread (~EventLoopThread = quit+join).
+    delete io;
 }
 
 S3Client::Result S3Client::get() const {

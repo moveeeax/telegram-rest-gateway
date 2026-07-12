@@ -49,20 +49,26 @@ int runHealthcheck() {
     }
     // Здесь app().run() не вызывается, главного event-loop нет — синхронный sendRequest завис бы
     // навсегда (и HEALTHCHECK стабильно валился по таймауту). Крутим запрос на собственном
-    // коротком EventLoopThread — тот же паттерн, что в util/s3_client.
-    trantor::EventLoopThread loop_thread;
-    loop_thread.run();
+    // EventLoopThread. Поток намеренно НЕ останавливаем и не разрушаем (new без delete):
+    // quit()+wait() под ещё живым запросом (колбэк не успел за 2500 мс — медленный контейнер)
+    // портит кучу — тот же teardown-паттерн, из-за которого util/s3_client перевели на
+    // долгоживущий loop. Процесс сейчас же завершится, поток заберёт ОС.
+    auto* loop_thread = new trantor::EventLoopThread("healthcheck");
+    loop_thread->run();
     auto client = drogon::HttpClient::newHttpClient("http://127.0.0.1:" + std::to_string(port),
-                                                    loop_thread.getLoop());
+                                                    loop_thread->getLoop());
     auto req = drogon::HttpRequest::newHttpRequest();
     req->setMethod(drogon::Get);
     req->setPath("/v1/health");
 
     auto promise = std::make_shared<std::promise<bool>>();
     auto future = promise->get_future();
+    // client захвачен в колбэк как страховка на случай выхода по wait_for раньше ответа:
+    // HttpClientImpl и сам держит shared_from_this на время запроса, но полагаться только
+    // на эту внутреннюю деталь drogon не хотим.
     client->sendRequest(
         req,
-        [promise](drogon::ReqResult result, const drogon::HttpResponsePtr& resp) {
+        [promise, client](drogon::ReqResult result, const drogon::HttpResponsePtr& resp) {
             promise->set_value(result == drogon::ReqResult::Ok && resp != nullptr &&
                                resp->statusCode() == drogon::k200OK);
         },
@@ -72,8 +78,6 @@ int runHealthcheck() {
     if (future.wait_for(std::chrono::milliseconds(2500)) == std::future_status::ready) {
         ok = future.get();
     }
-    loop_thread.getLoop()->quit();
-    loop_thread.wait();
     return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
@@ -236,6 +240,13 @@ int main(int argc, char** argv) {
             LOG_INFO << "session pushed to S3 on shutdown";
         } else {
             LOG_ERROR << "failed to push session to S3 on shutdown";
+        }
+        // Штатный путь: S3-запросов больше нет — гасим s3 loop-поток, чтобы он не жил во время
+        // static destruction после return. Если sync-PUT так и не завершился за ~10 с выше,
+        // поток может ещё держать запрос — тогда loop не трогаем (teardown под живым запросом
+        // портит кучу), он утечёт вместе с процессом.
+        if (!s3_sync_in_flight->load(std::memory_order_acquire)) {
+            tgw::util::S3Client::shutdownIdleLoop();
         }
     }
     return EXIT_SUCCESS;
