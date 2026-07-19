@@ -44,7 +44,7 @@ Dockerfile.builder      — образ тулчейн+TDLib+Drogon (пины TDL
 Dockerfile              — образ сервиса (FROM builder) → distroless
 ```
 
-CI/CD и список переменных GitLab — [`docs/CICD.md`](docs/CICD.md).
+CI/CD — GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): lint (clang-format), suppressions-guard, кэшируемый через GHCR builder-образ (TDLib+Drogon), тесты под ASan/TSan, clang-tidy и Release-сборка сервиса. Историческая заметка о переменных прежнего пайплайна — [`docs/CICD.md`](docs/CICD.md).
 
 ## Сборка (в контейнере)
 
