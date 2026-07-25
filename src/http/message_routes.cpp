@@ -245,6 +245,10 @@ api::object_ptr<api::Function> makeLoadChats(std::int32_t limit) {
 
 }  // namespace
 
+// ВЕЗДЕ, где читаем тело: json->isObject() ПЕРЕД operator[](const char*)/isMember. jsoncpp
+// разбирает `[]`, `"x"`, `5` как валидный документ, а Value::operator[](const char*) и
+// Value::isMember на не-объекте кидают Json::LogicError. Обработчики registerHandler у Drogon
+// (HttpControllerBinder) try/catch не оборачивают — исключение ушло бы наружу вместо честного 400.
 void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                            const std::string& upload_dir) {
     auto& app = drogon::app();
@@ -346,7 +350,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 return;
             }
             auto json = req->getJsonObject();
-            if (json == nullptr || !(*json)["text"].isString() ||
+            if (json == nullptr || !json->isObject() || !(*json)["text"].isString() ||
                 (*json)["text"].asString().empty()) {
                 cb(serviceError("VALIDATION_ERROR", "field 'text' is required",
                                 drogon::k400BadRequest));
@@ -441,7 +445,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 return;
             }
             auto json = req->getJsonObject();
-            if (json == nullptr || !(*json)["message_ids"].isArray()) {
+            if (json == nullptr || !json->isObject() || !(*json)["message_ids"].isArray()) {
                 cb(serviceError("VALIDATION_ERROR", "field 'message_ids' (array) is required",
                                 drogon::k400BadRequest));
                 return;
@@ -654,7 +658,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 return;
             }
             auto json = req->getJsonObject();
-            if (json == nullptr || !(*json)["text"].isString() ||
+            if (json == nullptr || !json->isObject() || !(*json)["text"].isString() ||
                 (*json)["text"].asString().empty()) {
                 cb(serviceError("VALIDATION_ERROR", "field 'text' is required",
                                 drogon::k400BadRequest));
@@ -701,7 +705,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 return;
             }
             auto json = req->getJsonObject();
-            if (json == nullptr || !(*json)["message_ids"].isArray() ||
+            if (json == nullptr || !json->isObject() || !(*json)["message_ids"].isArray() ||
                 (*json)["message_ids"].empty()) {
                 cb(serviceError("VALIDATION_ERROR", "field 'message_ids' is required",
                                 drogon::k400BadRequest));
@@ -745,7 +749,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
             }
             auto json = req->getJsonObject();
             std::int64_t fromChatId = 0;
-            if (json == nullptr || !(*json)["from_chat_id"].isString() ||
+            if (json == nullptr || !json->isObject() || !(*json)["from_chat_id"].isString() ||
                 !parseId((*json)["from_chat_id"].asString(), fromChatId) ||
                 !(*json)["message_ids"].isArray() || (*json)["message_ids"].empty()) {
                 cb(serviceError("VALIDATION_ERROR",
@@ -907,7 +911,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 return;
             }
             auto body = req->getJsonObject();
-            if (body == nullptr || !(*body)["emoji"].isString() ||
+            if (body == nullptr || !body->isObject() || !(*body)["emoji"].isString() ||
                 (*body)["emoji"].asString().empty()) {
                 cb(serviceError("VALIDATION_ERROR", "field 'emoji' is required",
                                 drogon::k400BadRequest));
@@ -937,7 +941,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 return;
             }
             auto body = req->getJsonObject();
-            if (body == nullptr || !(*body)["emoji"].isString() ||
+            if (body == nullptr || !body->isObject() || !(*body)["emoji"].isString() ||
                 (*body)["emoji"].asString().empty()) {
                 cb(serviceError("VALIDATION_ERROR", "field 'emoji' is required",
                                 drogon::k400BadRequest));

@@ -102,10 +102,13 @@ void launchAuthMutation(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
 }
 
 // Достаёт строковое поле из JSON-тела; при отсутствии/пустоте кладёт в err.
+// isObject() обязателен ПЕРЕД isMember/operator[]: тело вида `[]` или `5` тоже разбирается
+// jsoncpp успешно, а isMember/operator[] на не-объекте кидают Json::LogicError.
 bool jsonString(const drogon::HttpRequestPtr& req, const char* field, std::string& out,
                 std::string& err) {
     auto json = req->getJsonObject();
-    if (json == nullptr || !json->isMember(field) || !(*json)[field].isString()) {
+    if (json == nullptr || !json->isObject() || !json->isMember(field) ||
+        !(*json)[field].isString()) {
         err = std::string("field '") + field + "' is required";
         return false;
     }

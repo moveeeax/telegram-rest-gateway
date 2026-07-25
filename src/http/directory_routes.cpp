@@ -152,7 +152,7 @@ void registerDirectoryRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_
         "/v1/chats/join",
         [&bridge, client_id](const drogon::HttpRequestPtr& req, HttpCallback&& cb) {
             auto json = req->getJsonObject();
-            if (json == nullptr || !(*json)["invite_link"].isString() ||
+            if (json == nullptr || !json->isObject() || !(*json)["invite_link"].isString() ||
                 (*json)["invite_link"].asString().empty()) {
                 cb(serviceError("VALIDATION_ERROR", "field 'invite_link' is required",
                                 drogon::k400BadRequest));

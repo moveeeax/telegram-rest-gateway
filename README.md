@@ -103,7 +103,8 @@ volume. Включается только при заполненных `bucket`
 **Scoped-токены.** Строка `BEARER_TOKENS` вида `tgw_xxx read` выдаёт токен только на чтение
 (GET + WS), `read,write` — плюс мутации, но без `/v1/auth/*` (логин и session export — только
 `admin`/полный токен). Недостаточный скоуп → `403 INSUFFICIENT_SCOPE`. Агентам (MCP) выдавайте
-минимально необходимый скоуп.
+минимально необходимый скоуп. Маршруты Drogon матчатся без учёта регистра, поэтому и проверка
+префикса `/v1/auth/` регистронезависима: `GET /V1/Auth/session/export` тоже требует `admin`.
 
 Секреты (`api_id`, `api_hash`, `database_encryption_key`, Bearer-токены, S3 credentials) — только
 через `*_FILE` / secret manager, никогда в образ/env напрямую.
