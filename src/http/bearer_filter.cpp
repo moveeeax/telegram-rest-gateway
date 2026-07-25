@@ -1,6 +1,7 @@
 #include "http/bearer_filter.hpp"
 
 #include "auth/token_store.hpp"
+#include "http/scope_policy.hpp"
 
 #include <drogon/drogon.h>
 
@@ -10,17 +11,11 @@
 namespace tgw::http {
 namespace {
 
-// Требуемый скоуп по маршруту: /v1/auth/* — admin (логин, session export = захват аккаунта);
-// GET/HEAD — read; остальные методы (мутации) — write.
+// Политика скоупов живёт в http/scope_policy.hpp (чистая функция, покрыта юнит-тестом).
+// Здесь — только извлечение пути и метода из запроса.
 tgw::auth::Scope requiredScope(const drogon::HttpRequestPtr& req) {
-    const std::string& path = req->path();
-    if (path.rfind("/v1/auth/", 0) == 0) {
-        return tgw::auth::Scope::Admin;
-    }
-    if (req->method() == drogon::Get || req->method() == drogon::Head) {
-        return tgw::auth::Scope::Read;
-    }
-    return tgw::auth::Scope::Write;
+    const bool is_read_method = (req->method() == drogon::Get || req->method() == drogon::Head);
+    return requiredScopeFor(req->path(), is_read_method);
 }
 
 drogon::HttpResponsePtr errorResponse(const char* code, const char* message,

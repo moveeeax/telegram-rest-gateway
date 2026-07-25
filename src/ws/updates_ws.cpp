@@ -86,6 +86,12 @@ void UpdatesWs::handleNewMessage(const drogon::WebSocketConnectionPtr& conn, std
     if (!reader->parse(message.data(), message.data() + message.size(), &frame, &errs)) {
         return;
     }
+    // Топ-левел ДОЛЖЕН быть объектом: у jsoncpp Value::operator[](const char*) на массиве/скаляре
+    // кидает Json::LogicError, а колбэк WS-сообщения Drogon ничем не обёрнут — исключение ушло бы
+    // в event-loop и убило процесс. Тем же соображением asString() зовём только для строки.
+    if (!frame.isObject() || !frame["type"].isString()) {
+        return;
+    }
     if (frame["type"].asString() != "subscribe" || !frame["update_types"].isArray()) {
         return;
     }
