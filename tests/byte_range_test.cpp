@@ -117,6 +117,5 @@ TEST(ByteRange, TrailingGarbageAfterDigitsIsRejected) {
 TEST(ByteRange, OverflowingNumberIsRejectedNotThrown) {
     std::uintmax_t offset = 0;
     std::uintmax_t length = 0;
-    EXPECT_FALSE(
-        parseByteRange("bytes=99999999999999999999999999-", kFileSize, offset, length));
+    EXPECT_FALSE(parseByteRange("bytes=99999999999999999999999999-", kFileSize, offset, length));
 }
