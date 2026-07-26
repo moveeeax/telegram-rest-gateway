@@ -2,6 +2,7 @@
 #include "bridge/td_bridge.hpp"
 #include "dto/file_dto.hpp"
 #include "dto/message_dto.hpp"
+#include "http/byte_range.hpp"
 #include "http/routes.hpp"
 
 #include <drogon/drogon.h>
@@ -34,49 +35,7 @@ constexpr char kBearerFilter[] = "tgw::http::BearerAuthFilter";
 // formattedText из text (+опц. parse_mode "markdown"|"html"). parseTextEntities — offline-метод
 // TDLib: исполняется синхронно через ClientManager::execute, event-loop не задействован.
 // При ошибке разметки/неизвестном режиме возвращает nullptr и заполняет err.
-// Разбор "Range: bytes=a-b" (одиночный диапазон). true — диапазон валиден и заполнен.
-bool parseByteRange(const std::string& header, std::uintmax_t file_size, std::uintmax_t& offset,
-                    std::uintmax_t& length) {
-    constexpr std::string_view kPrefix = "bytes=";
-    if (header.size() <= kPrefix.size() || header.compare(0, kPrefix.size(), kPrefix) != 0 ||
-        file_size == 0) {
-        return false;
-    }
-    const std::string spec = header.substr(kPrefix.size());
-    const auto dash = spec.find('-');
-    if (dash == std::string::npos || spec.find(',') != std::string::npos) {
-        return false;  // multi-range не поддерживаем
-    }
-    const std::string from = spec.substr(0, dash);
-    const std::string to = spec.substr(dash + 1);
-    try {
-        if (from.empty()) {  // суффикс: bytes=-N (последние N байт)
-            if (to.empty()) {
-                return false;
-            }
-            const std::uintmax_t n = std::stoull(to);
-            if (n == 0) {
-                return false;
-            }
-            length = std::min<std::uintmax_t>(n, file_size);
-            offset = file_size - length;
-            return true;
-        }
-        offset = std::stoull(from);
-        if (offset >= file_size) {
-            return false;
-        }
-        const std::uintmax_t last =
-            to.empty() ? (file_size - 1) : std::min<std::uintmax_t>(std::stoull(to), file_size - 1);
-        if (last < offset) {
-            return false;
-        }
-        length = last - offset + 1;
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
-}
+// (Разбор Range-заголовка вынесен в http/byte_range.hpp — чистая функция, покрыта тестом.)
 
 // Idempotency-Key (decision C5): LRU-кэш «ключ -> завершённый ответ» для безопасных ретраев
 // отправки. Ключ занятый, но без ответа (запрос в полёте) -> 409 IDEMPOTENCY_KEY_REUSED.
@@ -551,7 +510,11 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
             }
             namespace fs = std::filesystem;
             std::string name = fs::path(req->getParameter("file_name")).filename().string();
-            if (name.empty()) {
+            // filename() отрезает каталоги ("../../etc/passwd" -> "passwd"), НО ".." само по
+            // себе является допустимым результатом filename() (последний компонент "..") — имя
+            // "?file_name=.." прошло бы дальше как есть и dir/".." резолвился бы в upload_dir,
+            // т.е. запись пошла бы поверх родительского каталога вместо файла внутри dir.
+            if (name.empty() || name == "." || name == "..") {
                 name = "upload.bin";
             }
             static std::atomic<std::uint64_t> counter{0};
@@ -568,6 +531,17 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
             {
                 std::ofstream out(path, std::ios::binary);
                 out.write(req->bodyData(), static_cast<std::streamsize>(req->bodyLength()));
+                // Диск полон / нет прав / путь не открылся: молчаливое продолжение отправило бы
+                // TDLib пустой/усечённый файл, и клиент получил бы вводящую в заблуждение
+                // TELEGRAM_ERROR вместо честной ошибки на нашей стороне. Чистим недописанный
+                // upload-каталог сразу — иначе он висел бы до TTL-очистки (upload_cleanup, 1ч).
+                if (!out) {
+                    std::error_code cleanup_ec;
+                    fs::remove_all(dir, cleanup_ec);
+                    cb(serviceError("INTERNAL", "failed to write uploaded file",
+                                    drogon::k500InternalServerError));
+                    return;
+                }
             }
 
             // ?type=document|photo|video|voice|audio — как отправить файл (default document).
