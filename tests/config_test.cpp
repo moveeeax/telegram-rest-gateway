@@ -172,11 +172,43 @@ TEST_F(ConfigTest, NonNumericApiIdThrowsNamedError) {
     }
 }
 
-// Значение вне диапазона типа -> ошибка (раньше 99999 тихо обрезался до uint16_t = 34463).
-TEST_F(ConfigTest, OutOfRangeValueThrows) {
+// Значение вне диапазона типа -> ИМЕНОВАННАЯ ошибка (раньше 99999 тихо обрезался до uint16_t).
+TEST_F(ConfigTest, OutOfRangeValueThrowsNamedError) {
     setRequired();
     set("TGW_LISTEN_PORT", "99999");  // > 65535
-    EXPECT_THROW(Config::load(), std::runtime_error);
+    try {
+        Config::load();
+        FAIL() << "ожидалось исключение на выходящем за диапазон TGW_LISTEN_PORT";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("TGW_LISTEN_PORT"), std::string::npos);
+    }
+}
+
+// Границы uint16_t для TGW_LISTEN_PORT: 65535 валиден; 65536 — именованная ошибка; 0 принимается
+// (from_chars парсит "0" в 0 — валидное значение типа; семантику «порт 0» load() не трактует,
+// фиксируем фактическое поведение: не отвергает).
+TEST_F(ConfigTest, ListenPortBoundaries) {
+    setRequired();
+
+    set("TGW_LISTEN_PORT", "65535");
+    {
+        const Config c = Config::load();
+        EXPECT_EQ(c.listen_port, 65535);
+    }
+
+    set("TGW_LISTEN_PORT", "65536");
+    try {
+        Config::load();
+        FAIL() << "65536 вне диапазона uint16_t — ожидалась ошибка";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("TGW_LISTEN_PORT"), std::string::npos);
+    }
+
+    set("TGW_LISTEN_PORT", "0");
+    {
+        const Config c = Config::load();
+        EXPECT_EQ(c.listen_port, 0);  // 0 — валидный uint16_t; load() не отвергает и не трактует
+    }
 }
 
 // Валидные числовые значения парсятся без изменения поведения.

@@ -1,6 +1,7 @@
 #include "auth/token_store.hpp"
 #include "http/bearer_filter.hpp"
 #include "http/http_helpers.hpp"
+#include "http/route_table.hpp"
 
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
@@ -13,20 +14,24 @@
 
 namespace td_api = td::td_api;
 
-// ЗАМЕЧАНИЕ О ПОДХОДЕ (пункт 3.7). Полноценный интеграционный smoke с живым drogon::app().run()
-// на эфемерном порту НЕ реализован сознательно, а не по недосмотру:
-//   * CI собирает и гоняет под ASan/TSan ТОЛЬКО таргет tgw_unit_tests (см. .github/workflows/ci.yml
-//     `--target tgw_unit_tests`), отдельный smoke-бинарь просто не запустился бы;
-//   * значит живой сервер пришлось бы поднимать внутри общего тест-процесса — под TSan, где
-//     cmake/suppressions/tsan.supp покрывает лишь libcrypto/libssl, любые внутренние гонки drogon
-//     покрасили бы ВЕСЬ suite, а зависший app().run()/утечка на quit() (LSan) уронили бы его же;
-//   * drogon::app() — синглтон с однократным run(): запуск в общем бинаре с прочими тестами хрупок
-//     и не поддаётся локальной верификации в этой среде.
-// Поэтому пункты (а)/(в) закрыты максимально близкой сетенезависимой альтернативой: гоняем
-// НАСТОЯЩИЙ BearerAuthFilter (тот же класс, что вешается на /v1/* в routes.cpp) на синтетических
-// запросах и проверяем реальный маппинг ошибок TDLib. Незакрытый остаток: (б) публичность
-// /v1/health — это факт регистрации в routes.cpp (health вешается БЕЗ kBearerFilter), проверяемый
-// только живым сервером; здесь он не покрыт.
+// ЗАМЕЧАНИЕ О ПОДХОДЕ (пункт 3.7, после ревью).
+// Целевая регрессия — «добавили /v1-роут в routes.cpp и забыли навесить {kBearerFilter}» —
+// закрыта НЕ этим тестом, а КОНСТРУКЦИЕЙ: registerRoutes регистрирует пути и constraints из
+// http/route_table.hpp (единый источник истины), поле requires_auth автоматически добавляет
+// фильтр, строка kBearerFilter в routes.cpp больше не пишется руками. Забыть фильтр там нельзя.
+// Тест ниже итерирует ту же таблицу kRoutesTable и проверяет, что логика фильтра
+// (requiredScopeFor в BearerAuthFilter) СОГЛАСОВАНА с таблицей: каждый requires_auth-путь без
+// токена настоящий фильтр отклоняет 401. Это ловит расхождение таблицы и логики фильтра; это НЕ
+// проверка факта навешивания (его гарантирует конструкция) и не запуск сети.
+//
+// Живой drogon::app().run() не поднимается сознательно: CI собирает и гоняет под ASan/TSan только
+// tgw_unit_tests (--target tgw_unit_tests), а поднимать сервер в общем тест-процессе под TSan (где
+// tsan.supp покрывает лишь libcrypto/libssl) хрупко и невозможно верифицировать в этой среде.
+//
+// ОБЛАСТЬ: таблица и этот тест покрывают маршруты routes.cpp (системные + вся auth-поверхность +
+// /v1/me). Ресурсные маршруты message_routes.cpp/directory_routes.cpp регистрируются прежним
+// способом и в таблицу НЕ включены (иначе тест давал бы по ним ложно-зелёный результат) — их
+// миграция в таблицу отдельный follow-up.
 
 namespace {
 
@@ -64,53 +69,49 @@ FilterOutcome runFilter(const std::string& path, drogon::HttpMethod method,
 
 }  // namespace
 
-// (а) Каждый защищённый /v1/* маршрут без токена отвечает 401 — ловит незакреплённый фильтр на
-// пути. Перечень путей соответствует роутам под kBearerFilter (routes.cpp) плюс представители
-// ресурсных маршрутов (message_routes/directory_routes).
-TEST(RouteSmoke, ProtectedRoutesRejectMissingTokenWith401) {
+// Согласованность таблицы маршрутов и логики фильтра: каждый защищённый путь из kRoutesTable без
+// токена отклоняется 401 настоящим BearerAuthFilter; публичные — ровно /v1/health и /v1/ready.
+TEST(RouteSmoke, TableRoutesAgreeWithFilter) {
     TokenStore::instance().load({});  // пустой стор -> ни один токен не валиден
 
-    struct Route {
-        const char* path;
-        drogon::HttpMethod method;
-    };
-    const std::vector<Route> protected_routes = {
-        {"/v1/me", drogon::Get},
-        {"/v1/auth/state", drogon::Get},
-        {"/v1/auth/session/export", drogon::Get},
-        {"/v1/auth/session", drogon::Post},
-        {"/v1/auth/phone", drogon::Post},
-        {"/v1/auth/qr", drogon::Post},
-        {"/v1/auth/code", drogon::Post},
-        {"/v1/auth/code/resend", drogon::Post},
-        {"/v1/auth/password", drogon::Post},
-        {"/v1/chats/123/messages", drogon::Post},
-        {"/v1/files/42", drogon::Get},
-    };
-
-    for (const auto& route : protected_routes) {
-        const auto outcome = runFilter(route.path, route.method, /*authorization=*/"");
+    std::vector<std::string> public_paths;
+    for (const auto& route : tgw::http::kRoutesTable) {
+        if (!route.requires_auth) {
+            // Публичный маршрут: по таблице фильтр не навешивается (набор проверяем ниже).
+            public_paths.emplace_back(route.path);
+            continue;
+        }
+        const auto outcome = runFilter(std::string(route.path), route.method, /*authorization=*/"");
         EXPECT_TRUE(outcome.fail_called) << route.path;
         EXPECT_FALSE(outcome.next_called) << route.path;
         EXPECT_EQ(outcome.status, drogon::k401Unauthorized) << route.path;
     }
+
+    // Незащищённые маршруты routes.cpp — ровно /v1/health и /v1/ready (bit-for-bit как в
+    // регистрации). Формулировка ревью «/v1/health — единственный незащищённый» неточна:
+    // /v1/ready тоже открыт, и это сохранено намеренно.
+    EXPECT_EQ(public_paths, (std::vector<std::string>{"/v1/health", "/v1/ready"}));
 }
 
 // Разграничение скоупов через настоящий фильтр: read-токен на admin-пути -> 403, admin-токен ->
-// проход; read-токена достаточно для GET-маршрута.
+// проход; read-токена достаточно для GET-маршрута. Пути берём из таблицы.
 TEST(RouteSmoke, ScopeEnforcementThroughRealFilter) {
     TokenStore::instance().load({"tgw_ro read", "tgw_admin"});
 
-    const auto ro_on_admin = runFilter("/v1/auth/session/export", drogon::Get, "Bearer tgw_ro");
+    const std::string admin_path{tgw::http::kAuthSessionExportRoute.path};
+    const std::string me_path{tgw::http::kMeRoute.path};
+
+    const auto ro_on_admin =
+        runFilter(admin_path, tgw::http::kAuthSessionExportRoute.method, "Bearer tgw_ro");
     EXPECT_TRUE(ro_on_admin.fail_called);
     EXPECT_EQ(ro_on_admin.status, drogon::k403Forbidden);
 
     const auto admin_on_admin =
-        runFilter("/v1/auth/session/export", drogon::Get, "Bearer tgw_admin");
+        runFilter(admin_path, tgw::http::kAuthSessionExportRoute.method, "Bearer tgw_admin");
     EXPECT_TRUE(admin_on_admin.next_called);
     EXPECT_FALSE(admin_on_admin.fail_called);
 
-    const auto ro_on_read = runFilter("/v1/me", drogon::Get, "Bearer tgw_ro");
+    const auto ro_on_read = runFilter(me_path, tgw::http::kMeRoute.method, "Bearer tgw_ro");
     EXPECT_TRUE(ro_on_read.next_called);
     EXPECT_FALSE(ro_on_read.fail_called);
 }
