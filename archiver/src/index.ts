@@ -55,6 +55,12 @@ let consecutiveDrops = 0;
 // Здоровье Kafka-консьюмера — отражается в /health, на который смотрят И liveness, И readiness
 // пробы k8s. Раньше /health был безусловным 200: даже упавший (crashed/stopped) консьюмер не
 // приводил ни к рестарту пода, ни к выводу его из ротации (5.3).
+// Гонок вокруг флага нет: Node однопоточный, а instrumentation-события kafkajs эмитятся
+// синхронно (EventEmitter.emit) — запись и чтение consumerHealthy никогда не пересекаются
+// с другим обработчиком события посреди своего выполнения.
+// Стартовое значение — true (оптимистично, до первого реального join группы): иначе стартовый
+// период (пока consumer.connect()/subscribe()/run() ещё не отработали) валил бы liveness-пробу
+// на живом, просто ещё не полностью поднявшемся процессе. Осознанный компромисс.
 let consumerHealthy = true;
 
 type Content = { type?: string; text?: string; caption?: string; file_id?: string; file_name?: string; mime_type?: string };
@@ -389,10 +395,14 @@ consumer.on(consumer.events.DISCONNECT, () => {
   console.error("archiver: consumer disconnected");
 });
 // kafkajs сам перезапускает consumer после CRASH с restart=true (см. onCrash в consumer/index.js):
-// CONNECT — сигнал, что перезапуск удался и потребление возобновилось. Без этого одиночный
-// транзиентный обрыв связи с брокером навсегда держал бы /health на 503, хотя consumer уже
-// восстановился — liveness-проба бы рестартовала здоровый под по кругу.
-consumer.on(consumer.events.CONNECT, () => {
+// GROUP_JOIN — сигнал, что перезапуск удался и потребление РЕАЛЬНО возобновилось (событие
+// эмитится из joinAndSync() в consumerGroup.js ПОСЛЕ успешного join+sync группы). Важно: не
+// CONNECT — тот эмитится из ConsumerGroup.connect() ДО joinAndSync(), т.е. означает лишь TCP-
+// подключение к кластеру. При частичном outage (брокеры доступны, но join группы стабильно
+// падает — coordinator failover, rebalance storm) цикл CONNECT(healthy=true) → joinAndSync
+// fail → CRASH(healthy=false) заставил бы /health флапать 200/503, хотя consumer в реальности
+// не потребляет ни одного сообщения. GROUP_JOIN такого false positive не даёт.
+consumer.on(consumer.events.GROUP_JOIN, () => {
   consumerHealthy = true;
 });
 
