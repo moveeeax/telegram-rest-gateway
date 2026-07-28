@@ -1,15 +1,26 @@
 # syntax=docker/dockerfile:1.7
 # Builder-образ: тулчейн + СТАТИЧЕСКИЕ TDLib(@TDLIB_REF) и Drogon(@DROGON_REF) в /opt.
-# Дорогой (сборка TDLib долгая); собирается ВРУЧНУЮ per-arch при смене пинов.
-# Используется: test/tidy-job'ами (image: <registry>:builder-<arch>) и основным Dockerfile
-# (FROM ...:builder-<arch>) — сервис пересобирается быстро, TDLib/Drogon не трогаются.
-# Build: docker build -f Dockerfile.builder --build-arg TDLIB_REF=<sha> --build-arg DROGON_REF=<tag> .
-ARG TDLIB_REF=master
-ARG DROGON_REF=v1.9.1
+# Дорогой (сборка TDLib долгая). В CI собирается автоматически под content-addressed
+# тегом builder:<hash> (hash = sha256(этот файл + TDLIB_REF + DROGON_REF)), когда такого
+# тега ещё нет в GHCR; иначе переиспользуется готовый. См. .github/workflows/ci.yml.
+# Используется: test/tidy/build-app-джобами (container.image) и основным Dockerfile
+# (FROM ${BUILDER_IMAGE}) — сервис пересобирается быстро, TDLib/Drogon не трогаются.
+# Пины ОБЯЗАТЕЛЬНЫ и передаются из файлов-пинов (единый источник истины) — дефолтов нет,
+# чтобы ручная сборка без --build-arg не собрала неверный тулчейн (см. guard ниже):
+#   TDLIB_REF=$(grep -E '^TDLIB_REF=' TDLIB_REF | cut -d= -f2)
+#   DROGON_REF=$(grep -E '^DROGON_REF=' DROGON_REF | cut -d= -f2)
+#   docker build -f Dockerfile.builder --build-arg TDLIB_REF=$TDLIB_REF --build-arg DROGON_REF=$DROGON_REF .
+ARG TDLIB_REF
+ARG DROGON_REF
 
 FROM debian:12-slim
 ARG TDLIB_REF
 ARG DROGON_REF
+# Guard: без пинов не собираемся (иначе тянули бы неверную/невоспроизводимую версию).
+RUN test -n "${TDLIB_REF}" && test -n "${DROGON_REF}" || { \
+        echo "ОШИБКА: передайте --build-arg TDLIB_REF=<sha> и --build-arg DROGON_REF=<tag> из файлов TDLIB_REF/DROGON_REF"; \
+        exit 1; \
+    }
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates cmake ninja-build g++-12 clang-format clang-tidy \
         gperf zlib1g-dev libssl-dev libjsoncpp-dev uuid-dev libc-ares-dev libbrotli-dev \
