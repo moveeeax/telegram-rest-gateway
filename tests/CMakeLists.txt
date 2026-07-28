@@ -22,8 +22,17 @@ add_executable(tgw_unit_tests
     scope_policy_test.cpp
     aws_sigv4_test.cpp
     byte_range_test.cpp
+    idempotency_cache_test.cpp
+    upload_sanitize_test.cpp
+    bearer_auth_test.cpp
     td_bridge_test.cpp
-    ws_registry_test.cpp)
+    ws_registry_test.cpp
+    config_test.cpp
+    route_smoke_test.cpp
+    # Прод-исходники, которых нет в tgw_bridge, но которые нужны тестам напрямую:
+    # config.cpp (парсинг env, тест 3.5) и bearer_filter.cpp (реальный фильтр, тест 3.7).
+    ${PROJECT_SOURCE_DIR}/src/config/config.cpp
+    ${PROJECT_SOURCE_DIR}/src/http/bearer_filter.cpp)
 target_include_directories(tgw_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(tgw_unit_tests
     PRIVATE tgw_bridge GTest::gtest_main tgw_project_options)
