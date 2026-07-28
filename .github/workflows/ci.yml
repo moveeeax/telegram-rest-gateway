@@ -82,12 +82,15 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
     env:
       ASAN_OPTIONS: "detect_leaks=1"
-      LSAN_OPTIONS: "suppressions=${{ github.workspace }}/cmake/suppressions/lsan.supp"
     steps:
       - uses: actions/checkout@v4
       - run: cmake --preset asan
       # Только тест-таргет + -j2: держим пиковую память при санитайзерной сборке.
-      - run: cmake --build --preset asan --target tgw_unit_tests --parallel 2
+      # LSAN_OPTIONS с путём к suppressions задаётся в шаге, а не на уровне джоба,
+      # чтобы $PWD (путь в контейнере) был доступен, а не ${{ github.workspace }} (хостовый путь).
+      - run: |
+          export LSAN_OPTIONS="suppressions=$PWD/cmake/suppressions/lsan.supp"
+          cmake --build --preset asan --target tgw_unit_tests --parallel 2
       - run: ctest --preset asan --output-on-failure
 
   test-tsan:
@@ -101,13 +104,17 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-    env:
-      TSAN_OPTIONS: "suppressions=${{ github.workspace }}/cmake/suppressions/tsan.supp halt_on_error=1"
     steps:
       - uses: actions/checkout@v4
       - run: cmake --preset tsan
-      - run: cmake --build --preset tsan --target tgw_unit_tests --parallel 2
-      - run: ctest --preset tsan --output-on-failure
+      # TSAN_OPTIONS с путём к suppressions задаётся в шаге, а не на уровне джоба,
+      # чтобы $PWD (путь в контейнере) был доступен, а не ${{ github.workspace }} (хостовый путь).
+      - run: |
+          export TSAN_OPTIONS="suppressions=$PWD/cmake/suppressions/tsan.supp halt_on_error=1"
+          cmake --build --preset tsan --target tgw_unit_tests --parallel 2
+      - run: |
+          export TSAN_OPTIONS="suppressions=$PWD/cmake/suppressions/tsan.supp halt_on_error=1"
+          ctest --preset tsan --output-on-failure
 
   tidy:
     needs: builder
