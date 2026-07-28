@@ -22,7 +22,10 @@
 #include <td/telegram/td_api.h>
 #include <trantor/net/EventLoopThread.h>
 
+#include <pthread.h>
+
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -110,6 +113,22 @@ int exitCodeAfterS3(int code) {
 int main(int argc, char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--healthcheck") {
         runHealthcheck();  // noreturn (_Exit)
+    }
+
+    // §2.1 graceful shutdown: сами обрабатываем SIGTERM/SIGINT. Дефолтный хендлер Drogon зовёт
+    // quit() сразу, а quit() джойнит IO-петли ДО возврата run() — тогда resume in-flight корутин,
+    // маршаленный в петлю через queueInLoop, теряется, и HTTP-хендлер повисает молча. Блокируем
+    // сигналы во ВСЕХ потоках (маску наследуют все создаваемые ниже потоки: s3-loop, приёмник
+    // TDLib, kafka-воркер, IO-потоки Drogon) и ждём их в одном выделенном потоке через sigwait() —
+    // обработчик не ставим вовсе, поэтому async-signal-safety не при чём. Ставить маску нужно до
+    // старта любых потоков, поэтому делаем это в самом начале main.
+    sigset_t shutdown_signals;
+    sigemptyset(&shutdown_signals);
+    sigaddset(&shutdown_signals, SIGTERM);
+    sigaddset(&shutdown_signals, SIGINT);
+    if (pthread_sigmask(SIG_BLOCK, &shutdown_signals, nullptr) != 0) {
+        std::cerr << "failed to block shutdown signals\n";
+        return EXIT_FAILURE;
     }
 
     tgw::config::Config config;
@@ -206,6 +225,24 @@ int main(int argc, char** argv) {
 
     bridge.start();
 
+    // Выделенный поток ожидания сигналов завершения (маску мы выставили в начале main).
+    // Порядок §2.1: сперва дренируем мост (резолвим все in-flight 503/UPSTREAM_SHUTDOWN, пока
+    // IO-петли Drogon ещё живы — resume реально проснётся и отдаст ответ), затем quit() (маршалим
+    // на главный loop, как в setOnUnexpectedTermination). Набор сигналов копируем в поток по
+    // значению, чтобы sigwait() не смотрел на локал main после его разрушения. Поток detached
+    // намеренно (как s3-sync/healthcheck-потоки): при удалённом logout сигнал не придёт вовсе —
+    // поток так и стоит в sigwait() до выхода процесса и ничего не трогает (bridge к тому моменту
+    // отработал штатный shutdown-хвост ниже, чей bridge.stop() дренирует уже как backstop).
+    std::thread([&bridge, shutdown_signals]() {
+        int sig = 0;
+        if (sigwait(&shutdown_signals, &sig) != 0) {
+            return;  // не должно случаться при валидном наборе
+        }
+        LOG_INFO << "received signal " << sig << ": draining bridge before quit";
+        bridge.drainPending();
+        drogon::app().getLoop()->queueInLoop([] { drogon::app().quit(); });
+    }).detach();
+
     // Автоподъём сессии ДО приёма HTTP (§7.1): глушим лог, шлём setTdlibParameters.
     tgw::auth::StartupBootstrapper::run(bridge, client_id, config, auth);
 
@@ -237,11 +274,17 @@ int main(int argc, char** argv) {
 
     LOG_INFO << "telegram-rest-gateway listening on " << config.listen_address << ":"
              << config.listen_port;
+    // Отключаем встроенный SIGTERM-хендлер Drogon: завершение ведёт наш sigwait-поток (§2.1),
+    // который дренирует мост перед quit(). (Сигналы всё равно заблокированы во всех потоках —
+    // это ещё и явно фиксирует намерение.)
+    drogon::app().disableSigtermHandling();
     drogon::app().addListener(config.listen_address, config.listen_port).run();
 
     // Graceful shutdown (§7.4a, §10.4): даём TDLib закрыть БД до выхода — иначе при docker stop
-    // возможна порча БД. run() уже вернулся (SIGTERM/SIGINT), но поток-приёмник ещё жив и
-    // применит authorizationStateClosed, разбудив waitForClosed.
+    // возможна порча БД. run() уже вернулся (наш sigwait-поток продренировал мост и вызвал
+    // quit(), либо удалённый logout вызвал quit() напрямую), но поток-приёмник ещё жив и
+    // применит authorizationStateClosed, разбудив waitForClosed. bridge.stop() ниже дренирует
+    // «опоздавшие» in-flight как backstop (петли уже мертвы — resolve() резюмирует синхронно).
     LOG_INFO << "shutting down: closing TDLib client";
     auth.expectShutdown();  // дальше терминальные состояния ожидаемы
     bridge.sendOneWay(client_id, td_api::make_object<td_api::close>());
