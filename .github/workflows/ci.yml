@@ -91,7 +91,9 @@ jobs:
       - run: |
           export LSAN_OPTIONS="suppressions=$PWD/cmake/suppressions/lsan.supp"
           cmake --build --preset asan --target tgw_unit_tests --parallel 2
-      - run: ctest --preset asan --output-on-failure
+      - run: |
+          export LSAN_OPTIONS="suppressions=$PWD/cmake/suppressions/lsan.supp"
+          ctest --preset asan --output-on-failure
 
   test-tsan:
     needs: builder
