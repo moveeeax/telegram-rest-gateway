@@ -3,23 +3,24 @@
 #include "dto/file_dto.hpp"
 #include "dto/message_dto.hpp"
 #include "http/byte_range.hpp"
+#include "http/http_helpers.hpp"
+#include "http/idempotency_cache.hpp"
 #include "http/routes.hpp"
+#include "http/upload_sanitize.hpp"
 
 #include <drogon/drogon.h>
 #include <td/telegram/Client.h>
 #include <td/telegram/td_api.h>
+#include <trantor/utils/ConcurrentTaskQueue.h>
 
 #include <atomic>
 #include <cstdint>
-#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <mutex>
+#include <limits>
 #include <string>
-#include <string_view>
 #include <system_error>
-#include <unordered_map>
 #include <vector>
 
 namespace api = td::td_api;
@@ -27,76 +28,14 @@ namespace api = td::td_api;
 namespace tgw::http {
 namespace {
 
-using HttpCallback = std::function<void(const drogon::HttpResponsePtr&)>;
-using ResponseBuilder = std::function<drogon::HttpResponsePtr(api::object_ptr<api::Object>)>;
-
 constexpr char kBearerFilter[] = "tgw::http::BearerAuthFilter";
 
 // formattedText из text (+опц. parse_mode "markdown"|"html"). parseTextEntities — offline-метод
 // TDLib: исполняется синхронно через ClientManager::execute, event-loop не задействован.
 // При ошибке разметки/неизвестном режиме возвращает nullptr и заполняет err.
 // (Разбор Range-заголовка вынесен в http/byte_range.hpp — чистая функция, покрыта тестом.)
-
-// Idempotency-Key (decision C5): LRU-кэш «ключ -> завершённый ответ» для безопасных ретраев
-// отправки. Ключ занятый, но без ответа (запрос в полёте) -> 409 IDEMPOTENCY_KEY_REUSED.
-// In-memory: переживает ретраи клиента, не рестарт процесса (документировано).
-class IdempotencyCache {
-   public:
-    static IdempotencyCache& instance() {
-        static IdempotencyCache cache;
-        return cache;
-    }
-
-    // 0 = ключ свободен (занят за вами), 1 = в полёте (409), 2 = есть ответ (replay).
-    int claim(const std::string& key, int& status, std::string& body) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = entries_.find(key);
-        if (it == entries_.end()) {
-            evictIfNeeded();
-            entries_[key];  // pending
-            order_.push_back(key);
-            return 0;
-        }
-        if (!it->second.done) {
-            return 1;
-        }
-        status = it->second.status;
-        body = it->second.body;
-        return 2;
-    }
-
-    void store(const std::string& key, int status, std::string body) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = entries_.find(key);
-        if (it != entries_.end()) {
-            it->second.done = true;
-            it->second.status = status;
-            it->second.body = std::move(body);
-        }
-    }
-
-    void release(const std::string& key) {  // при ошибке валидации — освобождаем слот
-        std::lock_guard<std::mutex> lock(mutex_);
-        entries_.erase(key);
-    }
-
-   private:
-    struct Entry {
-        bool done = false;
-        int status = 0;
-        std::string body;
-    };
-    void evictIfNeeded() {
-        while (order_.size() >= kMaxEntries && !order_.empty()) {
-            entries_.erase(order_.front());
-            order_.pop_front();
-        }
-    }
-    static constexpr std::size_t kMaxEntries = 1024;
-    std::mutex mutex_;
-    std::unordered_map<std::string, Entry> entries_;
-    std::deque<std::string> order_;
-};
+// (jsonResponse/serviceError/telegramError/parseId/launchInvoke и IdempotencyCache вынесены в
+//  http/http_helpers.hpp и http/idempotency_cache.hpp — решения 1.6 и 1.3.)
 
 api::object_ptr<api::formattedText> makeFormattedText(const std::string& text,
                                                       const std::string& parse_mode,
@@ -125,41 +64,6 @@ api::object_ptr<api::formattedText> makeFormattedText(const std::string& text,
     return api::move_object_as<api::formattedText>(result);
 }
 
-drogon::HttpResponsePtr jsonResponse(Json::Value body, drogon::HttpStatusCode code) {
-    auto resp = drogon::HttpResponse::newHttpJsonResponse(std::move(body));
-    resp->setStatusCode(code);
-    return resp;
-}
-
-drogon::HttpResponsePtr serviceError(const std::string& code, const std::string& message,
-                                     drogon::HttpStatusCode http) {
-    Json::Value body;
-    body["ok"] = false;
-    body["error"]["code"] = code;
-    body["error"]["message"] = message;
-    return jsonResponse(std::move(body), http);
-}
-
-drogon::HttpResponsePtr telegramError(const api::error& error, drogon::HttpStatusCode http) {
-    Json::Value body;
-    body["ok"] = false;
-    body["error"]["code"] = "TELEGRAM_ERROR";
-    body["error"]["message"] = error.message_;
-    body["error"]["tdlib_code"] = error.code_;
-    body["error"]["tdlib_message"] = error.message_;
-    return jsonResponse(std::move(body), http);
-}
-
-bool parseId(const std::string& str, std::int64_t& out) {
-    try {
-        std::size_t pos = 0;
-        out = std::stoll(str, &pos);
-        return pos == str.size();
-    } catch (...) {
-        return false;
-    }
-}
-
 std::int32_t queryInt(const drogon::HttpRequestPtr& req, const char* name, std::int32_t def,
                       std::int32_t max) {
     const std::string& value = req->getParameter(name);
@@ -177,17 +81,6 @@ std::int32_t queryInt(const drogon::HttpRequestPtr& req, const char* name, std::
     }
 }
 
-// Общий запуск detached-корутины: co_await ответа TDLib, затем builder строит HTTP-ответ.
-void launchInvoke(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
-                  api::object_ptr<api::Function> fn, HttpCallback callback, ResponseBuilder build) {
-    [](tgw::bridge::TdBridge& td, std::int32_t cid, api::object_ptr<api::Function> f,
-       HttpCallback cb, ResponseBuilder builder) -> drogon::AsyncTask {
-        auto object = co_await td.invoke(cid, std::move(f));
-        cb(builder(std::move(object)));
-        co_return;
-    }(bridge, client_id, std::move(fn), std::move(callback), std::move(build));
-}
-
 api::object_ptr<api::Function> makeGetChats(std::int32_t limit) {
     auto fn = api::make_object<api::getChats>();
     fn->chat_list_ = api::make_object<api::chatListMain>();
@@ -200,6 +93,13 @@ api::object_ptr<api::Function> makeLoadChats(std::int32_t limit) {
     fn->chat_list_ = api::make_object<api::chatListMain>();
     fn->limit_ = limit;
     return fn;
+}
+
+// Решение 1.5: пул под блокирующую запись аплоадов, ВНЕ IO-петель Drogon. Ленивая инициализация
+// при первой загрузке; живёт до конца процесса. 2 треда — параллельная запись без монополизации.
+trantor::ConcurrentTaskQueue& uploadTaskQueue() {
+    static trantor::ConcurrentTaskQueue queue(2, "tgw-upload");
+    return queue;
 }
 
 }  // namespace
@@ -218,7 +118,26 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
         "/v1/chats",
         [&bridge, client_id](const drogon::HttpRequestPtr& req, HttpCallback&& cb) {
             const std::int32_t limit = queryInt(req, "limit", 20, 100);
-            const std::int32_t offset = queryInt(req, "offset", 0, 900);
+            // Решение 1.2: offset НЕЛЬЗЯ клампить к 900. Раньше он молча зажимался, а
+            // meta.next_offset = off+lim рос до 1000 -> клиент по курсору вечно получал ту же
+            // страницу (бесконечный цикл). Выход за верхнюю границу окна = явный 400 (не кламп).
+            std::int32_t offset = 0;
+            const std::string& offStr = req->getParameter("offset");
+            if (!offStr.empty()) {
+                try {
+                    const int parsed = std::stoi(offStr);
+                    if (parsed > 900) {
+                        cb(serviceError("VALIDATION_ERROR", "offset must not exceed 900",
+                                        drogon::k400BadRequest));
+                        return;
+                    }
+                    if (parsed >= 1) {
+                        offset = parsed;  // <1 -> 0 (как было в queryInt)
+                    }
+                } catch (...) {
+                    // битое/переполнение -> 0 (как дефолт queryInt)
+                }
+            }
             [](tgw::bridge::TdBridge& td, std::int32_t cid, std::int32_t lim, std::int32_t off,
                HttpCallback callback) -> drogon::AsyncTask {
                 // Пагинация: у getChats нет offset — берём off+lim id из главного списка и
@@ -228,7 +147,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 auto chatsObj = co_await td.invoke(cid, makeGetChats(want));
                 auto chats = tgw::bridge::expect<api::chats>(std::move(chatsObj));
                 if (!chats.ok()) {
-                    callback(telegramError(*chats.error, drogon::k502BadGateway));
+                    callback(telegramError(*chats.error));
                     co_return;
                 }
                 Json::Value arr(Json::arrayValue);
@@ -243,8 +162,10 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 Json::Value body;
                 body["ok"] = true;
                 body["data"] = arr;
-                // next_offset — если список, вероятно, не исчерпан.
-                if (ids.size() == static_cast<std::size_t>(want)) {
+                // next_offset — если список, вероятно, не исчерпан. Решение 1.2: не эмитим
+                // курсор за границей окна (want > 900) — по нему следующий запрос всё равно
+                // получил бы 400, а клиент зациклился бы, повторяя один и тот же offset.
+                if (ids.size() == static_cast<std::size_t>(want) && want <= 900) {
                     body["meta"]["next_offset"] = want;
                 }
                 callback(jsonResponse(std::move(body), drogon::k200OK));
@@ -278,7 +199,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                          [](api::object_ptr<api::Object> obj) {
                              auto messages = tgw::bridge::expect<api::messages>(std::move(obj));
                              if (!messages.ok()) {
-                                 return telegramError(*messages.error, drogon::k502BadGateway);
+                                 return telegramError(*messages.error);
                              }
                              Json::Value arr(Json::arrayValue);
                              std::string oldest;
@@ -374,7 +295,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                                      // Ошибку не кэшируем — даём ретраю шанс.
                                      IdempotencyCache::instance().release(idem_key);
                                  }
-                                 return telegramError(*message.error, drogon::k502BadGateway);
+                                 return telegramError(*message.error);
                              }
                              Json::Value data;
                              data["temporary_message_id"] = std::to_string(message.value->id_);
@@ -425,8 +346,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
             launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
                          [](api::object_ptr<api::Object> obj) {
                              if (obj != nullptr && obj->get_id() == api::error::ID) {
-                                 return telegramError(static_cast<api::error&>(*obj),
-                                                      drogon::k502BadGateway);
+                                 return telegramError(static_cast<api::error&>(*obj));
                              }
                              Json::Value body;
                              body["ok"] = true;
@@ -448,13 +368,20 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 cb(serviceError("VALIDATION_ERROR", "invalid file_id", drogon::k400BadRequest));
                 return;
             }
+            // Решение 1.1: td file_id — int32. Без проверки static_cast<int32_t> усекал бы:
+            // напр. 4294967297 -> 1, и getFile(1) вернул бы ЧУЖОЙ файл с 200. Значение вне
+            // [1, INT32_MAX] — заведомо не наш file_id -> 400 (а не тихое усечение).
+            if (fileId64 < 1 || fileId64 > std::numeric_limits<std::int32_t>::max()) {
+                cb(serviceError("VALIDATION_ERROR", "invalid file_id", drogon::k400BadRequest));
+                return;
+            }
             const auto fileId = static_cast<std::int32_t>(fileId64);
             [](tgw::bridge::TdBridge& td, std::int32_t cid, std::int32_t fid,
                drogon::HttpRequestPtr request, HttpCallback callback) -> drogon::AsyncTask {
                 auto fileObj = co_await td.invoke(cid, api::make_object<api::getFile>(fid));
                 auto file = tgw::bridge::expect<api::file>(std::move(fileObj));
                 if (!file.ok()) {
-                    callback(telegramError(*file.error, drogon::k502BadGateway));
+                    callback(telegramError(*file.error));
                     co_return;
                 }
                 const auto& local = file.value->local_;
@@ -508,114 +435,117 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 cb(serviceError("VALIDATION_ERROR", "invalid chat_id", drogon::k400BadRequest));
                 return;
             }
-            namespace fs = std::filesystem;
-            std::string name = fs::path(req->getParameter("file_name")).filename().string();
-            // filename() отрезает каталоги ("../../etc/passwd" -> "passwd"), НО ".." само по
-            // себе является допустимым результатом filename() (последний компонент "..") — имя
-            // "?file_name=.." прошло бы дальше как есть и dir/".." резолвился бы в upload_dir,
-            // т.е. запись пошла бы поверх родительского каталога вместо файла внутри dir.
-            if (name.empty() || name == "." || name == "..") {
-                name = "upload.bin";
-            }
-            static std::atomic<std::uint64_t> counter{0};
-            const auto seq = counter.fetch_add(1, std::memory_order_relaxed) + 1;
-            const fs::path dir = fs::path(upload_dir) / ("u" + std::to_string(seq));
-            std::error_code ec;
-            fs::create_directories(dir, ec);
-            if (ec) {
-                cb(serviceError("INTERNAL", "cannot create upload directory",
-                                drogon::k500InternalServerError));
-                return;
-            }
-            const fs::path path = dir / name;
-            {
-                std::ofstream out(path, std::ios::binary);
-                out.write(req->bodyData(), static_cast<std::streamsize>(req->bodyLength()));
-                // Диск полон / нет прав / путь не открылся: молчаливое продолжение отправило бы
-                // TDLib пустой/усечённый файл, и клиент получил бы вводящую в заблуждение
-                // TELEGRAM_ERROR вместо честной ошибки на нашей стороне. Чистим недописанный
-                // upload-каталог сразу — иначе он висел бы до TTL-очистки (upload_cleanup, 1ч).
-                if (!out) {
-                    std::error_code cleanup_ec;
-                    fs::remove_all(dir, cleanup_ec);
-                    cb(serviceError("INTERNAL", "failed to write uploaded file",
+            // Решение 1.5: запись сырого тела (потенциально многогигабайтного) и работа с ФС —
+            // блокирующие. На IO-петле Drogon одна такая загрузка застопорила бы ВСЕ соединения
+            // этой петли. Уносим всю обработку на отдельный пул, ответ отдаём из его колбэка.
+            // Семантика ответов (в т.ч. 500 + очистка каталога при неудачной записи) неизменна —
+            // меняется только поток исполнения. req/cb захватываем по значению: тело уже принято
+            // целиком, callback можно вызвать из любого треда (Drogon сам перекинет в loop).
+            uploadTaskQueue().runTaskInQueue([&bridge, client_id, upload_dir, chatId, req,
+                                              cb = std::move(cb)]() mutable {
+                namespace fs = std::filesystem;
+                const std::string name = sanitizeUploadFilename(req->getParameter("file_name"));
+                static std::atomic<std::uint64_t> counter{0};
+                const auto seq = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+                const fs::path dir = fs::path(upload_dir) / ("u" + std::to_string(seq));
+                std::error_code ec;
+                fs::create_directories(dir, ec);
+                if (ec) {
+                    cb(serviceError("INTERNAL", "cannot create upload directory",
                                     drogon::k500InternalServerError));
                     return;
                 }
-            }
-
-            // ?type=document|photo|video|voice|audio — как отправить файл (default document).
-            // У TDLib медиа-обёртки двухуровневые: inputMessageX.x_ : inputX, inputX.x_ :
-            // InputFile.
-            auto local_file = api::make_object<api::inputFileLocal>(path.string());
-            api::object_ptr<api::formattedText> caption;
-            {
-                const std::string caption_text = req->getParameter("caption");
-                if (!caption_text.empty()) {
-                    caption = api::make_object<api::formattedText>();
-                    caption->text_ = caption_text;
+                const fs::path path = dir / name;
+                {
+                    std::ofstream out(path, std::ios::binary);
+                    out.write(req->bodyData(), static_cast<std::streamsize>(req->bodyLength()));
+                    // Диск полон / нет прав / путь не открылся: молчаливое продолжение отправило
+                    // бы TDLib пустой/усечённый файл, и клиент получил бы вводящую в заблуждение
+                    // TELEGRAM_ERROR вместо честной ошибки на нашей стороне. Чистим недописанный
+                    // upload-каталог сразу — иначе он висел бы до TTL-очистки (upload_cleanup, 1ч).
+                    if (!out) {
+                        std::error_code cleanup_ec;
+                        fs::remove_all(dir, cleanup_ec);
+                        cb(serviceError("INTERNAL", "failed to write uploaded file",
+                                        drogon::k500InternalServerError));
+                        return;
+                    }
                 }
-            }
-            api::object_ptr<api::InputMessageContent> content;
-            const std::string media_type = req->getParameter("type");
-            if (media_type.empty() || media_type == "document") {
-                auto document = api::make_object<api::inputDocument>();
-                document->document_ = std::move(local_file);
-                auto msg = api::make_object<api::inputMessageDocument>();
-                msg->document_ = std::move(document);
-                msg->caption_ = std::move(caption);
-                content = std::move(msg);
-            } else if (media_type == "photo") {
-                auto photo = api::make_object<api::inputPhoto>();
-                photo->photo_ = std::move(local_file);
-                auto msg = api::make_object<api::inputMessagePhoto>();
-                msg->photo_ = std::move(photo);
-                msg->caption_ = std::move(caption);
-                content = std::move(msg);
-            } else if (media_type == "video") {
-                auto video = api::make_object<api::inputVideo>();
-                video->video_ = std::move(local_file);
-                video->supports_streaming_ = true;
-                auto msg = api::make_object<api::inputMessageVideo>();
-                msg->video_ = std::move(video);
-                msg->caption_ = std::move(caption);
-                content = std::move(msg);
-            } else if (media_type == "voice") {
-                auto msg = api::make_object<api::inputMessageVoiceNote>();
-                msg->voice_note_ = std::move(local_file);
-                msg->caption_ = std::move(caption);
-                content = std::move(msg);
-            } else if (media_type == "audio") {
-                auto audio = api::make_object<api::inputAudio>();
-                audio->audio_ = std::move(local_file);
-                auto msg = api::make_object<api::inputMessageAudio>();
-                msg->audio_ = std::move(audio);
-                msg->caption_ = std::move(caption);
-                content = std::move(msg);
-            } else {
-                cb(serviceError("VALIDATION_ERROR", "type must be document|photo|video|voice|audio",
-                                drogon::k400BadRequest));
-                return;
-            }
-            auto fn = api::make_object<api::sendMessage>();
-            fn->chat_id_ = chatId;
-            fn->input_message_content_ = std::move(content);
 
-            launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
-                         [](api::object_ptr<api::Object> obj) {
-                             auto message = tgw::bridge::expect<api::message>(std::move(obj));
-                             if (!message.ok()) {
-                                 return telegramError(*message.error, drogon::k502BadGateway);
-                             }
-                             Json::Value data;
-                             data["temporary_message_id"] = std::to_string(message.value->id_);
-                             data["chat_id"] = std::to_string(message.value->chat_id_);
-                             data["sending_state"] = "pending";
-                             Json::Value body;
-                             body["ok"] = true;
-                             body["data"] = data;
-                             return jsonResponse(std::move(body), drogon::k202Accepted);
-                         });
+                // ?type=document|photo|video|voice|audio — как отправить файл (default document).
+                // У TDLib медиа-обёртки двухуровневые: inputMessageX.x_ : inputX, inputX.x_ :
+                // InputFile.
+                auto local_file = api::make_object<api::inputFileLocal>(path.string());
+                api::object_ptr<api::formattedText> caption;
+                {
+                    const std::string caption_text = req->getParameter("caption");
+                    if (!caption_text.empty()) {
+                        caption = api::make_object<api::formattedText>();
+                        caption->text_ = caption_text;
+                    }
+                }
+                api::object_ptr<api::InputMessageContent> content;
+                const std::string media_type = req->getParameter("type");
+                if (media_type.empty() || media_type == "document") {
+                    auto document = api::make_object<api::inputDocument>();
+                    document->document_ = std::move(local_file);
+                    auto msg = api::make_object<api::inputMessageDocument>();
+                    msg->document_ = std::move(document);
+                    msg->caption_ = std::move(caption);
+                    content = std::move(msg);
+                } else if (media_type == "photo") {
+                    auto photo = api::make_object<api::inputPhoto>();
+                    photo->photo_ = std::move(local_file);
+                    auto msg = api::make_object<api::inputMessagePhoto>();
+                    msg->photo_ = std::move(photo);
+                    msg->caption_ = std::move(caption);
+                    content = std::move(msg);
+                } else if (media_type == "video") {
+                    auto video = api::make_object<api::inputVideo>();
+                    video->video_ = std::move(local_file);
+                    video->supports_streaming_ = true;
+                    auto msg = api::make_object<api::inputMessageVideo>();
+                    msg->video_ = std::move(video);
+                    msg->caption_ = std::move(caption);
+                    content = std::move(msg);
+                } else if (media_type == "voice") {
+                    auto msg = api::make_object<api::inputMessageVoiceNote>();
+                    msg->voice_note_ = std::move(local_file);
+                    msg->caption_ = std::move(caption);
+                    content = std::move(msg);
+                } else if (media_type == "audio") {
+                    auto audio = api::make_object<api::inputAudio>();
+                    audio->audio_ = std::move(local_file);
+                    auto msg = api::make_object<api::inputMessageAudio>();
+                    msg->audio_ = std::move(audio);
+                    msg->caption_ = std::move(caption);
+                    content = std::move(msg);
+                } else {
+                    cb(serviceError("VALIDATION_ERROR",
+                                    "type must be document|photo|video|voice|audio",
+                                    drogon::k400BadRequest));
+                    return;
+                }
+                auto fn = api::make_object<api::sendMessage>();
+                fn->chat_id_ = chatId;
+                fn->input_message_content_ = std::move(content);
+
+                launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
+                             [](api::object_ptr<api::Object> obj) {
+                                 auto message = tgw::bridge::expect<api::message>(std::move(obj));
+                                 if (!message.ok()) {
+                                     return telegramError(*message.error);
+                                 }
+                                 Json::Value data;
+                                 data["temporary_message_id"] = std::to_string(message.value->id_);
+                                 data["chat_id"] = std::to_string(message.value->chat_id_);
+                                 data["sending_state"] = "pending";
+                                 Json::Value body;
+                                 body["ok"] = true;
+                                 body["data"] = data;
+                                 return jsonResponse(std::move(body), drogon::k202Accepted);
+                             });
+            });
         },
         {drogon::Post, kBearerFilter});
 
@@ -657,7 +587,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                          [](api::object_ptr<api::Object> obj) {
                              auto message = tgw::bridge::expect<api::message>(std::move(obj));
                              if (!message.ok()) {
-                                 return telegramError(*message.error, drogon::k502BadGateway);
+                                 return telegramError(*message.error);
                              }
                              Json::Value body;
                              body["ok"] = true;
@@ -701,7 +631,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                          [](api::object_ptr<api::Object> obj) -> drogon::HttpResponsePtr {
                              auto ok = tgw::bridge::expect<api::ok>(std::move(obj));
                              if (!ok.ok()) {
-                                 return telegramError(*ok.error, drogon::k502BadGateway);
+                                 return telegramError(*ok.error);
                              }
                              Json::Value body;
                              body["ok"] = true;
@@ -750,7 +680,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                          [](api::object_ptr<api::Object> obj) {
                              auto messages = tgw::bridge::expect<api::messages>(std::move(obj));
                              if (!messages.ok()) {
-                                 return telegramError(*messages.error, drogon::k502BadGateway);
+                                 return telegramError(*messages.error);
                              }
                              Json::Value ids(Json::arrayValue);
                              for (const auto& m : messages.value->messages_) {
@@ -798,7 +728,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                              auto found =
                                  tgw::bridge::expect<api::foundChatMessages>(std::move(obj));
                              if (!found.ok()) {
-                                 return telegramError(*found.error, drogon::k502BadGateway);
+                                 return telegramError(*found.error);
                              }
                              Json::Value arr(Json::arrayValue);
                              for (const auto& m : found.value->messages_) {
@@ -841,7 +771,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                          [](api::object_ptr<api::Object> obj) {
                              auto found = tgw::bridge::expect<api::foundMessages>(std::move(obj));
                              if (!found.ok()) {
-                                 return telegramError(*found.error, drogon::k502BadGateway);
+                                 return telegramError(*found.error);
                              }
                              Json::Value arr(Json::arrayValue);
                              for (const auto& m : found.value->messages_) {
@@ -865,7 +795,7 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
     // Фактическое изменение прилетит апдейтом updateMessageInteractionInfo по WebSocket.
     const auto okBuilder = [](api::object_ptr<api::Object> obj) -> drogon::HttpResponsePtr {
         if (obj != nullptr && obj->get_id() == api::error::ID) {
-            return telegramError(static_cast<api::error&>(*obj), drogon::k502BadGateway);
+            return telegramError(static_cast<api::error&>(*obj));
         }
         Json::Value body;
         body["ok"] = true;
