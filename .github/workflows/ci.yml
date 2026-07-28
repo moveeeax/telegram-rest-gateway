@@ -9,7 +9,9 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Отменяем устаревшие прогоны на ветках/PR, но НЕ на main и не на git-тегах —
+  # там работает publish, прерывать его на середине (частичный набор образов) нельзя.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   BUILDER_IMAGE: ghcr.io/${{ github.repository }}/builder
@@ -123,8 +125,10 @@ jobs:
             DROGON_REF=${{ steps.meta.outputs.drogon }}
           tags: ${{ steps.meta.outputs.image }}
           push: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Отдельный scope: у builder'а и сервисного образа разные слои — общий scope
+          # gha-кэша они бы затирали друг у друга.
+          cache-from: type=gha,scope=builder
+          cache-to: type=gha,mode=max,scope=builder
       # :latest — только с main, указывает на свежесобранный content-тег.
       - name: retag builder :latest (main only)
         if: steps.meta.outputs.exists == 'false' && steps.meta.outputs.available == 'true' && github.ref == 'refs/heads/main'
@@ -141,7 +145,7 @@ jobs:
             DROGON_REF=${{ steps.meta.outputs.drogon }}
           load: true
           tags: ${{ steps.meta.outputs.image }}
-          cache-from: type=gha
+          cache-from: type=gha,scope=builder
 
   test-asan:
     needs: builder
@@ -280,8 +284,8 @@ jobs:
             BUILDER_IMAGE=${{ needs.builder.outputs.image }}
           tags: ${{ steps.tags.outputs.gw_tags }}
           push: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=gateway
+          cache-to: type=gha,mode=max,scope=gateway
       - name: build+push archiver
         uses: docker/build-push-action@v6
         with:
