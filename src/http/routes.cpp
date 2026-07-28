@@ -4,6 +4,7 @@
 #include "auth/session_io.hpp"
 #include "bridge/expect.hpp"
 #include "bridge/td_bridge.hpp"
+#include "http/http_helpers.hpp"
 
 #include <drogon/drogon.h>
 #include <drogon/RateLimiter.h>
@@ -20,35 +21,11 @@ namespace td_api = td::td_api;
 namespace tgw::http {
 namespace {
 
-using HttpCallback = std::function<void(const drogon::HttpResponsePtr&)>;
+// jsonResponse/serviceError/telegramError/HttpCallback — общие, из http/http_helpers.hpp
+// (решение 1.6). telegramError сам считает HTTP-статус из ошибки TDLib (решение 1.4).
 
 // Имя фильтра в реестре Drogon = полное имя класса. Вешается на защищённые маршруты.
 constexpr char kBearerFilter[] = "tgw::http::BearerAuthFilter";
-
-drogon::HttpResponsePtr jsonResponse(Json::Value body, drogon::HttpStatusCode code) {
-    auto resp = drogon::HttpResponse::newHttpJsonResponse(std::move(body));
-    resp->setStatusCode(code);
-    return resp;
-}
-
-drogon::HttpResponsePtr serviceError(const std::string& code, const std::string& message,
-                                     drogon::HttpStatusCode http) {
-    Json::Value body;
-    body["ok"] = false;
-    body["error"]["code"] = code;
-    body["error"]["message"] = message;
-    return jsonResponse(std::move(body), http);
-}
-
-drogon::HttpResponsePtr telegramError(const td_api::error& error, drogon::HttpStatusCode http) {
-    Json::Value body;
-    body["ok"] = false;
-    body["error"]["code"] = "TELEGRAM_ERROR";
-    body["error"]["message"] = error.message_;
-    body["error"]["tdlib_code"] = error.code_;
-    body["error"]["tdlib_message"] = error.message_;
-    return jsonResponse(std::move(body), http);
-}
 
 // Тонкая проекция td_api::user (§8.2.2). id — СТРОКОЙ (§8.2.1).
 Json::Value userToJson(const td_api::user& user) {
@@ -90,7 +67,7 @@ void launchAuthMutation(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
        td_api::object_ptr<td_api::Function> f, HttpCallback cb) -> drogon::AsyncTask {
         auto object = co_await td.invoke(cid, std::move(f));
         if (object != nullptr && object->get_id() == td_api::error::ID) {
-            cb(telegramError(static_cast<td_api::error&>(*object), drogon::k400BadRequest));
+            cb(telegramError(static_cast<td_api::error&>(*object)));
             co_return;
         }
         Json::Value body;
@@ -282,7 +259,7 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                 auto object = co_await td.invoke(cid, td_api::make_object<td_api::getMe>());
                 auto result = tgw::bridge::expect<td_api::user>(std::move(object));
                 if (!result.ok()) {
-                    cb(telegramError(*result.error, drogon::k502BadGateway));
+                    cb(telegramError(*result.error));
                     co_return;
                 }
                 Json::Value body;

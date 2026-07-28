@@ -1,6 +1,7 @@
 #include "http/bearer_filter.hpp"
 
 #include "auth/token_store.hpp"
+#include "http/http_helpers.hpp"
 #include "http/scope_policy.hpp"
 
 #include <drogon/drogon.h>
@@ -12,21 +13,11 @@ namespace tgw::http {
 namespace {
 
 // Политика скоупов живёт в http/scope_policy.hpp (чистая функция, покрыта юнит-тестом).
-// Здесь — только извлечение пути и метода из запроса.
+// Здесь — только извлечение пути и метода из запроса. Конверт ошибки — общий serviceError
+// из http/http_helpers.hpp (решение 1.6: раньше был локальный errorResponse с иной сигнатурой).
 tgw::auth::Scope requiredScope(const drogon::HttpRequestPtr& req) {
     const bool is_read_method = (req->method() == drogon::Get || req->method() == drogon::Head);
     return requiredScopeFor(req->path(), is_read_method);
-}
-
-drogon::HttpResponsePtr errorResponse(const char* code, const char* message,
-                                      drogon::HttpStatusCode status) {
-    Json::Value body;
-    body["ok"] = false;
-    body["error"]["code"] = code;
-    body["error"]["message"] = message;
-    auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-    resp->setStatusCode(status);
-    return resp;
 }
 
 }  // namespace
@@ -45,15 +36,15 @@ void BearerAuthFilter::doFilter(const drogon::HttpRequestPtr& req, drogon::Filte
                 next();
                 return;
             }
-            fail(errorResponse("INSUFFICIENT_SCOPE",
-                               "token lacks the scope required for this endpoint",
-                               drogon::k403Forbidden));
+            fail(serviceError("INSUFFICIENT_SCOPE",
+                              "token lacks the scope required for this endpoint",
+                              drogon::k403Forbidden));
             return;
         }
     }
 
-    fail(errorResponse("UNAUTHENTICATED", "missing or invalid bearer token",
-                       drogon::k401Unauthorized));
+    fail(serviceError("UNAUTHENTICATED", "missing or invalid bearer token",
+                      drogon::k401Unauthorized));
 }
 
 }  // namespace tgw::http
