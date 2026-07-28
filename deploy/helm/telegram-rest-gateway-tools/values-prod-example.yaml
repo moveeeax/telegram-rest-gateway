@@ -3,6 +3,11 @@
 # Если архиватор только внутри кластера — оставь archiverHost: "".
 mcp:
   image: "docker.io/resert/telegram-rest-gateway-mcp:v1.2.0-2"
+  # Пример владельца: реальные Telegram account id (совпадают с accounts гейтвея);
+  # в дефолтах чарта mcp.accounts пуст.
+  accounts:
+    - sessionId: "1214732998"
+    - sessionId: "1389231240"
 ingress:
   enabled: true
   className: nginx

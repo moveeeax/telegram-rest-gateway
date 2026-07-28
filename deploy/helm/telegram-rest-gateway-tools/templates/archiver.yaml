@@ -1,4 +1,5 @@
 {{- if .Values.archiver.enabled }}
+{{- if not .Values.archiver.persistence.existingClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -6,6 +7,9 @@ metadata:
   labels:
     app.kubernetes.io/name: tgw-archiver
     app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    # Архив — единственная копия истории сообщений. helm uninstall НЕ должен её стирать.
+    helm.sh/resource-policy: keep
 spec:
   accessModes: ["ReadWriteOnce"]
   {{- with .Values.archiver.storageClass }}
@@ -15,6 +19,7 @@ spec:
     requests:
       storage: {{ .Values.archiver.storage }}
 ---
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -117,7 +122,7 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: {{ .Release.Name }}-archiver
+            claimName: {{ .Values.archiver.persistence.existingClaim | default (printf "%s-archiver" .Release.Name) }}
 ---
 apiVersion: v1
 kind: Service

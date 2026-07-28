@@ -24,9 +24,9 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 tgw.tarassov.me/session-id: {{ .account.sessionId | quote }}
 {{- end -}}
 
-{{/* Тег образа: values.image.tag или appVersion */}}
+{{/* Тег образа: обязателен, дефолта нет — semver CI не публикует (см. docs/CICD.md) */}}
 {{- define "tgw.imageTag" -}}
-{{- .Values.image.tag | default (printf "v%s" .Chart.AppVersion) -}}
+{{- required "image.tag обязателен: CI публикует immutable short-sha теги, см. docs/CICD.md" .Values.image.tag -}}
 {{- end -}}
 
 {{/* Host для Ingress аккаунта */}}

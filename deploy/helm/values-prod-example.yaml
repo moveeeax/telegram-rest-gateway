@@ -3,6 +3,7 @@ image:
   # CI не тегирует образ semver — пиньте неизменяемый short-sha релиза (тег image:<sha> в реестре).
   tag: "da77e294"  # неизменяемый short-sha develop с фиксом Kafka
 
+# Пример владельца: реальные Telegram account id продовой инсталляции.
 accounts:
   - sessionId: "1214732998"
   - sessionId: "1389231240"
@@ -12,6 +13,7 @@ existingSecret: "telegram-rest-gateway"
 config:
   TGW_LISTEN_ADDRESS: "0.0.0.0"
   TGW_LISTEN_PORT: "8080"
+  # Пример владельца: реальный S3-эндпоинт продовой инсталляции (в дефолтах чарта — пусто).
   TGW_S3_ENDPOINT: "https://s3.tarassov.me"
   TGW_S3_REGION: "us-east-1"
   TGW_S3_BUCKET: "tgw-s3-bucket"

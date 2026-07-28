@@ -16,6 +16,10 @@ archiver:
   # SQLite-файл — единственный writer, поэтому PVC + Recreate + replicas 1.
   storage: "2Gi"
   storageClass: ""
+  persistence:
+    # Готовый PVC (например, унаследованный от прошлого релиза или восстановленный
+    # из бэкапа). Если задан — чарт свой PVC НЕ создаёт, deployment монтирует этот.
+    existingClaim: ""
   # Внешний PostgreSQL вместо SQLite (URL из секрета). enabled=false → SQLite на PVC.
   postgres:
     enabled: false
@@ -47,9 +51,12 @@ mcp:
   pullPolicy: IfNotPresent
   httpPort: 8080
   # По одному MCP-серверу на аккаунт (Streamable HTTP, stateless — можно >1 реплики).
-  accounts:
-    - sessionId: "1214732998"
-    - sessionId: "1389231240"
+  # Пусто по умолчанию: без явных аккаунтов ни один mcp-деплоймент не рендерится.
+  # Пример структуры (sessionId — тот же, что в accounts гейтвея):
+  #   accounts:
+  #     - sessionId: "111111111"
+  #     - sessionId: "222222222"
+  accounts: []
   resources:
     requests: { cpu: 25m, memory: 48Mi }
     limits: { memory: 128Mi }

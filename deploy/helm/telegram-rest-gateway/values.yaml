@@ -6,7 +6,9 @@
 
 image:
   repository: docker.io/resert/telegram-rest-gateway
-  # По умолчанию — тег из Chart.appVersion.
+  # ОБЯЗАТЕЛЕН: дефолта нет. CI не публикует semver-теги (нет стабильного "последнего"
+  # образа) — публикуются только immutable short-sha теги, см. docs/CICD.md. Задай явно,
+  # иначе helm install/template упадёт с понятной ошибкой (fail-fast вместо ImagePullBackOff).
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -29,7 +31,9 @@ config:
   TGW_LISTEN_ADDRESS: "0.0.0.0"
   TGW_LISTEN_PORT: "8080"
   # S3-хранилище сессий (обязательно для stateless-подов: PVC у чарта нет).
-  TGW_S3_ENDPOINT: "https://s3.tarassov.me"
+  # Дефолта нет намеренно — своего S3/MinIO под чартом не поставляем; заполни своим
+  # эндпоинтом в собственном values-файле (пример структуры — values-prod-example.yaml).
+  TGW_S3_ENDPOINT: ""
   TGW_S3_REGION: "us-east-1"
   TGW_S3_BUCKET: "tgw-s3-bucket"
   TGW_S3_PATH_STYLE: "true"
