@@ -58,7 +58,7 @@ class TdBridge {
     std::int32_t createClientId();
 
     void start();  // запускает поток-приёмник
-    void stop();   // дренирует in-flight, останавливает и join'ит (идемпотентно)
+    void stop();  // дренирует in-flight, останавливает и join'ит (идемпотентно)
 
     // Резолвит ВСЕ висящие запросы ошибкой 503/UPSTREAM_SHUTDOWN. Вызывать при shutdown ДО
     // drogon::app().quit(), пока IO-петли ещё живы: иначе quit() приджойнит петли, а resume

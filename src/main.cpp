@@ -22,8 +22,6 @@
 #include <td/telegram/td_api.h>
 #include <trantor/net/EventLoopThread.h>
 
-#include <pthread.h>
-
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -34,6 +32,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <pthread.h>
 #include <string>
 #include <string_view>
 #include <system_error>

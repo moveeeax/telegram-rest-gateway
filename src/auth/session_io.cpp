@@ -2,16 +2,15 @@
 
 #include "util/base64.hpp"
 
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <cerrno>
 #include <cstddef>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <sys/stat.h>
 #include <system_error>
+#include <unistd.h>
 
 namespace tgw::auth {
 namespace {

@@ -5,21 +5,20 @@
 #include <drogon/drogon.h>
 #include <trantor/utils/Logger.h>
 
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <system_error>
 #include <thread>
+#include <unistd.h>
 
 namespace tgw::auth {
 namespace {

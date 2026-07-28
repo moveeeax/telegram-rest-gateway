@@ -2,16 +2,14 @@
 
 #include "bridge/td_bridge.hpp"
 
-#include <td/telegram/td_api.h>
-
 #include <drogon/drogon.h>
-
-#include <json/value.h>
+#include <td/telegram/td_api.h>
 
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <json/value.h>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -187,9 +185,8 @@ inline bool parseId(const std::string& text, std::int64_t& out) {
 inline void launchInvoke(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                          td::td_api::object_ptr<td::td_api::Function> fn, HttpCallback callback,
                          ResponseBuilder build) {
-    [](tgw::bridge::TdBridge& td, std::int32_t cid,
-       td::td_api::object_ptr<td::td_api::Function> f, HttpCallback cb,
-       ResponseBuilder builder) -> drogon::AsyncTask {
+    [](tgw::bridge::TdBridge& td, std::int32_t cid, td::td_api::object_ptr<td::td_api::Function> f,
+       HttpCallback cb, ResponseBuilder builder) -> drogon::AsyncTask {
         auto object = co_await td.invoke(cid, std::move(f));
         cb(builder(std::move(object)));
         co_return;
