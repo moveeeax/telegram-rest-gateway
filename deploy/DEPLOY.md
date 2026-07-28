@@ -66,6 +66,18 @@ curl -s localhost:8080/metrics | grep tgw_kafka                   # produced р�
 рост `tgw_kafka_failed_total`/`tgw_kafka_dropped_total`, `tgw_http_responses_5xx_total`.
 Включить сбор: `serviceMonitor.enabled=true` (нужен Prometheus Operator).
 
+## Каталоги данных (`TGW_DATABASE_DIR`/`TGW_FILES_DIR`) и volume
+
+Чарт **без PVC**: `TGW_DATABASE_DIR` (по умолчанию `/data/session`) и `TGW_FILES_DIR`
+(по умолчанию `/data/files`) живут на `emptyDir`, примонтированном в `/data`
+(`templates/deployment.yaml`, `volumeMounts[].mountPath: /data`) — данные пода не переживают
+рестарт сами по себе. Персистентность обеспечивает не volume, а S3-синк `td.binlog`
+(см. `TGW_S3_*` выше): на старте бинлог тянется из S3, периодически и на graceful shutdown
+заливается обратно. Если переопределяешь `TGW_DATABASE_DIR`/`TGW_FILES_DIR` через
+`values.config` — держи их **внутри** `/data`, иначе каталог окажется вне смонтированного
+volume и потеряется при пересоздании пода. `TGW_FILES_DIR` (скачанные/загруженные файлы)
+в S3 не бэкапится — это кэш, не критичные данные.
+
 
 ## Архиватор и MCP в кластере (chart telegram-rest-gateway-tools)
 
