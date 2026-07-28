@@ -7,6 +7,7 @@
  *      ARCHIVER_S3_* + ARCHIVER_GATEWAY_TEMPLATE/_TOKEN (медиа-оффлоад).
  */
 import http from "node:http";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { Kafka, logLevel } from "kafkajs";
 import { makeStore, type MessageRow } from "./store.js";
 import { MediaOffloader } from "./media.js";
@@ -18,6 +19,25 @@ const PORT = Number(process.env.ARCHIVER_HTTP_PORT ?? "8090");
 const TOKEN = process.env.ARCHIVER_TOKEN ?? "";
 const GW_TEMPLATE = process.env.ARCHIVER_GATEWAY_TEMPLATE ?? "";
 const MAX_BODY_BYTES = 64 * 1024;
+
+// Fail-closed: без токена /search отдаёт весь архив переписки (все чаты, вся история), /stats
+// палит внутреннее состояние, а /backfill позволяет запустить бэкфилл с произвольным session_id —
+// это полный доступ к архиву с любой точки сети. Опт-аут только явный, как в mcp/ (4.1).
+const ALLOW_INSECURE = process.env.ARCHIVER_ALLOW_INSECURE === "1";
+if (!TOKEN) {
+  if (!ALLOW_INSECURE) {
+    console.error(
+      "archiver: ARCHIVER_TOKEN не задан. HTTP-часть (/search, /stats, /backfill) требует " +
+        "авторизации — иначе архив открыт всем в сети. Задайте ARCHIVER_TOKEN, либо явно " +
+        "примите риск через ARCHIVER_ALLOW_INSECURE=1.",
+    );
+    process.exit(1);
+  }
+  console.error(
+    "archiver: ВНИМАНИЕ — ARCHIVER_TOKEN не задан, ARCHIVER_ALLOW_INSECURE=1: /search, /stats и " +
+      "/backfill работают БЕЗ авторизации. Используйте только в доверенной сети/для отладки.",
+  );
+}
 /** После N подряд drop'ов (storage outage) — fail-closed: крашим consumer, lag растёт, k8s рестартит. */
 const DROP_CIRCUIT =
   Number.isFinite(Number(process.env.ARCHIVER_DROP_CIRCUIT)) && Number(process.env.ARCHIVER_DROP_CIRCUIT) > 0
@@ -32,6 +52,10 @@ if (media) console.error("archiver: media offload enabled (S3)");
 let processed = 0;
 let dropped = 0;
 let consecutiveDrops = 0;
+// Здоровье Kafka-консьюмера — отражается в /health, на который смотрят И liveness, И readiness
+// пробы k8s. Раньше /health был безусловным 200: даже упавший (crashed/stopped) консьюмер не
+// приводил ни к рестарту пода, ни к выводу его из ротации (5.3).
+let consumerHealthy = true;
 
 type Content = { type?: string; text?: string; caption?: string; file_id?: string; file_name?: string; mime_type?: string };
 
@@ -195,8 +219,14 @@ async function gwGet(base: string, token: string, path: string): Promise<any> {
   return json;
 }
 
-async function runBackfill(base: string, token: string, sessionId: string, throttleMs: number, maxPerChat: number) {
-  backfill = { running: true, session_id: sessionId, chats_total: 0, chats_done: 0, messages_added: 0, started_at: Date.now() };
+// Сбрасываем running только если `backfill` всё ещё указывает на ЭТОТ объект запуска: если к
+// моменту вызова глобальную ссылку уже сменил новый (принятый) запуск, значит этот запуск уже не
+// «текущий» и его finally не должен затирать чужое состояние (5.5 — TOCTOU на POST /backfill).
+function releaseIfOwn(state: BackfillState): void {
+  if (backfill === state) backfill.running = false;
+}
+
+async function runBackfill(state: BackfillState, base: string, token: string, sessionId: string, throttleMs: number, maxPerChat: number) {
   try {
     const chatIds: string[] = [];
     for (let offset = 0; offset <= 900; offset += 100) {
@@ -206,7 +236,7 @@ async function runBackfill(base: string, token: string, sessionId: string, throt
       if (page.length < 100) break;
       await sleep(throttleMs);
     }
-    backfill.chats_total = chatIds.length;
+    state.chats_total = chatIds.length;
     for (const cid of chatIds) {
       let cursor = "0", got = 0, emptyRetries = 0;
       while (got < maxPerChat) {
@@ -219,27 +249,31 @@ async function runBackfill(base: string, token: string, sessionId: string, throt
         emptyRetries = 0;
         for (const m of page) {
           const row = messageRow(sessionId, m);
-          if (row.chat_id && row.message_id) { await store.upsertMessage(row); maybeOffload(row); backfill.messages_added++; }
+          if (row.chat_id && row.message_id) { await store.upsertMessage(row); maybeOffload(row); state.messages_added++; }
         }
         got += page.length;
         if (!next || next === cursor) break;
         cursor = next;
         await sleep(throttleMs);
       }
-      backfill.chats_done++;
+      state.chats_done++;
     }
   } catch (e: any) {
-    backfill.error = String(e?.message ?? e);
+    state.error = String(e?.message ?? e);
   } finally {
-    backfill.running = false;
-    backfill.finished_at = Date.now();
+    state.finished_at = Date.now();
+    releaseIfOwn(state);
   }
 }
 
 // ---------------- HTTP ----------------
 function authorized(req: http.IncomingMessage): boolean {
-  if (!TOKEN) return true;
-  return req.headers.authorization === `Bearer ${TOKEN}`;
+  if (!TOKEN) return true; // явный опт-аут через ARCHIVER_ALLOW_INSECURE=1 (иначе процесс не стартовал бы)
+  // Сравниваем не сами строки, а их SHA-256-дайджесты фиксированной длины: так timingSafeEqual
+  // не бросает исключение при разной длине токенов и не даёт судить о ней по времени ответа.
+  const got = createHash("sha256").update(req.headers.authorization ?? "").digest();
+  const want = createHash("sha256").update(`Bearer ${TOKEN}`).digest();
+  return timingSafeEqual(got, want);
 }
 
 async function readBody(req: http.IncomingMessage, maxBytes: number): Promise<{ ok: true; body: string } | { ok: false; tooLarge: true }> {
@@ -263,7 +297,12 @@ const server = http.createServer((req, res) => {
 
   void (async () => {
     try {
-      if (url.pathname === "/health") return send(200, { ok: true });
+      if (url.pathname === "/health") {
+        // 503, когда consumer нездоров (crashed/stopped/disconnected) — иначе k8s считает под
+        // живым и готовым, пока consumer молча не потребляет топик (5.3).
+        if (!consumerHealthy) return send(503, { ok: false, error: "consumer unhealthy" });
+        return send(200, { ok: true });
+      }
       if (!authorized(req)) return send(401, { ok: false, error: "unauthorized" });
 
       if (url.pathname === "/stats") {
@@ -289,13 +328,24 @@ const server = http.createServer((req, res) => {
       }
       if (url.pathname === "/backfill" && req.method === "POST") {
         if (backfill.running) return send(409, { ok: false, error: "backfill already running", state: backfill });
+        // Check-and-set СИНХРОННО, без единого await между проверкой и установкой running=true:
+        // иначе два конкурентных POST оба проходят проверку выше, пока первый ждёт readBody, и
+        // оба стартуют бэкфилл (TOCTOU, 5.5). Публикуем новый объект состояния сразу — до этого
+        // момента releaseIfOwn() ниже ещё не может ни на что случайно повлиять.
+        const state: BackfillState = { running: true, chats_total: 0, chats_done: 0, messages_added: 0, started_at: Date.now() };
+        backfill = state;
         const raw = await readBody(req, MAX_BODY_BYTES);
-        if (!raw.ok) return send(413, { ok: false, error: "body too large" });
-        let cfg: any = {}; try { cfg = JSON.parse(raw.body || "{}"); } catch { return send(400, { ok: false, error: "bad json body" }); }
-        if (!cfg.gateway_url || !cfg.token || !cfg.session_id) return send(400, { ok: false, error: "gateway_url, token, session_id are required" });
+        if (!raw.ok) { releaseIfOwn(state); return send(413, { ok: false, error: "body too large" }); }
+        let cfg: any = {};
+        try { cfg = JSON.parse(raw.body || "{}"); } catch { releaseIfOwn(state); return send(400, { ok: false, error: "bad json body" }); }
+        if (!cfg.gateway_url || !cfg.token || !cfg.session_id) {
+          releaseIfOwn(state);
+          return send(400, { ok: false, error: "gateway_url, token, session_id are required" });
+        }
         const sessionId = String(cfg.session_id);
         const gatewayUrl = String(cfg.gateway_url).replace(/\/$/, "");
         if (!isAllowedGatewayUrl(gatewayUrl, sessionId)) {
+          releaseIfOwn(state);
           return send(400, {
             ok: false,
             error: GW_TEMPLATE
@@ -303,10 +353,11 @@ const server = http.createServer((req, res) => {
               : "gateway_url must be localhost, cluster DNS, or private IP",
           });
         }
+        state.session_id = sessionId;
         // min=0: явный 0 (без троттлинга) валиден, а falsy-мусор ("", false, []) → default
         const throttleMs = queryLimit(String(cfg.throttle_ms ?? 300), 300, 60_000, 0);
         const maxPerChat = queryLimit(String(cfg.max_per_chat ?? "1000000"), 1_000_000, 5_000_000);
-        void runBackfill(gatewayUrl, String(cfg.token), sessionId, throttleMs, maxPerChat);
+        void runBackfill(state, gatewayUrl, String(cfg.token), sessionId, throttleMs, maxPerChat);
         return send(200, { ok: true, started: true, session_id: sessionId });
       }
       if (url.pathname === "/backfill") return send(200, { ok: true, backfill, media: media?.stats() ?? null });
@@ -321,6 +372,29 @@ server.listen(PORT, () => console.error(`archiver: http on :${PORT}`));
 // ---------------- Kafka ----------------
 const kafka = new Kafka({ clientId: "tgw-archiver", brokers: BROKERS, logLevel: logLevel.WARN });
 const consumer = kafka.consumer({ groupId: GROUP });
+
+// consumer.run() при ошибке в eachMessage ретраит и молча не роняет процесс — throw наружу
+// kafkajs не пробрасывает, он его перехватывает своим internal-раннером (см. runner.js). Поэтому
+// здоровье consumer'а отслеживаем инструментальными событиями, а не try/catch вокруг run().
+consumer.on(consumer.events.CRASH, ({ payload }) => {
+  consumerHealthy = false;
+  console.error(`archiver: consumer crash (restart=${payload.restart}):`, payload.error);
+});
+consumer.on(consumer.events.STOP, () => {
+  consumerHealthy = false;
+  console.error("archiver: consumer stopped");
+});
+consumer.on(consumer.events.DISCONNECT, () => {
+  consumerHealthy = false;
+  console.error("archiver: consumer disconnected");
+});
+// kafkajs сам перезапускает consumer после CRASH с restart=true (см. onCrash в consumer/index.js):
+// CONNECT — сигнал, что перезапуск удался и потребление возобновилось. Без этого одиночный
+// транзиентный обрыв связи с брокером навсегда держал бы /health на 503, хотя consumer уже
+// восстановился — liveness-проба бы рестартовала здоровый под по кругу.
+consumer.on(consumer.events.CONNECT, () => {
+  consumerHealthy = true;
+});
 
 async function main() {
   await consumer.connect();
@@ -360,10 +434,16 @@ async function main() {
               `event dropped after retries (consecutive_drops=${consecutiveDrops}/${DROP_CIRCUIT}): ${frameMeta(frame)}`,
             );
             if (consecutiveDrops >= DROP_CIRCUIT) {
-              // fail-closed: не «молча» проглатываем весь топик при PG/disk outage
-              throw new Error(
-                `archiver: ${consecutiveDrops} consecutive drops (storage likely down) — aborting consumer`,
+              // fail-closed: не «молча» проглатываем весь топик при PG/disk outage. Раньше здесь
+              // был throw — kafkajs его не пробрасывает наружу процесса (ретраит/рестартует
+              // consumer сам), поэтому крашим процесс явно: после честной попытки залогировать
+              // контекст, process.exit(1), не полагаясь на kafkajs (5.3).
+              consumerHealthy = false;
+              console.error(
+                `archiver: ${consecutiveDrops} consecutive drops (storage likely down) — aborting process ` +
+                  `so k8s can restart it: ${frameMeta(frame)}`,
               );
+              process.exit(1);
             }
             return;
           }
