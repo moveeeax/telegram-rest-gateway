@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, develop]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -24,7 +25,7 @@ jobs:
       - name: clang-format --dry-run --Werror
         run: |
           find src tests -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) \
-            | xargs -r clang-format --dry-run --Werror
+            -exec clang-format --dry-run --Werror {} +
 
   # Наш код НЕ должен попадать в sanitizer-suppressions (только сторонние символы).
   suppressions-guard:
@@ -38,45 +39,119 @@ jobs:
             echo "ОШИБКА: наш код в suppressions — гонки/утечки чиним, а не подавляем:"; echo "$hits"; exit 1;
           fi
 
-  # Дорогой образ TDLib+Drogon. Кэшируется через GHCR + gha; пересобирается
-  # быстро, когда пины TDLIB_REF/DROGON_REF и Dockerfile.builder не менялись.
+  # TS-сайдкары (archiver, mcp): сборка tsc + docker build их Dockerfile'ов БЕЗ пуша.
+  # Ловит сломанный TS и сломанный образ сайдкара до релиза (на каждом PR/push).
+  node-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pkg: [archiver, mcp]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: ${{ matrix.pkg }}
+      - run: npm run build
+        working-directory: ${{ matrix.pkg }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.pkg }}
+          file: ${{ matrix.pkg }}/Dockerfile
+          push: false
+
+  # Дорогой образ TDLib+Drogon. Content-addressed тег: builder:<hash>, где
+  # hash = sha256(Dockerfile.builder + TDLIB_REF + DROGON_REF), 16 симв. Пины/рецепт
+  # не менялись → тот же тег → downstream тянет готовый образ (сборки нет). Изменились
+  # → новый тег → пересборка+пуш. Так уходит отравление мутабельного :latest и гонки
+  # между ветками. :latest дополнительно пушим только с main как «последний тулчейн».
   builder:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      available: ${{ steps.meta.outputs.available }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      # Логин: нужен для пуша и для inspect приватного образа. В форк-PR токен
+      # read-only — этого достаточно, чтобы ТЯНУТЬ уже существующий builder.
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: refs
+      - id: meta
         run: |
-          echo "tdlib=$(grep -E '^TDLIB_REF=' TDLIB_REF | cut -d= -f2)" >> "$GITHUB_OUTPUT"
-          echo "drogon=$(grep -E '^DROGON_REF=' DROGON_REF | cut -d= -f2)" >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v6
+          tdlib=$(grep -E '^TDLIB_REF=' TDLIB_REF | cut -d= -f2)
+          drogon=$(grep -E '^DROGON_REF=' DROGON_REF | cut -d= -f2)
+          hash=$(cat Dockerfile.builder TDLIB_REF DROGON_REF | sha256sum | cut -c1-16)
+          image="${BUILDER_IMAGE}:${hash}"
+          {
+            echo "tdlib=$tdlib"
+            echo "drogon=$drogon"
+            echo "image=$image"
+          } >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+            echo "content-тег уже в GHCR: $image — пересборка не нужна"
+            echo "exists=true"    >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
+            # Форк-PR: токен read-only, запушить нельзя. Собираем локально (валидация
+            # рецепта), но downstream C++-джобы тянуть образ не смогут → они скипаются.
+            echo "форк-PR: content-тег $image отсутствует, пуш недоступен — downstream скипнется"
+            echo "exists=false"    >> "$GITHUB_OUTPUT"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "content-тег $image отсутствует — соберём и запушим"
+            echo "exists=false"   >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+      # Обычный случай: тега нет и мы можем писать (push в ветку/тег или PR из своего репо).
+      - name: build+push builder (content tag)
+        if: steps.meta.outputs.exists == 'false' && steps.meta.outputs.available == 'true'
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.builder
           build-args: |
-            TDLIB_REF=${{ steps.refs.outputs.tdlib }}
-            DROGON_REF=${{ steps.refs.outputs.drogon }}
-          tags: ${{ env.BUILDER_IMAGE }}:latest
+            TDLIB_REF=${{ steps.meta.outputs.tdlib }}
+            DROGON_REF=${{ steps.meta.outputs.drogon }}
+          tags: ${{ steps.meta.outputs.image }}
           push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # :latest — только с main, указывает на свежесобранный content-тег.
+      - name: retag builder :latest (main only)
+        if: steps.meta.outputs.exists == 'false' && steps.meta.outputs.available == 'true' && github.ref == 'refs/heads/main'
+        run: docker buildx imagetools create -t "${BUILDER_IMAGE}:latest" "${{ steps.meta.outputs.image }}"
+      # Форк-PR без готового тега: локальная сборка (без пуша) как валидация рецепта.
+      - name: build builder locally (fork PR, no push)
+        if: steps.meta.outputs.exists == 'false' && steps.meta.outputs.available == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.builder
+          build-args: |
+            TDLIB_REF=${{ steps.meta.outputs.tdlib }}
+            DROGON_REF=${{ steps.meta.outputs.drogon }}
+          load: true
+          tags: ${{ steps.meta.outputs.image }}
+          cache-from: type=gha
 
   test-asan:
     needs: builder
+    if: needs.builder.outputs.available == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
     container:
-      image: ghcr.io/${{ github.repository }}/builder:latest
+      image: ${{ needs.builder.outputs.image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -97,12 +172,13 @@ jobs:
 
   test-tsan:
     needs: builder
+    if: needs.builder.outputs.available == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
     container:
-      image: ghcr.io/${{ github.repository }}/builder:latest
+      image: ${{ needs.builder.outputs.image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -120,12 +196,13 @@ jobs:
 
   tidy:
     needs: builder
+    if: needs.builder.outputs.available == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
     container:
-      image: ghcr.io/${{ github.repository }}/builder:latest
+      image: ${{ needs.builder.outputs.image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -138,12 +215,13 @@ jobs:
   # Полный exe (Release) — test-джобы собирают только тест-таргет.
   build-app:
     needs: builder
+    if: needs.builder.outputs.available == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
     container:
-      image: ghcr.io/${{ github.repository }}/builder:latest
+      image: ${{ needs.builder.outputs.image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -151,3 +229,70 @@ jobs:
       - uses: actions/checkout@v4
       - run: cmake --preset ci-release
       - run: cmake --build --preset ci-release --target telegram-rest-gateway
+
+  # Публикация образов в GHCR. Только push в main или git-тег vX.Y.Z — из PR (в т.ч.
+  # форков) не срабатывает, поэтому read-only токен форка пайплайн не красит.
+  # Гейт на зелёные санитайзеры/tidy/exe — не публикуем непроверенное.
+  # ВНИМАНИЕ (multi-arch): корневой Dockerfile делает FROM ${BUILDER_IMAGE}, а builder
+  # нативен per-arch (сборка TDLib под qemu нереалистична по времени/памяти). arm64-образ
+  # потребовал бы отдельного arm64-builder'а — пока публикуем ТОЛЬКО amd64. Подробности и
+  # TODO по arm64 — в docs/CICD.md.
+  publish:
+    needs: [builder, test-asan, test-tsan, tidy, build-app]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tags
+        run: |
+          sha=$(git rev-parse --short HEAD)
+          gw="ghcr.io/${{ github.repository }}"
+          ar="ghcr.io/${{ github.repository }}-archiver"
+          mc="ghcr.io/${{ github.repository }}-mcp"
+          gw_tags="${gw}:${sha}"; ar_tags="${ar}:${sha}"; mc_tags="${mc}:${sha}"
+          # На git-теге vX.Y.Z добавляем человекочитаемый версионный тег.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            gw_tags="${gw_tags},${gw}:${GITHUB_REF_NAME}"
+            ar_tags="${ar_tags},${ar}:${GITHUB_REF_NAME}"
+            mc_tags="${mc_tags},${mc}:${GITHUB_REF_NAME}"
+          fi
+          {
+            echo "gw_tags=$gw_tags"
+            echo "ar_tags=$ar_tags"
+            echo "mc_tags=$mc_tags"
+          } >> "$GITHUB_OUTPUT"
+      # Корневой сервис: FROM content-addressed builder (тот же, что гоняли тесты).
+      - name: build+push gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          build-args: |
+            BUILDER_IMAGE=${{ needs.builder.outputs.image }}
+          tags: ${{ steps.tags.outputs.gw_tags }}
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: build+push archiver
+        uses: docker/build-push-action@v6
+        with:
+          context: archiver
+          file: archiver/Dockerfile
+          tags: ${{ steps.tags.outputs.ar_tags }}
+          push: true
+      - name: build+push mcp
+        uses: docker/build-push-action@v6
+        with:
+          context: mcp
+          file: mcp/Dockerfile
+          tags: ${{ steps.tags.outputs.mc_tags }}
+          push: true
