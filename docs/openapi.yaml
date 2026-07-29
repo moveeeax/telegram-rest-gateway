@@ -143,10 +143,6 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
         '429':
           $ref: '#/components/responses/RateLimited'
         '502':
@@ -176,10 +172,6 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
         '429':
           $ref: '#/components/responses/RateLimited'
         '502':
@@ -212,10 +204,6 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
         '429':
           $ref: '#/components/responses/RateLimited'
         '502':
@@ -236,10 +224,6 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
         '429':
           $ref: '#/components/responses/RateLimited'
         '502':
@@ -272,10 +256,6 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
         '429':
           $ref: '#/components/responses/RateLimited'
         '502':
@@ -332,10 +312,6 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
         '429':
           $ref: '#/components/responses/RateLimited'
         '502':
@@ -1123,12 +1099,6 @@ components:
             $ref: '#/components/schemas/Error'
     NotFound:
       description: Объект не найден
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    AuthConflict:
-      description: Операция неприменима в текущем auth-состоянии (409 AUTH_REQUIRED)
       content:
         application/json:
           schema:

@@ -543,7 +543,7 @@ struct ITdTransport {
 - **14.18** (новый): shutdown при активных download → все 503, temp-файлы удалены, `transfers_active`→0, нет leak (LSan).
 - **14.19** (новый): `POST /logout` → `LoggingOut→Closed` без `_exit(1)`; последующий `POST /auth/session` стартует новый логин.
 - **14.20** (новый): подмена `database_encryption_key` при существующей БД → детерминированный отказ старта (`DB_KEY_MISMATCH`), БД не повреждена.
-- **14.21** (новый): маппинг ошибок — перебор диапазонов кодов покрывает default-бакет (unknown→502) и формальный признак 401→409 (Ready vs не-Ready).
+- **14.21** (новый): маппинг ошибок (`httpStatusForTdError`) — code 400 без "not found" в сообщении → 400, code 400 с "not found" → 404, code 429 / `FLOOD_WAIT` / "Too Many Requests" → 429 (+`Retry-After`, если распарсился), всё остальное (default-бакет, включая синтетические `SERVICE_BUSY`/`UPSTREAM_TIMEOUT` моста) → 502.
 - **14.22** (новый): 202 на `sendMessage` + `updateMessageSendSucceeded` по WS самодостаточен (несёт `old_message_id`+`message.id`) при любом порядке доставки.
 - **14.23** (новый): `X-Request-Id` с CR/LF/управляющими символами игнорируется, лог-строки JSONL не подделываются.
 - **14.24** (новый): download по `remote_unique_id`(+`file_type`) работает после рестарта (ephemeral `file_id` мёртв).
