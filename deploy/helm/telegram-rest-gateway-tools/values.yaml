@@ -8,8 +8,13 @@ gatewayPort: 8080
 
 archiver:
   enabled: true
-  image: "docker.io/resert/telegram-rest-gateway-archiver:v1.2.0"
-  pullPolicy: IfNotPresent
+  image:
+    repository: ghcr.io/moveeeax/telegram-rest-gateway-archiver
+    # ОБЯЗАТЕЛЕН: дефолта нет. CI не публикует semver-теги (нет стабильного "последнего"
+    # образа) — публикуются только immutable short-sha теги, см. docs/CICD.md. Задай явно,
+    # иначе helm install/template упадёт с понятной ошибкой (fail-fast вместо ImagePullBackOff).
+    tag: ""
+    pullPolicy: IfNotPresent
   kafkaBrokers: "kafka.kafka.svc.cluster.local:9092"
   kafkaTopic: "tgw.updates"
   kafkaGroup: "tgw-archiver"
@@ -47,8 +52,13 @@ archiver:
 
 mcp:
   enabled: true
-  image: "docker.io/resert/telegram-rest-gateway-mcp:v1.2.0-2"  # stateful streamable-http
-  pullPolicy: IfNotPresent
+  image:
+    repository: ghcr.io/moveeeax/telegram-rest-gateway-mcp  # stateful streamable-http
+    # ОБЯЗАТЕЛЕН: дефолта нет. CI не публикует semver-теги (нет стабильного "последнего"
+    # образа) — публикуются только immutable short-sha теги, см. docs/CICD.md. Задай явно,
+    # иначе helm install/template упадёт с понятной ошибкой (fail-fast вместо ImagePullBackOff).
+    tag: ""
+    pullPolicy: IfNotPresent
   httpPort: 8080
   # По одному MCP-серверу на аккаунт (Streamable HTTP, stateless — можно >1 реплики).
   # Пусто по умолчанию: без явных аккаунтов ни один mcp-деплоймент не рендерится.

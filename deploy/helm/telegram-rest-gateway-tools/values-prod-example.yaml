@@ -1,8 +1,13 @@
 # Пример: MCP и архиватор (/search + /health) наружу через Ingress с IP-allowlist.
 # /backfill и /stats архиватора наружу не выставляются (path-restrict в template).
 # Если архиватор только внутри кластера — оставь archiverHost: "".
+archiver:
+  image:
+    # CI не тегирует образ semver — пиньте неизменяемый short-sha релиза (тег image:<sha> в реестре).
+    tag: "da77e294"  # неизменяемый short-sha
 mcp:
-  image: "docker.io/resert/telegram-rest-gateway-mcp:v1.2.0-2"
+  image:
+    tag: "da77e294"  # неизменяемый short-sha
   # Пример владельца: реальные Telegram account id (совпадают с accounts гейтвея);
   # в дефолтах чарта mcp.accounts пуст.
   accounts:

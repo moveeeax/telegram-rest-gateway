@@ -4,8 +4,9 @@
 
 ## Предпосылки
 
-- Образ в реестре: `docker.io/resert/telegram-rest-gateway:<short-sha>` (CI собирает `:<sha>`
-  и `:latest`; **semver-тег образа CI не делает** — пиньте sha).
+- Образ в реестре: `ghcr.io/moveeeax/telegram-rest-gateway:<short-sha>` (CI пушит `:<short-sha>`
+  всегда и `:vX.Y.Z` на git-теге; **«последнего»/`latest` образа CI не делает** — пиньте sha,
+  см. docs/CICD.md).
 - Kafka в кластере: namespace `kafka`, сервис `kafka.kafka.svc.cluster.local:9092` (PLAINTEXT).
 - S3/MinIO для сессий (`s3.tarassov.me`, бакет `tgw-s3-bucket`).
 

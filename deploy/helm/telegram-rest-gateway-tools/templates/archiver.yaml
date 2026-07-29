@@ -46,8 +46,8 @@ spec:
         fsGroup: 1000
       containers:
         - name: archiver
-          image: {{ .Values.archiver.image | quote }}
-          imagePullPolicy: {{ .Values.archiver.pullPolicy }}
+          image: "{{ .Values.archiver.image.repository }}:{{ required "archiver.image.tag обязателен: CI публикует immutable short-sha теги, см. docs/CICD.md" .Values.archiver.image.tag }}"
+          imagePullPolicy: {{ .Values.archiver.image.pullPolicy }}
           ports:
             - name: http
               containerPort: 8090

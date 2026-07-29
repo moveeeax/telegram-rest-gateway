@@ -5,7 +5,7 @@
 # Поэтому: replicas всегда 1 на аккаунт, strategy Recreate, никакого HPA.
 
 image:
-  repository: docker.io/resert/telegram-rest-gateway
+  repository: ghcr.io/moveeeax/telegram-rest-gateway
   # ОБЯЗАТЕЛЕН: дефолта нет. CI не публикует semver-теги (нет стабильного "последнего"
   # образа) — публикуются только immutable short-sha теги, см. docs/CICD.md. Задай явно,
   # иначе helm install/template упадёт с понятной ошибкой (fail-fast вместо ImagePullBackOff).
