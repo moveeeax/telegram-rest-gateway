@@ -279,7 +279,9 @@ server.tool(
     const controller = new AbortController();
     const resp = await fetch(`${BASE_URL}/v1/files/${encodeURIComponent(file_id)}`, {
       headers: { Authorization: `Bearer ${TOKEN}` },
-      signal: controller.signal,
+      // maxBytes посреди потока (controller) совмещаем с таймаутом запроса,
+      // чтобы зависший гейтвей не подвешивал инструмент бессрочно.
+      signal: AbortSignal.any([AbortSignal.timeout(60000), controller.signal]),
     });
     const ctype = resp.headers.get("content-type") ?? "";
     if (resp.status === 202 || ctype.includes("application/json")) {
