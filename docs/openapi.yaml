@@ -143,8 +143,10 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/auth/qr:
     post:
       tags:
@@ -166,10 +168,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthStateEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/auth/code:
     post:
       tags:
@@ -198,8 +204,10 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/auth/code/resend:
     post:
       tags:
@@ -212,10 +220,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthStateEnvelope'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/auth/password:
     post:
       tags:
@@ -244,8 +256,10 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/auth/session/export:
     get:
       tags:
@@ -294,10 +308,14 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '409':
-          $ref: '#/components/responses/AuthConflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/chats:
     get:
       tags:
@@ -331,8 +349,16 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/Chat'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/chats/{chatId}/messages:
     get:
       tags:
@@ -370,10 +396,16 @@ paths:
                     properties:
                       next_cursor:
                         type: string
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
     post:
       tags:
       - messages
@@ -432,6 +464,18 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Idempotency-Key уже в полёте (`IDEMPOTENCY_KEY_REUSED`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
     delete:
       tags:
       - messages
@@ -462,6 +506,12 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/chats/{chatId}/messages/read:
     post:
       tags:
@@ -496,6 +546,12 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/chats/{chatId}/files:
     post:
       tags:
@@ -547,10 +603,24 @@ paths:
                         type: string
                       temporary_message_id:
                         type: string
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '413':
           description: Тело больше TGW_MAX_UPLOAD_BYTES
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Не удалось создать каталог/записать загруженный файл на диск (`INTERNAL`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/files/{fileId}:
     get:
       tags:
@@ -587,6 +657,8 @@ paths:
                     type: boolean
                   data:
                     $ref: '#/components/schemas/FileStatus'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '404':
@@ -595,6 +667,10 @@ paths:
           description: Partial Content (Range)
         '416':
           description: Range Not Satisfiable
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/chats/{chatId}/messages/{messageId}/reactions:
     post:
       tags:
@@ -623,6 +699,12 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
     delete:
       tags:
       - reactions
@@ -650,6 +732,12 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/updates:
     get:
       tags:
@@ -717,6 +805,12 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/chats/{chatId}/messages/forward:
     post:
       tags:
@@ -753,6 +847,12 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/resolve:
     get:
       tags:
@@ -772,6 +872,12 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401': &id001
           $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/chats/{chatId}:
     get:
       tags:
@@ -784,7 +890,14 @@ paths:
       responses:
         '200':
           description: 'Chat DTO: id, title, type (private|group|supergroup|channel|secret), unread_count'
+        '400': *id002
         '401': *id001
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/users/{userId}:
     get:
       tags:
@@ -799,7 +912,14 @@ paths:
       responses:
         '200':
           description: 'User DTO: id, имена, username, phone, is_contact, is_premium, status'
+        '400': *id002
         '401': *id001
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/chats/join:
     post:
       tags:
@@ -822,6 +942,12 @@ paths:
           description: 'result: joined|request_sent|declined (+chat_id при joined)'
         '400': *id002
         '401': *id001
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/chats/{chatId}/members:
     get:
       tags:
@@ -843,7 +969,14 @@ paths:
       responses:
         '200':
           description: user_id/chat_id, status (creator|administrator|member|...), joined_date; meta.total_count
+        '400': *id002
         '401': *id001
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/contacts:
     get:
       tags:
@@ -852,7 +985,14 @@ paths:
       responses:
         '200':
           description: data.user_ids (строки) + total_count; карточки — /v1/users/{id}
+        '400': *id002
         '401': *id001
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/chats/{chatId}/search:
     get:
       tags:
@@ -884,6 +1024,12 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401': &id004
           $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
   /v1/search:
     get:
       tags:
@@ -911,6 +1057,12 @@ paths:
           description: Сообщения (DTO) + meta.total_count/next_offset
         '400': *id003
         '401': *id004
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
 components:
   securitySchemes:
     bearerAuth:
@@ -951,8 +1103,23 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
-    AuthConflict:
-      description: Операция неприменима в текущем auth-состоянии (409 AUTH_REQUIRED)
+    RateLimited:
+      description: 'Превышен лимит запросов (FLOOD_WAIT со стороны Telegram либо анти-brute-force
+        гейтвея на `/v1/auth/code` и `/v1/auth/password`). `Retry-After` присутствует, если секунды
+        удалось распарсить из сообщения TDLib (`httpStatusForTdError`/`retryAfterSeconds`).'
+      headers:
+        Retry-After:
+          description: Секунды до следующей попытки
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UpstreamError:
+      description: 'Прочая ошибка TDLib/Telegram (не 400 not-found/429) — код TELEGRAM_ERROR,
+        `tdlib_code`/`tdlib_message` из исходной ошибки. Обычно проблема сессии гейтвея
+        (401/403/5xx на стороне TDLib) — повтор тем же клиентом её не чинит.'
       content:
         application/json:
           schema:
@@ -980,6 +1147,7 @@ components:
               - TELEGRAM_ERROR
               - IDEMPOTENCY_KEY_REUSED
               - INSUFFICIENT_SCOPE
+              - INTERNAL
             message:
               type: string
             tdlib_code:

@@ -58,7 +58,12 @@ class TdBridge {
     std::int32_t createClientId();
 
     void start();  // запускает поток-приёмник
-    void stop();   // останавливает и join'ит
+    void stop();  // дренирует in-flight, останавливает и join'ит (идемпотентно)
+
+    // Резолвит ВСЕ висящие запросы ошибкой 503/UPSTREAM_SHUTDOWN. Вызывать при shutdown ДО
+    // drogon::app().quit(), пока IO-петли ещё живы: иначе quit() приджойнит петли, а resume
+    // in-flight корутин, маршаленный через queueInLoop, потеряется и хендлер повиснет (§2.1).
+    void drainPending();
 
     // co_await invoke(...) -> object_ptr<Object> (типизированный ответ или error).
     TdAwaitable invoke(std::int32_t client_id, td::td_api::object_ptr<td::td_api::Function> fn);

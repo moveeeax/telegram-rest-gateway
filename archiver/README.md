@@ -25,14 +25,28 @@ docker run -d --name tgw-archiver --restart unless-stopped --network <сеть-�
 | `ARCHIVER_KAFKA_GROUP` | `tgw-archiver` | Consumer group (offset'ы хранит Kafka) |
 | `ARCHIVER_DB_PATH` | `/data/archive.db` | Файл SQLite (нужен volume) |
 | `ARCHIVER_HTTP_PORT` | `8090` | Порт HTTP |
-| `ARCHIVER_TOKEN` | — | Bearer для /search и /stats (пусто = без auth) |
+| `ARCHIVER_TOKEN` | — | Bearer для /search, /stats, /backfill |
+| `ARCHIVER_ALLOW_INSECURE` | — | `1` — явный опт-аут из обязательной авторизации (см. ниже) |
 
 ## HTTP
 
 - `GET /search?q=слова&chat_id=&session_id=&limit=` — FTS-поиск (AND), сниппеты с `<<подсветкой>>`,
   сортировка по дате. Мультиаккаунт: события всех инстансов в одном топике различаются `session_id`.
 - `GET /stats` — счётчики сообщений/чатов/обработанных событий.
-- `GET /health` — живость (без auth).
+- `GET /health` — без auth. `200`, пока Kafka-consumer штатно потребляет топик; `503`, если
+  consumer упал/остановился/отключился (`consumer.crash`/`stop`/`disconnect`) или сработал
+  `ARCHIVER_DROP_CIRCUIT`, и возвращается в `200` только после успешного повторного вступления
+  в consumer group (`consumer.group_join` — реальное возобновление потребления, а не просто TCP-
+  коннект к брокеру) — на этот эндпоинт смотрят и liveness, и readiness пробы k8s, так что оба
+  реагируют на нездоровый consumer (рестарт/вывод из ротации), а не только на упавший HTTP.
+
+### Авторизация (`ARCHIVER_TOKEN`)
+
+`/search`, `/stats` и `/backfill` требуют `ARCHIVER_TOKEN` — без него процесс не стартует
+(fail-closed): иначе `/search` отдаёт весь архив переписки, а `/backfill` позволяет запустить
+бэкфилл с произвольным `session_id` любому, кто достучится до порта. Явно принять этот риск
+(доверенная сеть, отладка) можно через `ARCHIVER_ALLOW_INSECURE=1`. Токен сравнивается по
+SHA-256-дайджесту через `timingSafeEqual` — без утечки через время сравнения.
 
 ## Семантика
 
@@ -59,15 +73,23 @@ MCP-сервер (`mcp/`) при заданном `TGW_ARCHIVER_URL` (+опц. `
   _BUCKET/_ACCESS_KEY_ID/_SECRET_ACCESS_KEY/_PREFIX/_PUBLIC_BASE`, `ARCHIVER_S3_FORCE_PATH_STYLE`
   (default: true; `false` → virtual-hosted AWS), `ARCHIVER_GATEWAY_TOKEN`, `ARCHIVER_MEDIA_MAX_BYTES`
   (default 100 MiB). `media_url` = `<PUBLIC_BASE>/<key>` или `s3://bucket/key`.
-  Ретраи media: до **5 attempts** на job (202 pending, 5xx/network/timeout/S3 —
-  requeue в конец очереди с растущей паузой 1–4 мин; суммарно джоба живёт ~15 мин —
-  хватает на большие файлы). 401/403/404 — permanent fail (ключ в `seen`, без цикла).
-  После исчерпания attempts — `failed++`, ключ снимается (`seen`), повтор при следующем
-  событии. Oversized — постоянный skip до рестарта. Kafka: storage-ошибки ретраятся
+  Размер проверяется дважды: по `Content-Length` до чтения тела (файл больше `ARCHIVER_MEDIA_MAX_BYTES`
+  вообще не скачивается) и потоково во время чтения (обрыв закачки, если заголовок отсутствовал
+  или занижен) — так большое видео не буферизуется целиком в память. Ретраи media: до **5 attempts**
+  на job (202 pending, 5xx/network/timeout/S3 — requeue в конец очереди с растущей паузой 1–4 мин;
+  суммарно джоба живёт ~15 мин — хватает на большие файлы). 401/403/404 — permanent fail (ключ в
+  `seen`, без цикла). После исчерпания attempts — `failed++`, ключ снимается (`seen`), повтор при
+  следующем событии. Oversized — исход `skip` (не ошибка, без ретраев), постоянный до рестарта.
+  Дедуп `seen` — LRU на 100k ключей (константа в коде): дедуп лишь оптимизация, повторный S3-put
+  идемпотентен, так что вытеснение старых ключей безопасно. Kafka: storage-ошибки ретраятся
   с бэкоффом (5 попыток + heartbeat), затем drop+commit (`dropped_events` в `/stats`);
-  **N подряд drop'ов** (`ARCHIVER_DROP_CIRCUIT`, default 20) — fail-closed (process exit,
-  lag растёт, k8s рестартит; не «молча» проглатываем топик при outage PG). Битый JSON /
-  non-object — poison pill, коммитится.
+  **N подряд drop'ов** (`ARCHIVER_DROP_CIRCUIT`, default 20) — fail-closed: лог с контекстом и
+  `process.exit(1)` (не полагаемся на проброс исключения через kafkajs — он его не пробрасывает,
+  а ретраит/рестартует consumer сам), lag растёт, k8s рестартит по упавшему `/health`. Тот же
+  `/health` уходит в 503 и при обычном kafkajs-крэше/остановке/дисконнекте consumer'а (без
+  разрыва процесса) и возвращается в 200 только после успешного повторного join+sync consumer
+  group (`consumer.group_join`) — то есть реального возобновления потребления, а не просто
+  восстановленного TCP-соединения с кластером. Битый JSON / non-object — poison pill, коммитится.
 - **Бэкфилл** пишет в текущий store и триггерит медиа-оффлоад — так наполняется свежая PG-база.
   `gateway_url` ограничен: должен совпадать с `ARCHIVER_GATEWAY_TEMPLATE` (если задан) либо
   быть localhost / cluster DNS / private IP. Через внешний Ingress `/backfill` не публикуется.

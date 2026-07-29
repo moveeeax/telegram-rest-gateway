@@ -5,8 +5,10 @@
 # Поэтому: replicas всегда 1 на аккаунт, strategy Recreate, никакого HPA.
 
 image:
-  repository: docker.io/resert/telegram-rest-gateway
-  # По умолчанию — тег из Chart.appVersion.
+  repository: ghcr.io/moveeeax/telegram-rest-gateway
+  # ОБЯЗАТЕЛЕН: дефолта нет. CI не публикует semver-теги (нет стабильного "последнего"
+  # образа) — публикуются только immutable short-sha теги, см. docs/CICD.md. Задай явно,
+  # иначе helm install/template упадёт с понятной ошибкой (fail-fast вместо ImagePullBackOff).
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -29,13 +31,24 @@ config:
   TGW_LISTEN_ADDRESS: "0.0.0.0"
   TGW_LISTEN_PORT: "8080"
   # S3-хранилище сессий (обязательно для stateless-подов: PVC у чарта нет).
-  TGW_S3_ENDPOINT: "https://s3.tarassov.me"
+  # Дефолта нет намеренно — своего S3/MinIO под чартом не поставляем; заполни своим
+  # эндпоинтом в собственном values-файле (пример структуры — values-prod-example.yaml).
+  TGW_S3_ENDPOINT: ""
   TGW_S3_REGION: "us-east-1"
   TGW_S3_BUCKET: "tgw-s3-bucket"
   TGW_S3_PATH_STYLE: "true"
   # Kafka-события: пусто = выключено. Например redpanda.redpanda.svc:9093
   TGW_KAFKA_BROKERS: ""
   TGW_KAFKA_TOPIC: "tgw.updates"
+  # Ниже — переменные с дефолтами из образа (config.hpp), сюда добавлять не обязательно; можно
+  # переопределить любым ключом (configmap.yaml рендерит весь .Values.config как есть):
+  #   TGW_DATABASE_DIR: "/data/session"        # БД TDLib; должен остаться под volumeMounts.data
+  #                                             # (mountPath: /data, см. deployment.yaml) — иначе
+  #                                             # каталог не переживёт рестарт пода.
+  #   TGW_FILES_DIR: "/data/files"              # файлы TDLib; та же оговорка про volume /data.
+  #   TGW_MAX_UPLOAD_BYTES: "67108864"          # лимит тела POST /v1/chats/{chatId}/files (64 MiB).
+  #   TGW_USE_TEST_DC: "false"                  # "1"/"true" — тестовый DC Telegram вместо прод.
+  #   TGW_TDLIB_LOG_VERBOSITY: "1"              # уровень логов TDLib (0 — тихо).
 
 service:
   type: ClusterIP

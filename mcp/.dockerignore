@@ -1,0 +1,4 @@
+# Пересобираются внутри образа (npm ci / npm run build) — в контекст не нужны.
+node_modules
+dist
+npm-debug.log*
