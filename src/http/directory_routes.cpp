@@ -3,12 +3,12 @@
 #include "bridge/expect.hpp"
 #include "bridge/td_bridge.hpp"
 #include "dto/message_dto.hpp"
+#include "http/http_helpers.hpp"
 
 #include <drogon/drogon.h>
 #include <td/telegram/td_api.h>
 
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <utility>
 
@@ -17,67 +17,15 @@ namespace api = td::td_api;
 namespace tgw::http {
 namespace {
 
-using HttpCallback = std::function<void(const drogon::HttpResponsePtr&)>;
+// jsonResponse/serviceError/telegramError/parseId/launchInvoke/HttpCallback — общие, из
+// http/http_helpers.hpp (решение 1.6). telegramError сам считает статус из ошибки (решение 1.4).
 
 constexpr char kBearerFilter[] = "tgw::http::BearerAuthFilter";
-
-drogon::HttpResponsePtr jsonResponse(Json::Value body, drogon::HttpStatusCode code) {
-    auto resp = drogon::HttpResponse::newHttpJsonResponse(std::move(body));
-    resp->setStatusCode(code);
-    return resp;
-}
-
-drogon::HttpResponsePtr serviceError(const char* code, const std::string& message,
-                                     drogon::HttpStatusCode status) {
-    Json::Value body;
-    body["ok"] = false;
-    body["error"]["code"] = code;
-    body["error"]["message"] = message;
-    return jsonResponse(std::move(body), status);
-}
-
-drogon::HttpResponsePtr telegramError(const api::error& error, drogon::HttpStatusCode status) {
-    Json::Value body;
-    body["ok"] = false;
-    body["error"]["code"] = "TELEGRAM_ERROR";
-    body["error"]["message"] = error.message_;
-    body["error"]["tdlib_code"] = error.code_;
-    body["error"]["tdlib_message"] = error.message_;
-    return jsonResponse(std::move(body), status);
-}
-
-bool parseId(const std::string& text, std::int64_t& out) {
-    if (text.empty()) {
-        return false;
-    }
-    errno = 0;
-    char* end = nullptr;
-    const long long value = std::strtoll(text.c_str(), &end, 10);
-    if (errno != 0 || end == nullptr || *end != '\0') {
-        return false;
-    }
-    out = value;
-    return true;
-}
-
-// Detached-корутина invoke -> builder (тот же паттерн, что в message_routes: registerHandler
-// не биндит корутинные лямбды).
-void launchInvoke(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
-                  api::object_ptr<api::Function> fn, HttpCallback callback,
-                  std::function<drogon::HttpResponsePtr(api::object_ptr<api::Object>)> builder) {
-    [](tgw::bridge::TdBridge& td, std::int32_t cid, api::object_ptr<api::Function> f,
-       HttpCallback cb, std::function<drogon::HttpResponsePtr(api::object_ptr<api::Object>)> build)
-        -> drogon::AsyncTask {
-        auto object = co_await td.invoke(cid, std::move(f));
-        cb(build(std::move(object)));
-        co_return;
-    }(bridge, client_id, std::move(fn), std::move(callback), std::move(builder));
-}
 
 drogon::HttpResponsePtr chatBuilder(api::object_ptr<api::Object> obj) {
     auto chat = tgw::bridge::expect<api::chat>(std::move(obj));
     if (!chat.ok()) {
-        return telegramError(*chat.error, drogon::k502BadGateway);
+        return telegramError(*chat.error);
     }
     Json::Value body;
     body["ok"] = true;
@@ -137,7 +85,7 @@ void registerDirectoryRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_
                          [](api::object_ptr<api::Object> obj) {
                              auto user = tgw::bridge::expect<api::user>(std::move(obj));
                              if (!user.ok()) {
-                                 return telegramError(*user.error, drogon::k502BadGateway);
+                                 return telegramError(*user.error);
                              }
                              Json::Value body;
                              body["ok"] = true;
@@ -163,8 +111,7 @@ void registerDirectoryRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_
                 api::make_object<api::joinChatByInviteLink>((*json)["invite_link"].asString()),
                 std::move(cb), [](api::object_ptr<api::Object> obj) {
                     if (obj != nullptr && obj->get_id() == api::error::ID) {
-                        return telegramError(static_cast<api::error&>(*obj),
-                                             drogon::k502BadGateway);
+                        return telegramError(static_cast<api::error&>(*obj));
                     }
                     Json::Value body;
                     body["ok"] = true;
@@ -207,7 +154,7 @@ void registerDirectoryRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_
                          [](api::object_ptr<api::Object> obj) {
                              auto members = tgw::bridge::expect<api::chatMembers>(std::move(obj));
                              if (!members.ok()) {
-                                 return telegramError(*members.error, drogon::k502BadGateway);
+                                 return telegramError(*members.error);
                              }
                              Json::Value list(Json::arrayValue);
                              for (const auto& m : members.value->members_) {
@@ -232,7 +179,7 @@ void registerDirectoryRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_
                                 std::move(cb), [](api::object_ptr<api::Object> obj) {
                                     auto users = tgw::bridge::expect<api::users>(std::move(obj));
                                     if (!users.ok()) {
-                                        return telegramError(*users.error, drogon::k502BadGateway);
+                                        return telegramError(*users.error);
                                     }
                                     Json::Value ids(Json::arrayValue);
                                     for (const auto id : users.value->user_ids_) {

@@ -93,7 +93,18 @@ void KafkaSink::workerLoop() {
     for (;;) {
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return stop_ || !queue_.empty(); });
+            // Пока есть неподтверждённые сообщения (outq_len > 0), спим не дольше 100мс, чтобы на
+            // каждом пробуждении звать poll(0) и разгребать delivery-report'ы последнего батча:
+            // иначе они висли бы до следующего produce() — метрики produced/failed врут, буферы
+            // RK_MSG_COPY держатся в памяти. Пустая очередь и ноль outstanding — ждём без таймаута
+            // (нечего поллить, спим до produce()). outq_len() трогает librdkafka, но это worker-
+            // тред под mutex_ — инвариант «librdkafka только из воркера» соблюдён.
+            if (producer_->outq_len() > 0) {
+                cv_.wait_for(lock, std::chrono::milliseconds(100),
+                             [this] { return stop_ || !queue_.empty(); });
+            } else {
+                cv_.wait(lock, [this] { return stop_ || !queue_.empty(); });
+            }
             batch.swap(queue_);
             if (batch.empty() && stop_) {
                 return;

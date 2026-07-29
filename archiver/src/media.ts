@@ -30,6 +30,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const QUEUE_CAP = 50000;
 /** Максимум вызовов process() на job (1 первая + requeue). */
 const MAX_JOB_ATTEMPTS = 5;
+/**
+ * Верхняя граница размера `seen` (LRU на Map, вытеснение самого старого ключа). Дедуп —
+ * лишь оптимизация (повторный S3-put идемпотентен), поэтому неограниченный рост Set'а ради
+ * него не оправдан: за недели аптайма он набирал сотни MB против лимита пода 256Mi (5.6).
+ * 50–100k ключей ("session:chat:message" — десятки байт) — единицы MB, с запасом на активный
+ * рабочий набор чатов между перезапусками.
+ */
+const SEEN_MAX_SIZE = 100_000;
 
 type ProcessResult = "done" | "retry" | "skip";
 
@@ -44,6 +52,39 @@ class MediaError extends Error {
   }
 }
 
+/** Маркер "файл больше maxBytes" — отличаем от прочих сбоев чтения потока. */
+class DownloadTooLargeError extends Error {}
+
+// Читаем тело ответа потоково, не давая ему разрастись сверх лимита: Buffer.from(await
+// resp.arrayBuffer()) буферизует файл целиком ещё до проверки размера — большое видео валит
+// воркер по OOM (ARCHIVER_MEDIA_MAX_BYTES тут не спасает, т.к. проверяется постфактум).
+async function readLimited(
+  body: ReadableStream<Uint8Array> | null,
+  limit: number,
+  controller: AbortController,
+): Promise<Buffer> {
+  if (!body) return Buffer.alloc(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) {
+        // Обрываем закачку немедленно, не дочитывая остаток — именно это и защищает от OOM.
+        controller.abort();
+        throw new DownloadTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks);
+}
+
 function envBool(name: string): boolean | undefined {
   const v = process.env[name];
   if (v === undefined || v === "") return undefined;
@@ -56,7 +97,9 @@ function isPermanentError(e: unknown): boolean {
 
 export class MediaOffloader {
   private queue: MediaJob[] = [];
-  private seen = new Set<string>();
+  // LRU на базе Map: порядок ключей — порядок вставки, "тронуть" ключ = delete+set (двигает его
+  // в конец, most-recently-used), переполнение — удаляем самый старый (первый) ключ. См. SEEN_MAX_SIZE.
+  private seen = new Map<string, true>();
   private running = true;
   private s3: S3Client;
   private bucket: string;
@@ -113,13 +156,31 @@ export class MediaOffloader {
 
   enqueue(job: MediaJob): void {
     const key = this.jobKey(job);
-    if (this.seen.has(key)) return; // уже в работе/обработано в этом процессе
+    if (this.seen.has(key)) {
+      this.touchSeen(key); // повторная ссылка — двигаем в MRU, защищаем от вытеснения
+      return; // уже в работе/обработано в этом процессе
+    }
     if (this.queue.length >= QUEUE_CAP) {
       console.error(`media: queue full (${QUEUE_CAP}), not enqueueing ${key}`);
       return; // не помечаем seen — попробуем при следующем событии
     }
-    this.seen.add(key);
+    this.markSeen(key);
     this.queue.push(job);
+  }
+
+  /** Помечает ключ виденным, вытесняя старейший при переполнении (LRU, см. SEEN_MAX_SIZE). */
+  private markSeen(key: string): void {
+    if (this.seen.size >= SEEN_MAX_SIZE) {
+      const oldest = this.seen.keys().next().value;
+      if (oldest !== undefined) this.seen.delete(oldest);
+    }
+    this.seen.set(key, true);
+  }
+
+  /** Сдвигает существующий ключ в конец (most-recently-used) порядка Map. */
+  private touchSeen(key: string): void {
+    this.seen.delete(key);
+    this.seen.set(key, true);
   }
 
   stats() {
@@ -201,15 +262,19 @@ export class MediaOffloader {
 
   private async process(job: MediaJob): Promise<ProcessResult> {
     const base = this.gwTemplate.replace("{sessionId}", job.session_id).replace(/\/$/, "");
+    const dedupKey = this.jobKey(job);
     // Скачиваем файл из гейтвея; 202 = ещё качается TDLib — несколько ретраев внутри process.
     let bytes: Buffer | null = null;
     let contentType = job.mime_type || "application/octet-stream";
     for (let attempt = 0; attempt < 6; attempt++) {
       let resp: Response;
+      // Свой AbortController: им readLimited ниже обрывает закачку немедленно при превышении
+      // maxBytes посреди потока — совмещаем с таймаутом запроса через AbortSignal.any.
+      const controller = new AbortController();
       try {
         resp = await fetch(`${base}/v1/files/${encodeURIComponent(job.file_id)}`, {
           headers: this.gwToken ? { Authorization: `Bearer ${this.gwToken}` } : {},
-          signal: AbortSignal.timeout(60000), // не морозим воркер на зависшем скачивании
+          signal: AbortSignal.any([AbortSignal.timeout(60000), controller.signal]), // не морозим воркер на зависшем скачивании
         });
       } catch (e: any) {
         // network / timeout — retriable на уровне job (requeue)
@@ -229,12 +294,29 @@ export class MediaOffloader {
       // 200 + application/json — легитимный файл (пользователь прислал .json):
       // ошибки гейтвея приходят с не-2xx статусом и отсечены выше.
       const ct = resp.headers.get("content-type") ?? "";
-      const ab = await resp.arrayBuffer();
-      if (ab.byteLength > this.maxBytes) {
-        console.error(`media: skip oversized ${this.jobKey(job)} (${ab.byteLength} > ${this.maxBytes})`);
+      // Content-Length известен заранее — отказываемся, не читая тело вообще: раньше
+      // resp.arrayBuffer() буферизовал файл целиком ещё до проверки размера, и 1.5 GB видео
+      // валило воркер по OOM (после рестарта job снова в очереди — crash-loop). Превышение —
+      // это "skip" (как и раньше для oversized), а не ошибка: не крашим и не ретраим (5.4).
+      const declaredLength = Number(resp.headers.get("content-length"));
+      if (Number.isFinite(declaredLength) && declaredLength > this.maxBytes) {
+        await resp.body?.cancel().catch(() => {});
+        console.error(`media: skip oversized ${dedupKey} (content-length ${declaredLength} > ${this.maxBytes})`);
         return "skip";
       }
-      bytes = Buffer.from(ab);
+      // Content-Length может отсутствовать или занижать фактический размер — читаем потоково
+      // и обрываем закачку сразу по достижении лимита, не давая буферу разрастись.
+      let ab: Buffer;
+      try {
+        ab = await readLimited(resp.body, this.maxBytes, controller);
+      } catch (e) {
+        if (e instanceof DownloadTooLargeError) {
+          console.error(`media: skip oversized ${dedupKey} (> ${this.maxBytes})`);
+          return "skip";
+        }
+        throw new MediaError(`download stream: ${String((e as any)?.message ?? e)}`, false);
+      }
+      bytes = ab;
       if (ct) contentType = ct;
       break;
     }

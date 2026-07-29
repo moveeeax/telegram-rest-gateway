@@ -1,5 +1,6 @@
 #include "config/config.hpp"
 
+#include <charconv>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -50,6 +51,30 @@ std::string require(const char* name) {
     return v;
 }
 
+// Числовой разбор env-переменной с ИМЕНОВАННОЙ ошибкой (решение 3.5). Раньше числовые значения
+// шли через std::stol/stoul/stoull с последующим static_cast: "10GB" молча превращался в 10
+// (stoull парсит числовой префикс и игнорирует хвост), а значение больше диапазона типа тихо
+// обрезалось при static_cast (например порт 99999 -> 34463) — обе ошибки конфигурации попадали
+// в рантайм искажёнными вместо явного отказа на старте. std::from_chars требует, чтобы ВЕСЬ текст
+// был числом (иначе ptr != last), и честно сообщает о переполнении (result_out_of_range); имя
+// переменной попадает в сообщение, чтобы оператор сразу увидел, что чинить.
+template <typename T>
+T parseNumericEnv(const char* name, const std::string& value) {
+    T out{};
+    const char* first = value.data();
+    const char* last = value.data() + value.size();
+    const auto res = std::from_chars(first, last, out);
+    if (res.ec == std::errc::result_out_of_range) {
+        throw std::runtime_error(std::string("config variable ") + name +
+                                 ": value out of range ('" + value + "')");
+    }
+    if (res.ec != std::errc{} || res.ptr != last) {
+        throw std::runtime_error(std::string("config variable ") + name + ": not a number ('" +
+                                 value + "')");
+    }
+    return out;
+}
+
 // Безопасный одиночный сегмент пути S3: [A-Za-z0-9._-], непусто, без '..' целиком.
 bool isSafeSegment(const std::string& s) {
     if (s.empty() || s == "." || s == "..") {
@@ -70,7 +95,7 @@ bool isSafeSegment(const std::string& s) {
 Config Config::load() {
     Config c;
 
-    c.api_id = static_cast<std::int32_t>(std::stol(require("API_ID")));
+    c.api_id = parseNumericEnv<std::int32_t>("API_ID", require("API_ID"));
     c.api_hash = require("API_HASH");
     c.database_encryption_key = require("DATABASE_ENCRYPTION_KEY");
     c.session_b64 = envOrFile("TGW_SESSION");
@@ -83,28 +108,30 @@ Config Config::load() {
 
     const std::string verbosity = envOrFile("TGW_TDLIB_LOG_VERBOSITY");
     if (!verbosity.empty()) {
-        c.tdlib_log_verbosity = static_cast<std::int32_t>(std::stol(verbosity));
+        c.tdlib_log_verbosity = parseNumericEnv<std::int32_t>("TGW_TDLIB_LOG_VERBOSITY", verbosity);
     }
 
     c.listen_address = envOrFile("TGW_LISTEN_ADDRESS", c.listen_address);
     const std::string port = envOrFile("TGW_LISTEN_PORT");
     if (!port.empty()) {
-        c.listen_port = static_cast<std::uint16_t>(std::stoul(port));
+        c.listen_port = parseNumericEnv<std::uint16_t>("TGW_LISTEN_PORT", port);
     }
 
     const std::string max_upload = envOrFile("TGW_MAX_UPLOAD_BYTES");
     if (!max_upload.empty()) {
-        c.max_upload_bytes = static_cast<std::size_t>(std::stoull(max_upload));
+        c.max_upload_bytes = parseNumericEnv<std::size_t>("TGW_MAX_UPLOAD_BYTES", max_upload);
     }
 
     const std::string max_mem_body = envOrFile("TGW_MAX_MEMORY_BODY_BYTES");
     if (!max_mem_body.empty()) {
-        c.max_memory_body_bytes = static_cast<std::size_t>(std::stoull(max_mem_body));
+        c.max_memory_body_bytes =
+            parseNumericEnv<std::size_t>("TGW_MAX_MEMORY_BODY_BYTES", max_mem_body);
     }
 
     const std::string ws_pending = envOrFile("TGW_WS_MAX_PENDING_BYTES");
     if (!ws_pending.empty()) {
-        c.ws_max_pending_bytes = std::stoull(ws_pending);
+        c.ws_max_pending_bytes =
+            parseNumericEnv<std::uint64_t>("TGW_WS_MAX_PENDING_BYTES", ws_pending);
     }
 
     // Метка инстанса для разграничения сессий в S3. Валидируем как безопасный сегмент пути.
@@ -135,7 +162,8 @@ Config Config::load() {
     }
     const std::string s3_interval = envOrFile("TGW_S3_SYNC_INTERVAL_SECONDS");
     if (!s3_interval.empty()) {
-        c.s3_sync_interval_seconds = static_cast<int>(std::stol(s3_interval));
+        c.s3_sync_interval_seconds =
+            parseNumericEnv<int>("TGW_S3_SYNC_INTERVAL_SECONDS", s3_interval);
     }
 
     // Kafka-события: brokers пуст — выключено.

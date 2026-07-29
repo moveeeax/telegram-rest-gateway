@@ -4,6 +4,8 @@
 #include "auth/session_io.hpp"
 #include "bridge/expect.hpp"
 #include "bridge/td_bridge.hpp"
+#include "http/http_helpers.hpp"
+#include "http/route_table.hpp"
 
 #include <drogon/drogon.h>
 #include <drogon/RateLimiter.h>
@@ -20,35 +22,10 @@ namespace td_api = td::td_api;
 namespace tgw::http {
 namespace {
 
-using HttpCallback = std::function<void(const drogon::HttpResponsePtr&)>;
-
-// Имя фильтра в реестре Drogon = полное имя класса. Вешается на защищённые маршруты.
-constexpr char kBearerFilter[] = "tgw::http::BearerAuthFilter";
-
-drogon::HttpResponsePtr jsonResponse(Json::Value body, drogon::HttpStatusCode code) {
-    auto resp = drogon::HttpResponse::newHttpJsonResponse(std::move(body));
-    resp->setStatusCode(code);
-    return resp;
-}
-
-drogon::HttpResponsePtr serviceError(const std::string& code, const std::string& message,
-                                     drogon::HttpStatusCode http) {
-    Json::Value body;
-    body["ok"] = false;
-    body["error"]["code"] = code;
-    body["error"]["message"] = message;
-    return jsonResponse(std::move(body), http);
-}
-
-drogon::HttpResponsePtr telegramError(const td_api::error& error, drogon::HttpStatusCode http) {
-    Json::Value body;
-    body["ok"] = false;
-    body["error"]["code"] = "TELEGRAM_ERROR";
-    body["error"]["message"] = error.message_;
-    body["error"]["tdlib_code"] = error.code_;
-    body["error"]["tdlib_message"] = error.message_;
-    return jsonResponse(std::move(body), http);
-}
+// jsonResponse/serviceError/telegramError/HttpCallback — общие, из http/http_helpers.hpp
+// (решение 1.6). telegramError сам считает HTTP-статус из ошибки TDLib (решение 1.4).
+// Пути и constraints (метод + фильтр kBearerFilter для защищённых) берутся из http/route_table.hpp
+// — единого источника истины (решение ревью 3.7): здесь фильтр руками не навешивается.
 
 // Тонкая проекция td_api::user (§8.2.2). id — СТРОКОЙ (§8.2.1).
 Json::Value userToJson(const td_api::user& user) {
@@ -90,7 +67,7 @@ void launchAuthMutation(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
        td_api::object_ptr<td_api::Function> f, HttpCallback cb) -> drogon::AsyncTask {
         auto object = co_await td.invoke(cid, std::move(f));
         if (object != nullptr && object->get_id() == td_api::error::ID) {
-            cb(telegramError(static_cast<td_api::error&>(*object), drogon::k400BadRequest));
+            cb(telegramError(static_cast<td_api::error&>(*object)));
             co_return;
         }
         Json::Value body;
@@ -135,34 +112,35 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                     tgw::auth::AuthStateManager& auth, const std::string& database_dir) {
     auto& app = drogon::app();
 
-    // --- system (без auth) ---
-    app.registerHandler("/v1/health",
-                        [](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
-                            Json::Value body;
-                            body["ok"] = true;
-                            body["status"] = "alive";
-                            cb(drogon::HttpResponse::newHttpJsonResponse(body));
-                        },
-                        {drogon::Get});
+    // Регистрация строго через таблицу маршрутов (http/route_table.hpp): путь и constraints
+    // (метод + фильтр kBearerFilter для защищённых) берутся из RouteSpec, поэтому фильтр здесь
+    // руками не навешивается и «забыть» его нельзя (решение ревью 3.7).
+    auto registerRoute = [&app](const RouteSpec& spec, auto&& handler) {
+        app.registerHandler(std::string(spec.path), std::forward<decltype(handler)>(handler),
+                            constraintsFor(spec));
+    };
 
-    app.registerHandler(
-        "/v1/ready",
-        [&auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
-            const bool ready = (auth.current() == tgw::auth::AuthState::Ready);
-            Json::Value body;
-            body["ready"] = ready;
-            body["state"] = std::string(tgw::auth::toString(auth.current()));
-            cb(jsonResponse(std::move(body),
-                            ready ? drogon::k200OK : drogon::k503ServiceUnavailable));
-        },
-        {drogon::Get});
+    // --- system (без auth) ---
+    registerRoute(kHealthRoute, [](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+        Json::Value body;
+        body["ok"] = true;
+        body["status"] = "alive";
+        cb(drogon::HttpResponse::newHttpJsonResponse(body));
+    });
+
+    registerRoute(kReadyRoute, [&auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+        const bool ready = (auth.current() == tgw::auth::AuthState::Ready);
+        Json::Value body;
+        body["ready"] = ready;
+        body["state"] = std::string(tgw::auth::toString(auth.current()));
+        cb(jsonResponse(std::move(body), ready ? drogon::k200OK : drogon::k503ServiceUnavailable));
+    });
 
     // --- auth (§7.2) — single-account, session_id неявно "default" ---
     // GET /v1/auth/session/export — «session string» (base64 td.binlog) для stateless-запуска
     // через TGW_SESSION. Содержит auth key: полноценный доступ к аккаунту — хранить как секрет.
-    app.registerHandler(
-        "/v1/auth/session/export",
-        [database_dir](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+    registerRoute(
+        kAuthSessionExportRoute, [database_dir](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
             const auto session = tgw::auth::exportSession(database_dir);
             if (!session) {
                 cb(serviceError("NOT_FOUND", "session binlog not found (not logged in yet?)",
@@ -174,115 +152,99 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
             body["data"]["session_b64"] = *session;
             body["data"]["note"] = "store as secret; pass via TGW_SESSION on next start";
             cb(jsonResponse(std::move(body), drogon::k200OK));
-        },
-        {drogon::Get, kBearerFilter});
+        });
 
-    app.registerHandler("/v1/auth/state",
-                        [&auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
-                            Json::Value body;
-                            body["ok"] = true;
-                            body["data"] = authStateJson(auth);
-                            cb(jsonResponse(std::move(body), drogon::k200OK));
-                        },
-                        {drogon::Get, kBearerFilter});
+    registerRoute(kAuthStateRoute, [&auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+        Json::Value body;
+        body["ok"] = true;
+        body["data"] = authStateJson(auth);
+        cb(jsonResponse(std::move(body), drogon::k200OK));
+    });
 
     // setTdlibParameters уже отправлен StartupBootstrapper'ом; эндпоинт идемпотентен —
     // просто возвращает текущее состояние (§7.1).
-    app.registerHandler("/v1/auth/session",
-                        [&auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
-                            Json::Value body;
-                            body["ok"] = true;
-                            body["data"] = authStateJson(auth);
-                            cb(jsonResponse(std::move(body), drogon::k200OK));
-                        },
-                        {drogon::Post, kBearerFilter});
+    registerRoute(kAuthSessionRoute, [&auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+        Json::Value body;
+        body["ok"] = true;
+        body["data"] = authStateJson(auth);
+        cb(jsonResponse(std::move(body), drogon::k200OK));
+    });
 
-    app.registerHandler(
-        "/v1/auth/phone",
-        [&bridge, client_id, &auth](const drogon::HttpRequestPtr& req, HttpCallback&& cb) {
-            std::string phone;
-            std::string err;
-            if (!jsonString(req, "phone_number", phone, err)) {
-                cb(serviceError("VALIDATION_ERROR", err, drogon::k400BadRequest));
-                return;
-            }
-            launchAuthMutation(
-                bridge, client_id, auth,
-                td_api::make_object<td_api::setAuthenticationPhoneNumber>(phone, nullptr),
-                std::move(cb));
-        },
-        {drogon::Post, kBearerFilter});
+    registerRoute(kAuthPhoneRoute, [&bridge, client_id, &auth](const drogon::HttpRequestPtr& req,
+                                                               HttpCallback&& cb) {
+        std::string phone;
+        std::string err;
+        if (!jsonString(req, "phone_number", phone, err)) {
+            cb(serviceError("VALIDATION_ERROR", err, drogon::k400BadRequest));
+            return;
+        }
+        launchAuthMutation(
+            bridge, client_id, auth,
+            td_api::make_object<td_api::setAuthenticationPhoneNumber>(phone, nullptr),
+            std::move(cb));
+    });
 
     // POST /v1/auth/qr — переключить логин на QR (requestQrCodeAuthentication). Ссылка
     // появится в /v1/auth/state (qr_link); сканировать с телефона: Настройки -> Устройства.
-    app.registerHandler(
-        "/v1/auth/qr",
-        [&bridge, client_id, &auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
-            auto fn = td_api::make_object<td_api::requestQrCodeAuthentication>();
-            launchAuthMutation(bridge, client_id, auth, std::move(fn), std::move(cb));
-        },
-        {drogon::Post, kBearerFilter});
+    registerRoute(kAuthQrRoute,
+                  [&bridge, client_id, &auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+                      auto fn = td_api::make_object<td_api::requestQrCodeAuthentication>();
+                      launchAuthMutation(bridge, client_id, auth, std::move(fn), std::move(cb));
+                  });
 
     // POST /v1/auth/code/resend — переотправить код (после resend_timeout переключает на
     // next_type, обычно SMS). resendCodeReasonUserRequest.
-    app.registerHandler(
-        "/v1/auth/code/resend",
-        [&bridge, client_id, &auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
-            auto fn = td_api::make_object<td_api::resendAuthenticationCode>();
-            fn->reason_ = td_api::make_object<td_api::resendCodeReasonUserRequest>();
-            launchAuthMutation(bridge, client_id, auth, std::move(fn), std::move(cb));
-        },
-        {drogon::Post, kBearerFilter});
+    registerRoute(kAuthCodeResendRoute,
+                  [&bridge, client_id, &auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+                      auto fn = td_api::make_object<td_api::resendAuthenticationCode>();
+                      fn->reason_ = td_api::make_object<td_api::resendCodeReasonUserRequest>();
+                      launchAuthMutation(bridge, client_id, auth, std::move(fn), std::move(cb));
+                  });
 
-    app.registerHandler(
-        "/v1/auth/code",
-        [&bridge, client_id, &auth](const drogon::HttpRequestPtr& req, HttpCallback&& cb) {
-            if (!authAttemptAllowed()) {
-                cb(serviceError("FLOOD_WAIT", "too many auth attempts, retry later",
-                                drogon::k429TooManyRequests));
-                return;
-            }
-            std::string code;
-            std::string err;
-            if (!jsonString(req, "code", code, err)) {
-                cb(serviceError("VALIDATION_ERROR", err, drogon::k400BadRequest));
-                return;
-            }
-            launchAuthMutation(bridge, client_id, auth,
-                               td_api::make_object<td_api::checkAuthenticationCode>(code),
-                               std::move(cb));
-        },
-        {drogon::Post, kBearerFilter});
+    registerRoute(kAuthCodeRoute, [&bridge, client_id, &auth](const drogon::HttpRequestPtr& req,
+                                                              HttpCallback&& cb) {
+        if (!authAttemptAllowed()) {
+            cb(serviceError("FLOOD_WAIT", "too many auth attempts, retry later",
+                            drogon::k429TooManyRequests));
+            return;
+        }
+        std::string code;
+        std::string err;
+        if (!jsonString(req, "code", code, err)) {
+            cb(serviceError("VALIDATION_ERROR", err, drogon::k400BadRequest));
+            return;
+        }
+        launchAuthMutation(bridge, client_id, auth,
+                           td_api::make_object<td_api::checkAuthenticationCode>(code),
+                           std::move(cb));
+    });
 
-    app.registerHandler(
-        "/v1/auth/password",
-        [&bridge, client_id, &auth](const drogon::HttpRequestPtr& req, HttpCallback&& cb) {
-            if (!authAttemptAllowed()) {
-                cb(serviceError("FLOOD_WAIT", "too many auth attempts, retry later",
-                                drogon::k429TooManyRequests));
-                return;
-            }
-            std::string password;
-            std::string err;
-            if (!jsonString(req, "password", password, err)) {
-                cb(serviceError("VALIDATION_ERROR", err, drogon::k400BadRequest));
-                return;
-            }
-            launchAuthMutation(bridge, client_id, auth,
-                               td_api::make_object<td_api::checkAuthenticationPassword>(password),
-                               std::move(cb));
-        },
-        {drogon::Post, kBearerFilter});
+    registerRoute(kAuthPasswordRoute, [&bridge, client_id, &auth](const drogon::HttpRequestPtr& req,
+                                                                  HttpCallback&& cb) {
+        if (!authAttemptAllowed()) {
+            cb(serviceError("FLOOD_WAIT", "too many auth attempts, retry later",
+                            drogon::k429TooManyRequests));
+            return;
+        }
+        std::string password;
+        std::string err;
+        if (!jsonString(req, "password", password, err)) {
+            cb(serviceError("VALIDATION_ERROR", err, drogon::k400BadRequest));
+            return;
+        }
+        launchAuthMutation(bridge, client_id, auth,
+                           td_api::make_object<td_api::checkAuthenticationPassword>(password),
+                           std::move(cb));
+    });
 
     // --- GET /v1/me (мост, §12 этап 1) ---
-    app.registerHandler(
-        "/v1/me",
-        [&bridge, client_id](const drogon::HttpRequestPtr&, HttpCallback&& callback) {
+    registerRoute(
+        kMeRoute, [&bridge, client_id](const drogon::HttpRequestPtr&, HttpCallback&& callback) {
             [](tgw::bridge::TdBridge& td, std::int32_t cid, HttpCallback cb) -> drogon::AsyncTask {
                 auto object = co_await td.invoke(cid, td_api::make_object<td_api::getMe>());
                 auto result = tgw::bridge::expect<td_api::user>(std::move(object));
                 if (!result.ok()) {
-                    cb(telegramError(*result.error, drogon::k502BadGateway));
+                    cb(telegramError(*result.error));
                     co_return;
                 }
                 Json::Value body;
@@ -291,8 +253,7 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
                 cb(jsonResponse(std::move(body), drogon::k200OK));
                 co_return;
             }(bridge, client_id, std::move(callback));
-        },
-        {drogon::Get, kBearerFilter});
+        });
 }
 
 }  // namespace tgw::http

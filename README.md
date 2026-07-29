@@ -16,7 +16,7 @@ HTTP-доступ к аккаунту, скрывая асинхронную п�
 | [`docs/SPEC_ELABORATION.md`](docs/SPEC_ELABORATION.md) | Детальная проработка уровня реализации (v3.0) |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Журнал принятых решений |
 | [`docs/GITFLOW.md`](docs/GITFLOW.md) | Модель ветвления |
-| [`openapi/openapi.yaml`](openapi/openapi.yaml) | Единый источник истины HTTP-контракта |
+| [`docs/openapi.yaml`](docs/openapi.yaml) | Единый источник истины HTTP-контракта |
 
 ## Стек и ключевые решения
 
@@ -39,7 +39,7 @@ src/
 tests/
   fake_transport.hpp    — FakeTdTransport (scripted, потокобезопасный)
   transport_smoke_test.cpp
-openapi/openapi.yaml
+docs/openapi.yaml       — единый источник истины HTTP-контракта
 Dockerfile.builder      — образ тулчейн+TDLib+Drogon (пины TDLIB_REF/DROGON_REF)
 Dockerfile              — образ сервиса (FROM builder) → distroless
 ```
@@ -70,6 +70,11 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 | `TGW_LISTEN_PORT` | `8080` | Порт HTTP |
 | `TGW_SESSION` / `TGW_SESSION_FILE` | — | Session string (base64 от `td.binlog`) для stateless-запуска |
 | `BEARER_TOKENS` | — | По строке на токен: `<token>[ <scopes>]`; scopes: `read`,`write`,`admin` (без scopes = все) |
+| `TGW_DATABASE_DIR` | `/data/session` | Каталог БД TDLib (`td.binlog`); должен быть на persistent-томе (или восстанавливаться из S3, см. ниже) |
+| `TGW_FILES_DIR` | `/data/files` | Каталог файлов TDLib (скачанные/аплоады); тоже должен переживать рестарт пода |
+| `TGW_USE_TEST_DC` | `false` (`0`) | `1`/`true` — подключаться к тестовому дата-центру Telegram вместо прод (`use_test_dc` TDLib) |
+| `TGW_TDLIB_LOG_VERBOSITY` | `1` | Уровень логирования TDLib (0 — тихо, выше — подробнее); см. `Td::TdStatic` |
+| `TGW_MAX_UPLOAD_BYTES` | `67108864` (64 MiB) | Лимит тела `POST /v1/chats/{chatId}/files` (`setClientMaxBodySize`); больше — `413` |
 | `TGW_WS_MAX_PENDING_BYTES` | `8388608` | WS back-pressure: лимит байт с последнего pong; 0 — выкл |
 | `TGW_MAX_MEMORY_BODY_BYTES` | `1048576` | Порог spool-на-диск для тел запросов (RSS при аплоадах) |
 | `TGW_KAFKA_BROKERS` | — | Kafka/Redpanda bootstrap; пусто — события в Kafka выключены |
@@ -159,7 +164,8 @@ inflight моста, счётчики HTTP/апдейтов.
 
 ## OpenAPI
 
-Спецификация всех эндпоинтов: [`docs/openapi.yaml`](docs/openapi.yaml).
+[`docs/openapi.yaml`](docs/openapi.yaml) — единый источник истины HTTP-контракта (все эндпоинты,
+конверты, коды ошибок).
 
 ## Лицензия
 

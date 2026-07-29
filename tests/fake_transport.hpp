@@ -4,8 +4,10 @@
 
 #include <td/telegram/td_api.h>
 
+#include <cstdint>
 #include <deque>
 #include <mutex>
+#include <vector>
 
 namespace tgw::testing {
 
@@ -48,6 +50,18 @@ class FakeTdTransport final : public tgw::bridge::ITdTransport {
     std::size_t sentCount() {
         std::lock_guard lock(mutex_);
         return sent_.size();
+    }
+
+    // request_id всех отправленных запросов в порядке send(). Тесту моста нужно узнать id,
+    // который сгенерировал TdBridge внутри await_suspend, чтобы прислать на него ответ.
+    std::vector<std::uint64_t> sentRequestIds() {
+        std::lock_guard lock(mutex_);
+        std::vector<std::uint64_t> ids;
+        ids.reserve(sent_.size());
+        for (const auto& item : sent_) {
+            ids.push_back(item.request_id);
+        }
+        return ids;
     }
 
    private:

@@ -536,14 +536,14 @@ struct ITdTransport {
 - **14.12:** `updateAuthorizationState=Closed` при N in-flight (invoke + активные download) → все получают 503 SERVICE_CLOSING/SHUTTING_DOWN, temp-файлы удалены, receive-поток join'ится (нет leak под LSan).
 - **14.13:** flood-wait — `pushResponse(error{420,"FLOOD_WAIT_30"})` → конверт `{ok:false,error:{code:"FLOOD_WAIT",tdlib_code:420,retry_after:30}}`, запись удалена, мост жив.
 - **14.14:** golden-тесты DTO-проекции (JSON-снапшоты) + allowlist-тест (скрытые поля наружу не попадают).
-- **14.15:** реальные ответы проходят валидацию по вручную поддерживаемому `openapi/openapi.yaml` (единый источник истины HTTP-контракта).
+- **14.15:** реальные ответы проходят валидацию по вручную поддерживаемому `docs/openapi.yaml` (единый источник истины HTTP-контракта).
 - **14.5** (уточнить): пиковый RSS при K параллельных download >50МБ не превышает потолка SLO (стрим не буферизует файл целиком); тест отмены в середине стрима (ASan). `[Открытый вопрос → продукт]` числовые SLO.
 - **14.16** (новый): рестарт с volume → сервис сам доходит до Ready через `StartupBootstrapper` без вызова `/v1/auth/*`.
 - **14.17** (новый): 2 параллельных `/code` сериализуются auth-mutex, второй получает детерминированную ошибку, состояние консистентно.
 - **14.18** (новый): shutdown при активных download → все 503, temp-файлы удалены, `transfers_active`→0, нет leak (LSan).
 - **14.19** (новый): `POST /logout` → `LoggingOut→Closed` без `_exit(1)`; последующий `POST /auth/session` стартует новый логин.
 - **14.20** (новый): подмена `database_encryption_key` при существующей БД → детерминированный отказ старта (`DB_KEY_MISMATCH`), БД не повреждена.
-- **14.21** (новый): маппинг ошибок — перебор диапазонов кодов покрывает default-бакет (unknown→502) и формальный признак 401→409 (Ready vs не-Ready).
+- **14.21** (новый): маппинг ошибок (`httpStatusForTdError`) — code 400 без "not found" в сообщении → 400, code 400 с "not found" → 404, code 429 / `FLOOD_WAIT` / "Too Many Requests" → 429 (+`Retry-After`, если распарсился), всё остальное (default-бакет, включая синтетические `SERVICE_BUSY`/`UPSTREAM_TIMEOUT` моста) → 502.
 - **14.22** (новый): 202 на `sendMessage` + `updateMessageSendSucceeded` по WS самодостаточен (несёт `old_message_id`+`message.id`) при любом порядке доставки.
 - **14.23** (новый): `X-Request-Id` с CR/LF/управляющими символами игнорируется, лог-строки JSONL не подделываются.
 - **14.24** (новый): download по `remote_unique_id`(+`file_type`) работает после рестарта (ephemeral `file_id` мёртв).
@@ -575,6 +575,6 @@ struct ITdTransport {
 5. **`ITdTransport`/`FakeTdTransport` + инъекция времени (`SteadyClock`/FakeClock)** введены как фундамент (этап 0) — от них зависят все TSan/unit-тесты моста.
 6. **Инвариант старта подсистем** зафиксирован в коде: receive-поток → `StartupBootstrapper` (до первого `updateAuthorizationState`) → drogon listen; watchdog не активен до первого receive-итератора.
 7. **`terminationGracePeriodSeconds` в деплой-манифесте выставлен `= 45`** (> суммы бюджета дренажа 40с) — иначе SIGKILL в момент записи БД.
-8. **`openapi/openapi.yaml`** заведён как единый источник истины HTTP-контракта (id — строки, конверт, коды ошибок) — под него пишутся golden/валидационные тесты (14.15).
+8. **`docs/openapi.yaml`** заведён как единый источник истины HTTP-контракта (id — строки, конверт, коды ошибок) — под него пишутся golden/валидационные тесты (14.15).
 9. **CI-гейты** (`clang-format`, `clang-tidy` WarningsAsErrors на `bugprone-`/`concurrency-`, ASan/UBSan/LSan, TSan на bridge/correlation/update_router, coverage ≥85%) настроены до первого функционального PR.
 10. **Volume-каталоги** `/data/session` и `/data/files` (0700, owner 65532) и политика бэкапа ключа ОТДЕЛЬНО от каталога — согласованы с инфрой.

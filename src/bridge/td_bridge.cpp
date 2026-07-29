@@ -87,7 +87,23 @@ void TdBridge::resolve(const RequestStatePtr& state, Phase phase,
         state->result = std::move(result);
     }
     trantor::EventLoop* loop = state->loop;
-    // resume строго через исходный loop; RequestStatePtr захвачен по значению => жив до resume.
+    // Штатно resume идёт строго через исходный loop (§5.6): в HTTP-контексте петля жива, а
+    // queueInLoop гарантирует resume на нужном потоке. Но при shutdown петля может быть уже
+    // погашена — Drogon quit() джойнит IO-петли до возврата run(). Тогда queueInLoop туда
+    // никогда не исполнится, и корутина-хендлер повисла бы навсегда. В этом случае резюмируем
+    // синхронно как best-effort: кадр корутины освобождается, зависания/утечки нет (доставку
+    // ответа по уже закрываемому соединению здесь не гарантируем). Штатный дренаж (drainPending)
+    // делается ДО quit(), пока петли живы, поэтому сюда попадают лишь редкие «опоздавшие».
+    if (loop == nullptr || !loop->isRunning()) {
+        LOG_WARN << "bridge resolve: target event loop not running, resuming synchronously "
+                    "(request_id="
+                 << state->request_id << ")";
+        if (state->handle) {
+            state->handle.resume();
+        }
+        return;
+    }
+    // RequestStatePtr захвачен по значению => жив до resume.
     loop->queueInLoop([state]() {
         if (state->handle) {
             state->handle.resume();
@@ -144,8 +160,22 @@ void TdBridge::start() {
     receiver_ = std::thread([this]() { runReceiveLoop(); });
 }
 
+void TdBridge::drainPending() {
+    // Забираем все узлы разом тем же атомарным find+erase, что и TTL-sweep: у любой записи
+    // deadline < time_point::max(), поэтому claimExpired(max) извлекает ВСЁ. Единоличный
+    // резолв сохраняется (кто извлёк узел из map — тот владеет резолвом).
+    for (const RequestStatePtr& state :
+         corr_.claimExpired(std::chrono::steady_clock::time_point::max())) {
+        resolve(state, Phase::Rejected, makeError(503, "UPSTREAM_SHUTDOWN"));
+    }
+}
+
 void TdBridge::stop() {
     stopping_.store(true, std::memory_order_relaxed);
+    // Дренируем оставшиеся in-flight (идемпотентно — обычно уже пусто после drainPending()
+    // перед quit()). На этой стадии петли, как правило, уже мертвы, поэтому resolve() уводит
+    // «опоздавшие» запросы в синхронный best-effort resume вместо потери в queueInLoop.
+    drainPending();
     if (receiver_.joinable()) {
         receiver_.join();
     }

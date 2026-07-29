@@ -12,7 +12,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
 import { z } from "zod";
 
@@ -48,6 +48,41 @@ async function api(
 
 function textResult(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+const MAX_INLINE_BYTES = 1024 * 1024; // 1 МиБ — крупнее отдаём ссылкой на REST, а не base64 в ответе
+
+// Маркер "файл больше лимита" — отличаем от прочих сбоев чтения потока.
+class DownloadTooLargeError extends Error {}
+
+// Читаем тело ответа потоково, не давая ему разрастись сверх лимита: под гейтвея живёт
+// с лимитом памяти (128Mi), а Buffer.from(await resp.arrayBuffer()) буферизовал файл целиком
+// ещё до проверки размера — большое видео валило под по OOMKill.
+async function readLimited(
+  body: ReadableStream<Uint8Array> | null,
+  limit: number,
+  controller: AbortController,
+): Promise<Buffer> {
+  if (!body) return Buffer.alloc(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) {
+        // Обрываем закачку немедленно, не дочитывая остаток — именно это и защищает от OOM.
+        controller.abort();
+        throw new DownloadTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks);
 }
 
 function buildServer(): McpServer {
@@ -241,8 +276,12 @@ server.tool(
   "Скачать файл по file_id из медиа-сообщения. Картинки возвращаются как изображение (агент их видит), прочее — метаданные + base64 (до 1 МБ). Если файл ещё не докачан гейтвеем — вернёт статус, повтори через пару секунд.",
   { file_id: z.string() },
   async ({ file_id }) => {
+    const controller = new AbortController();
     const resp = await fetch(`${BASE_URL}/v1/files/${encodeURIComponent(file_id)}`, {
       headers: { Authorization: `Bearer ${TOKEN}` },
+      // maxBytes посреди потока (controller) совмещаем с таймаутом запроса,
+      // чтобы зависший гейтвей не подвешивал инструмент бессрочно.
+      signal: AbortSignal.any([AbortSignal.timeout(60000), controller.signal]),
     });
     const ctype = resp.headers.get("content-type") ?? "";
     if (resp.status === 202 || ctype.includes("application/json")) {
@@ -252,21 +291,36 @@ server.tool(
     if (!resp.ok) {
       throw new Error(`download failed: HTTP ${resp.status}`);
     }
-    const buf = Buffer.from(await resp.arrayBuffer());
-    if (ctype.startsWith("image/") && buf.length <= 1024 * 1024) {
+    const tooLargeResult = (size?: number) =>
+      textResult({
+        mime_type: ctype,
+        ...(size !== undefined ? { size } : {}),
+        note: "файл больше 1 МБ — скачай через REST: GET /v1/files/" + file_id,
+      });
+    // Content-Length известен заранее — отказываемся, не читая тело вообще.
+    const declaredLength = Number(resp.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_INLINE_BYTES) {
+      await resp.body?.cancel().catch(() => {});
+      return tooLargeResult(declaredLength);
+    }
+    let buf: Buffer;
+    try {
+      buf = await readLimited(resp.body, MAX_INLINE_BYTES, controller);
+    } catch (e) {
+      if (e instanceof DownloadTooLargeError) return tooLargeResult();
+      throw e;
+    }
+    if (ctype.startsWith("image/")) {
       return { content: [{ type: "image" as const, data: buf.toString("base64"), mimeType: ctype }] };
     }
-    if (buf.length <= 1024 * 1024) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({ mime_type: ctype, size: buf.length, base64: buf.toString("base64") }),
-          },
-        ],
-      };
-    }
-    return textResult({ mime_type: ctype, size: buf.length, note: "файл больше 1 МБ — скачай через REST: GET /v1/files/" + file_id });
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({ mime_type: ctype, size: buf.length, base64: buf.toString("base64") }),
+        },
+      ],
+    };
   },
 );
 
@@ -315,11 +369,33 @@ if (ARCHIVER_URL) {
 const HTTP_PORT = process.env.MCP_HTTP_PORT;
 if (HTTP_PORT) {
   const HTTP_TOKEN = process.env.MCP_HTTP_TOKEN ?? "";
+  const ALLOW_INSECURE = process.env.MCP_HTTP_ALLOW_INSECURE === "1";
+  if (!HTTP_TOKEN) {
+    // Fail-closed: без токена /mcp был бы открыт всем и молча проксировал бы к гейтвею с его
+    // собственным read+write токеном — это полный захват аккаунта с сети. Опт-аут только явный.
+    if (!ALLOW_INSECURE) {
+      console.error(
+        "tgw-mcp: MCP_HTTP_TOKEN не задан. В HTTP-режиме авторизация обязательна — иначе /mcp " +
+          "открыт всем в сети и проксирует полный доступ гейтвея. Задайте MCP_HTTP_TOKEN, либо " +
+          "явно примите риск через MCP_HTTP_ALLOW_INSECURE=1.",
+      );
+      process.exit(1);
+    }
+    console.error(
+      "tgw-mcp: ВНИМАНИЕ — MCP_HTTP_TOKEN не задан, MCP_HTTP_ALLOW_INSECURE=1: /mcp работает " +
+        "БЕЗ авторизации. Используйте только в доверенной сети/для отладки.",
+    );
+  }
   const app = express();
   app.use(express.json({ limit: "8mb" }));
 
   const unauthorized = (req: express.Request, res: express.Response): boolean => {
-    if (HTTP_TOKEN && req.headers.authorization !== `Bearer ${HTTP_TOKEN}`) {
+    if (!HTTP_TOKEN) return false; // явный опт-аут через MCP_HTTP_ALLOW_INSECURE=1
+    // Сравниваем не сами строки, а их SHA-256-дайджесты фиксированной длины: так timingSafeEqual
+    // не бросает исключение при разной длине токенов и не даёт судить о ней по времени ответа.
+    const got = createHash("sha256").update(req.headers.authorization ?? "").digest();
+    const want = createHash("sha256").update(`Bearer ${HTTP_TOKEN}`).digest();
+    if (!timingSafeEqual(got, want)) {
       res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized" }, id: null });
       return true;
     }
@@ -333,21 +409,44 @@ if (HTTP_PORT) {
   // Stateful Streamable HTTP: сессия создаётся на initialize, живёт по mcp-session-id
   // (так работают удалённые MCP-клиенты — initialize -> session id -> дальнейшие запросы).
   const transports: Record<string, StreamableHTTPServerTransport> = {};
+  // Время последней активности сессии — по нему реапер ниже подчищает забытые/зависшие сессии,
+  // иначе transports растёт без границ (клиенты не всегда шлют DELETE /mcp).
+  const lastActivity: Record<string, number> = {};
+  const touch = (id: string) => {
+    lastActivity[id] = Date.now();
+  };
+
+  const rawTtl = Number(process.env.MCP_SESSION_TTL_MS);
+  const SESSION_TTL_MS = Number.isFinite(rawTtl) && rawTtl > 0 ? rawTtl : 30 * 60 * 1000;
+  const reaper = setInterval(() => {
+    const now = Date.now();
+    for (const id of Object.keys(lastActivity)) {
+      if (now - lastActivity[id] > SESSION_TTL_MS) {
+        transports[id]?.close(); // триггерит onclose ниже — он и уберёт запись из обеих map
+      }
+    }
+  }, Math.min(60_000, SESSION_TTL_MS));
+  reaper.unref(); // фоновая уборка не должна держать процесс живым
 
   app.post("/mcp", async (req, res) => {
     if (unauthorized(req, res)) return;
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     let transport = sessionId ? transports[sessionId] : undefined;
+    if (transport && sessionId) touch(sessionId);
 
     if (!transport && isInitializeRequest(req.body)) {
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
           transports[id] = transport!;
+          touch(id);
         },
       });
       transport.onclose = () => {
-        if (transport!.sessionId) delete transports[transport!.sessionId];
+        if (transport!.sessionId) {
+          delete transports[transport!.sessionId];
+          delete lastActivity[transport!.sessionId];
+        }
       };
       await buildServer().connect(transport);
     } else if (!transport) {
@@ -366,6 +465,7 @@ if (HTTP_PORT) {
       res.status(400).send("invalid or missing session id");
       return;
     }
+    if (sessionId) touch(sessionId);
     await transport.handleRequest(req, res);
   };
   app.get("/mcp", bySession);
