@@ -1,9 +1,12 @@
 #include "webhook/webhook_dispatcher.hpp"
 
+#include "webhook/webhook_registry.hpp"
+
 #include <gtest/gtest.h>
 #include <json/reader.h>
 #include <json/value.h>
 #include <memory>
+#include <optional>
 #include <string>
 
 using tgw::webhook::serializeEvent;
@@ -19,6 +22,25 @@ Json::Value parse(const std::string& text) {
     const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
     reader->parse(text.data(), text.data() + text.size(), &root, &errs);
     return root;
+}
+
+// Стор без сети — реестр остаётся пустым (нет active-вебхуков), поэтому воркер ничего не
+// шлёт: lifecycle-тест ниже НЕ бьёт реальную сеть и детерминирован под TSan.
+struct EmptyStore : tgw::webhook::IWebhookStore {
+    std::optional<std::string> load() override { return std::nullopt; }
+    bool save(const std::string&) override { return true; }
+};
+
+WebhookEvent makeEvent(const std::string& id) {
+    WebhookEvent ev;
+    ev.event_id = id;
+    ev.session_id = "s1";
+    ev.owner_id = "1";
+    ev.trigger_reason = "mention";
+    ev.received_at = 1;
+    ev.message = Json::Value(Json::objectValue);
+    ev.reply_chain = Json::Value(Json::arrayValue);
+    return ev;
 }
 
 }  // namespace
@@ -86,4 +108,38 @@ TEST(WebhookDispatcher, SerializeThenSignIsStable) {
     const std::string body2 = serializeEvent(ev);
     EXPECT_EQ(body1, body2);
     EXPECT_EQ(signBody("sekret", body1), signBody("sekret", body2));
+}
+
+// Полный lifecycle без сети: пустой реестр → нет active-вебхуков → воркер не шлёт запросов
+// (in-flight остаётся 0), поэтому дренаж/снос loop-потока в stop() штатный и детерминированный.
+// Проверяет старт/воркер/loop/барьер/дренаж/снос без heap-corruption и без зависаний под TSan.
+// Заодно: dispatch до start() и после stop() — no-op (не падает, не шлёт).
+TEST(WebhookDispatcher, LifecycleStartDispatchStopNoActiveHooks) {
+    EmptyStore store;
+    tgw::webhook::WebhookRegistry reg(store);
+    tgw::webhook::WebhookDispatcher d(reg, /*timeout_ms=*/200, /*queue_max=*/128,
+                                      /*ssrf_guard=*/true);
+
+    d.dispatch(makeEvent("before-start"));  // до start() — молча игнорируется
+    d.start();
+    d.start();  // идемпотентно
+    for (int i = 0; i < 50; ++i) {
+        d.dispatch(makeEvent("e" + std::to_string(i)));
+    }
+    d.stop();
+    d.stop();  // идемпотентно
+    d.dispatch(makeEvent("after-stop"));  // после stop() — молча игнорируется
+    SUCCEED();  // цель — отсутствие креша/зависания/гонок (проверяется санитайзерами в CI)
+}
+
+// Деструктор без явного stop() при работающем диспетчере (пустой реестр) не должен виснуть/падать.
+TEST(WebhookDispatcher, DestructorStopsCleanly) {
+    EmptyStore store;
+    tgw::webhook::WebhookRegistry reg(store);
+    {
+        tgw::webhook::WebhookDispatcher d(reg, 200, 128, false);
+        d.start();
+        d.dispatch(makeEvent("x"));
+    }  // ~WebhookDispatcher → stop()
+    SUCCEED();
 }

@@ -5,9 +5,11 @@
 
 #include <trantor/net/EventLoopThread.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -25,29 +27,37 @@ std::string serializeEvent(const WebhookEvent& ev);
 
 // Воркер-пул доставки вебхуков. АРХИТЕКТУРА (аналог инварианта KafkaSink/S3Client):
 // вся работа с drogon::HttpClient (создание клиента, sendRequest, колбэки) идёт РОВНО на
-// одном выделенном loop-потоке (loop_thread_). dispatch() вызывается из потока-приёмника
-// моста и НИКОГДА не трогает HttpClient — только сериализует событие и кладёт строку в
-// очередь под mutex+cv (drop при переполнении → webhook_dropped_total), будя воркер.
-// Воркер достаёт батч, снимает active-снапшот реестра (лочит реестр ВНЕ loop-потока) и
-// маршалит каждую доставку на loop-поток через queueInLoop.
+// одном выделенном loop-потоке. dispatch() вызывается из потока-приёмника моста и НИКОГДА
+// не трогает HttpClient — только сериализует событие и кладёт строку в очередь под mutex+cv
+// (drop при переполнении → webhook_dropped_total), будя воркер. Воркер достаёт батч, снимает
+// active-снапшот реестра (лочит реестр ВНЕ loop-потока) и маршалит каждую доставку на
+// loop-поток через queueInLoop.
 //
-// ЛАЙФТАЙМ: функтор доставки, поставленный на loop, СЕЛФ-КОНТЕЙНЕД — не захватывает this
-// (копирует hook/event_id/body/таймаут/loop по значению) и создаёт свой HttpClient. Поэтому
-// straggler-функтор, который trantor может докрутить в ~EventLoopThread уже после сноса
-// членов диспетчера, не обращается к освобождённой памяти (класс UAF, на котором горел
-// S3/Kafka). Плата — нет keep-alive-кэша клиентов: на fan-out по разным URL при объёме
-// mention/reply-событий переиспользование соединений вторично против безопасности лайфтайма.
+// ЛАЙФТАЙМ (два независимых класса опасности, оба закрыты):
+//  1) UAF на членах диспетчера. Функтор доставки и sendRequest-колбэк СЕЛФ-КОНТЕЙНЕД — не
+//     захватывают this (копируют hook/event_id/body/таймаут/loop и shared-счётчик по значению).
+//     Straggler-функтор, докрученный trantor в teardown'е, не трогает освобождённую память.
+//  2) Порча кучи ВНУТРИ trantor/drogon при сносе EventLoop под живым HTTP-коннектом — тот же
+//     класс бага, что задокументирован в s3_client.cpp (heap corruption на amd64). Fire-and-forget
+//     к внешним URL почти всегда оставляет in-flight запросы на момент shutdown. Защита — как в
+//     S3Client: атомарный счётчик in-flight, снос loop-потока ТОЛЬКО при счётчике == 0; если за
+//     разумный таймаут не обнулился (медленный/зависший получатель) — loop-поток намеренно
+//     лизится (release), а НЕ сносится под нагрузкой. Счётчик живёт в shared_ptr (его co-держат
+//     колбэки и утёкший loop), поэтому декремент безопасен даже после разрушения диспетчера.
+//
+// Нет keep-alive-кэша клиентов: клиент создаётся на запрос. На fan-out по разным URL при
+// объёме mention/reply-событий переиспользование соединений вторично против простоты лайфтайма.
 class WebhookDispatcher {
    public:
     WebhookDispatcher(WebhookRegistry& reg, int timeout_ms, std::size_t queue_max, bool ssrf_guard);
-    ~WebhookDispatcher();  // джойн воркера (снос loop-потока — в ~EventLoopThread)
+    ~WebhookDispatcher();  // джойн воркера + дренаж in-flight перед сносом loop-потока
 
     WebhookDispatcher(const WebhookDispatcher&) = delete;
     WebhookDispatcher& operator=(const WebhookDispatcher&) = delete;
 
     void start();                           // поднять loop + воркер
     void dispatch(const WebhookEvent& ev);  // неблокирующе: сериализовать + enqueue (drop)
-    void stop();                            // остановить воркер
+    void stop();                            // остановить воркер, дренировать in-flight, снести loop
 
    private:
     void workerLoop();
@@ -57,9 +67,16 @@ class WebhookDispatcher {
     const std::size_t queue_max_;
     const bool ssrf_guard_;
 
-    // loop-поток, на котором живёт весь HttpClient-код. Создаётся в конструкторе (trantor
-    // стартует поток сразу), реально начинает крутиться после run() в start().
-    trantor::EventLoopThread loop_thread_{"webhook-dispatch"};
+    // Счётчик in-flight HTTP-запросов (инкремент перед sendRequest на loop-потоке, декремент в
+    // колбэке). В shared_ptr: колбэк и утёкший при зависании loop co-держат его, поэтому
+    // декремент валиден и после разрушения диспетчера.
+    std::shared_ptr<std::atomic<std::size_t>> in_flight_ =
+        std::make_shared<std::atomic<std::size_t>>(0);
+
+    // loop-поток, на котором живёт весь HttpClient-код. В unique_ptr (а не значением), чтобы при
+    // недренированном in-flight на shutdown его можно было release() — намеренно утечь, а не
+    // снести ~EventLoopThread'ом под живым коннектом (см. класс опасности 2). Создаётся в start().
+    std::unique_ptr<trantor::EventLoopThread> loop_thread_;
 
     // Очередь (event_id, body) от dispatch() к воркеру.
     std::mutex mutex_;
