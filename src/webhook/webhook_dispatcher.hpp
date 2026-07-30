@@ -3,8 +3,6 @@
 #include "webhook/context_builder.hpp"
 #include "webhook/webhook_registry.hpp"
 
-#include <trantor/net/EventLoopThread.h>
-
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -15,6 +13,13 @@
 #include <thread>
 
 namespace tgw::webhook {
+
+namespace detail {
+// Loop-поток с ЯВНОЙ синхронизацией старта (mutex+cv). Определён в .cpp. Заменяет
+// trantor::EventLoopThread, чей run()/getLoop() НЕ дают happens-before между созданием
+// wakeup-eventfd в конструкторе EventLoop и первым cross-thread queueInLoop (гонка под TSan).
+class LoopThread;
+}  // namespace detail
 
 // Подпись тела вебхука — чистая функция (тестируется отдельно от сети). Возвращает
 // "sha256=<hex>", где hex — строчный HMAC-SHA256(secret, body). hmacSha256 отдаёт сырые
@@ -73,10 +78,11 @@ class WebhookDispatcher {
     std::shared_ptr<std::atomic<std::size_t>> in_flight_ =
         std::make_shared<std::atomic<std::size_t>>(0);
 
-    // loop-поток, на котором живёт весь HttpClient-код. В unique_ptr (а не значением), чтобы при
-    // недренированном in-flight на shutdown его можно было release() — намеренно утечь, а не
-    // снести ~EventLoopThread'ом под живым коннектом (см. класс опасности 2). Создаётся в start().
-    std::unique_ptr<trantor::EventLoopThread> loop_thread_;
+    // loop-поток, на котором живёт весь HttpClient-код. Собственный detail::LoopThread (а не
+    // trantor::EventLoopThread) — ради happens-before на старте (см. forward-decl выше). В
+    // unique_ptr, чтобы при недренированном in-flight на shutdown его можно было release() —
+    // намеренно утечь, а не снести под живым коннектом (см. класс опасности 2). Создаётся в start().
+    std::unique_ptr<detail::LoopThread> loop_thread_;
 
     // Очередь (event_id, body) от dispatch() к воркеру.
     std::mutex mutex_;

@@ -11,17 +11,76 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <future>
 #include <json/value.h>
 #include <json/writer.h>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
 
 namespace tgw::webhook {
+
+namespace detail {
+
+// Обёртка над trantor::EventLoop с ЯВНОЙ синхронизацией старта (mutex+cv) — калька с LoopThread
+// в tests/td_bridge_test.cpp. Зачем не trantor::EventLoopThread: его run()/getLoop() в этой версии
+// trantor публикуют лишь указатель на петлю, но НЕ устанавливают happens-before между конструктором
+// EventLoop (где на потоке петли создаётся wakeup-eventfd) и первым queueInLoop из ЧУЖОГО треда
+// (тест-/воркер-/stop-тред). Под TSan это гонка на eventfd (создание fd на потоке петли vs его
+// чтение в wakeup() из queueInLoop). Здесь HB задаём сами: поток петли создаёт EventLoop, публикует
+// указатель под mutex_, а конструктор блокируется на cv_, пока указатель не появится — unlock/lock
+// одного мьютекса даёт release/acquire, так что создание eventfd happens-before возврата из
+// конструктора, а значит и любого последующего queueInLoop (в т.ч. с воркер-треда, созданного ПОСЛЕ
+// конструктора, — через HB старта потока).
+//
+// Останов — quit() ИЗНУТРИ петли (через queueInLoop), затем join: quit() не дёргается из чужого
+// треда по крутящейся петле. Деструктор зовётся ТОЛЬКО когда петля дренирована (in-flight == 0);
+// при недренированном/зависшем loop диспетчер лизит объект (unique_ptr::release), и деструктор
+// НЕ выполняется — поток остаётся жить, join под нагрузкой не делается.
+class LoopThread {
+   public:
+    LoopThread() {
+        thread_ = std::thread([this] {
+            trantor::EventLoop loop;  // eventfd создаётся здесь, на этом потоке
+            {
+                const std::lock_guard<std::mutex> lock(mutex_);
+                loop_ = &loop;
+            }
+            cv_.notify_one();
+            loop.loop();  // крутится до quit(); EventLoop разрушится здесь же, на своём потоке
+        });
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] { return loop_ != nullptr; });
+    }
+
+    ~LoopThread() {
+        // quit исполняется НА потоке петли → нет гонки quit() с loop() из чужого треда.
+        loop_->queueInLoop([loop = loop_] { loop->quit(); });
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+    LoopThread(const LoopThread&) = delete;
+    LoopThread& operator=(const LoopThread&) = delete;
+
+    // loop_ после конструктора не меняется (запись под мьютексом до cv.wait) — читаем без лока.
+    trantor::EventLoop* loop() const { return loop_; }
+
+   private:
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    trantor::EventLoop* loop_ = nullptr;
+    std::thread thread_;
+};
+
+}  // namespace detail
+
 namespace {
 
 // Строчный hex произвольных байт. hmacSha256 отдаёт сырые байты, а нам нужен
@@ -246,10 +305,10 @@ void WebhookDispatcher::start() {
         started_ = true;
         stop_ = false;
     }
-    // Создаём loop-поток тут (не в конструкторе): тред стартует лениво, и unique_ptr позволяет
-    // при недренированном shutdown его release() (см. stop()).
-    loop_thread_ = std::make_unique<trantor::EventLoopThread>("webhook-dispatch");
-    loop_thread_->run();  // разблокируем loop() (тред создаётся уже в ctor EventLoopThread)
+    // Создаём loop-поток тут (не в конструкторе): unique_ptr позволяет при недренированном
+    // shutdown его release() (см. stop()). Конструктор detail::LoopThread блокируется до готовности
+    // петли (mutex+cv) — happens-before для всех последующих queueInLoop (см. detail::LoopThread).
+    loop_thread_ = std::make_unique<detail::LoopThread>();
     worker_ = std::thread([this] { workerLoop(); });
     LOG_INFO << "webhook dispatcher started (timeout=" << timeout_s_
              << "s queue_max=" << queue_max_ << " ssrf_guard=" << (ssrf_guard_ ? 1 : 0) << ")";
@@ -295,7 +354,7 @@ void WebhookDispatcher::workerLoop() {
             }
         }
         const auto hooks = reg_.activeSnapshot();  // копия под локом реестра
-        auto* loop = loop_thread_->getLoop();
+        auto* loop = loop_thread_->loop();
         for (const auto& payload : batch) {
             for (const auto& hook : hooks) {
                 // Селф-контейнед функтор: копии + сырой loop-указатель + shared-счётчик, без this.
@@ -326,7 +385,7 @@ void WebhookDispatcher::stop() {
         LOG_INFO << "webhook dispatcher stopped (loop never started)";
         return;  // start() не вызывали — сносить/дренировать нечего
     }
-    auto* loop = loop_thread_->getLoop();
+    auto* loop = loop_thread_->loop();
 
     // Барьер: воркер присоединён → новых доставок на loop не ставится. Ждём, пока loop прогонит
     // ВСЕ уже поставленные deliverOnLoop-функторы (FIFO) — только после этого in_flight_ отражает
