@@ -43,3 +43,26 @@ TEST(ScopePolicy, NonAuthPathsAreNotEscalated) {
     EXPECT_EQ(requiredScopeFor("", true), Scope::Read);
     EXPECT_EQ(requiredScopeFor("/metrics", true), Scope::Read);
 }
+
+// Task 7: /v1/webhooks* — admin, как и /v1/auth/*, для ОБОИХ форм пути: ровно "/v1/webhooks"
+// (список/создание) и "/v1/webhooks/{id}" (удаление) — обе формы должны попасть под admin
+// независимо от read/write метода.
+TEST(ScopePolicy, WebhooksRoutesRequireAdmin) {
+    EXPECT_EQ(requiredScopeFor("/v1/webhooks", true), Scope::Admin);   // GET (список)
+    EXPECT_EQ(requiredScopeFor("/v1/webhooks", false), Scope::Admin);  // POST (создание)
+    EXPECT_EQ(requiredScopeFor("/v1/webhooks/abc123", false), Scope::Admin);  // DELETE .../{id}
+}
+
+// Регистр не важен — тот же регресс-риск, что и для /v1/auth/* (роутер матчит без учёта
+// регистра).
+TEST(ScopePolicy, WebhooksRoutesRequireAdminRegardlessOfCase) {
+    EXPECT_EQ(requiredScopeFor("/V1/Webhooks", true), Scope::Admin);
+    EXPECT_EQ(requiredScopeFor("/v1/WEBHOOKS/abc123", false), Scope::Admin);
+}
+
+// Граница префикса: "/v1/webhooks" БЕЗ слэша/суффикса — совпадение (ровно список/создание), а
+// похожий, но иной путь ("/v1/webhooksomething") не должен ложно эскалироваться до admin.
+TEST(ScopePolicy, NonWebhooksPathsAreNotEscalated) {
+    EXPECT_EQ(requiredScopeFor("/v1/webhooksomething", true), Scope::Read);
+    EXPECT_EQ(requiredScopeFor("/v1/webhook", true), Scope::Read);
+}

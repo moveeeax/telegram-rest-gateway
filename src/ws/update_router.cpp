@@ -195,6 +195,17 @@ void UpdateRouter::onUpdate(api::object_ptr<api::Object> update) {
         }
         event_publisher_(key, payload);
     }
+
+    // Вебхуки mention/reply: дёргаем хук ПОСЛЕ WS/Kafka-форварда, только на updateNewMessage.
+    // `update` всё ещё владеет message_ (в этой ветке мы его не перемещали), поэтому ссылка
+    // валидна на время синхронного вызова хука. Хук обязан снять нужное синхронно — за пределы
+    // onUpdate message не живёт (см. setWebhookHook и wiring в main.cpp).
+    if (webhook_hook_ && update->get_id() == api::updateNewMessage::ID) {
+        const auto& upd = static_cast<const api::updateNewMessage&>(*update);
+        if (upd.message_ != nullptr) {
+            webhook_hook_(*upd.message_);
+        }
+    }
 }
 
 }  // namespace tgw::ws

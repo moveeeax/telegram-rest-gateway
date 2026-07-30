@@ -19,6 +19,11 @@ struct Counters {
     std::atomic<std::uint64_t> kafka_produced_total{0};
     std::atomic<std::uint64_t> kafka_failed_total{0};
     std::atomic<std::uint64_t> kafka_dropped_total{0};
+    // Доставка вебхуков (mention/reply): успешные POST'ы (2xx), провалы (не-2xx/транспорт)
+    // и дропы при переполнении очереди диспетчера.
+    std::atomic<std::uint64_t> webhook_delivered_total{0};
+    std::atomic<std::uint64_t> webhook_failed_total{0};
+    std::atomic<std::uint64_t> webhook_dropped_total{0};
 
     static Counters& instance();
 };

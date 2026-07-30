@@ -4,6 +4,7 @@
 
 #include <td/telegram/td_api.h>
 
+#include <cstdint>
 #include <gtest/gtest.h>
 #include <utility>
 
@@ -114,6 +115,53 @@ TEST(UpdateRouter, ConnectionReadyWithoutCallbackDoesNotCrash) {
     tgw::ws::UpdateRouter router(auth);
     router.onUpdate(api::make_object<api::updateConnectionState>(
         api::make_object<api::connectionStateReady>()));
+    SUCCEED();
+}
+
+namespace {
+
+// Собирает минимальный updateNewMessage с текстовым содержимым (toJson не падает на null content).
+api::object_ptr<api::updateNewMessage> makeNewMessage(std::int64_t id, std::int64_t chat_id) {
+    auto msg = api::make_object<api::message>();
+    msg->id_ = id;
+    msg->chat_id_ = chat_id;
+    auto text = api::make_object<api::messageText>();
+    text->text_ = api::make_object<api::formattedText>();
+    text->text_->text_ = "hi";
+    msg->content_ = std::move(text);
+    return api::make_object<api::updateNewMessage>(std::move(msg));
+}
+
+}  // namespace
+
+// Вебхук-хук вызывается ровно раз на updateNewMessage и не трогается на прочих апдейтах.
+TEST(UpdateRouter, WebhookHookFiresOnNewMessage) {
+    tgw::auth::AuthStateManager auth;
+    tgw::ws::UpdateRouter router(auth, "sid");
+    int calls = 0;
+    std::int64_t seen_chat = 0;
+    router.setWebhookHook([&](const td::td_api::message& m) {
+        ++calls;
+        seen_chat = m.chat_id_;
+    });
+
+    router.onUpdate(makeNewMessage(555, -100));
+    EXPECT_EQ(calls, 1);
+    EXPECT_EQ(seen_chat, -100);
+
+    // updateUserStatus не message-апдейт → хук не вызывается.
+    auto status = api::make_object<api::updateUserStatus>();
+    status->user_id_ = 42;
+    status->status_ = api::make_object<api::userStatusOffline>();
+    router.onUpdate(std::move(status));
+    EXPECT_EQ(calls, 1);
+}
+
+// Без установленного хука updateNewMessage не падает (как ConnectionReadyWithoutCallback).
+TEST(UpdateRouter, WebhookHookAbsentDoesNotCrash) {
+    tgw::auth::AuthStateManager auth;
+    tgw::ws::UpdateRouter router(auth, "sid");
+    router.onUpdate(makeNewMessage(1, -1));
     SUCCEED();
 }
 

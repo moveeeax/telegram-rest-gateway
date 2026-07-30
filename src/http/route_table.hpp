@@ -20,10 +20,13 @@
 //
 // ОБЛАСТЬ ДЕЙСТВИЯ (сознательно ограничена): таблица покрывает маршруты routes.cpp — системные
 // (/v1/health, /v1/ready) и всю аутентификационную поверхность (/v1/auth/*, /v1/me), т.е. самую
-// критичную по безопасности (session export = захват аккаунта). Ресурсные маршруты
-// message_routes.cpp/directory_routes.cpp регистрируются в своих файлах прежним способом и в эту
-// таблицу НЕ включены — иначе тест давал бы по ним ложно-зелёный результат (проверял бы логику
-// фильтра, а не факт его навешивания там). Их миграция в таблицу — механический follow-up.
+// критичную по безопасности (session export = захват аккаунта), а также /v1/webhooks* —
+// регистрацию вебхуков mention/reply-событий (webhook_routes.cpp, Task 7): тоже admin-only,
+// т.к. список/секреты вебхуков определяют, куда утечёт содержимое чужих сообщений. Ресурсные
+// маршруты message_routes.cpp/directory_routes.cpp регистрируются в своих файлах прежним
+// способом и в эту таблицу НЕ включены — иначе тест давал бы по ним ложно-зелёный результат
+// (проверял бы логику фильтра, а не факт его навешивания там). Их миграция в таблицу —
+// механический follow-up.
 //
 // ВАЖНО: имя фильтра = полное имя класса BearerAuthFilter (регистрируется по нему через
 // HttpFilter<>). Обязано совпадать с классом в http/bearer_filter.hpp.
@@ -65,9 +68,16 @@ inline constexpr RouteSpec kAuthCodeRoute{"/v1/auth/code", drogon::Post, true};
 inline constexpr RouteSpec kAuthPasswordRoute{"/v1/auth/password", drogon::Post, true};
 inline constexpr RouteSpec kMeRoute{"/v1/me", drogon::Get, true};
 
-// Полный перечень маршрутов routes.cpp для итерации тестом. Значения — те же спецификации, что
-// выше: по ним же регистрируются хендлеры, поэтому таблица и регистрация не расходятся.
-inline constexpr std::array<RouteSpec, 11> kRoutesTable{{
+// --- Вебхуки mention/reply (webhook_routes.cpp, Task 7) — все требуют токен, scope admin (см.
+// http/scope_policy.hpp: requiredScopeFor узнаёт префикс /v1/webhooks так же, как /v1/auth/*). ---
+inline constexpr RouteSpec kWebhookCreateRoute{"/v1/webhooks", drogon::Post, true};
+inline constexpr RouteSpec kWebhookListRoute{"/v1/webhooks", drogon::Get, true};
+inline constexpr RouteSpec kWebhookDeleteRoute{"/v1/webhooks/{id}", drogon::Delete, true};
+
+// Полный перечень маршрутов routes.cpp + webhook_routes.cpp для итерации тестом. Значения — те
+// же спецификации, что выше: по ним же регистрируются хендлеры, поэтому таблица и регистрация
+// не расходятся.
+inline constexpr std::array<RouteSpec, 14> kRoutesTable{{
     kHealthRoute,
     kReadyRoute,
     kAuthSessionExportRoute,
@@ -79,6 +89,9 @@ inline constexpr std::array<RouteSpec, 11> kRoutesTable{{
     kAuthCodeRoute,
     kAuthPasswordRoute,
     kMeRoute,
+    kWebhookCreateRoute,
+    kWebhookListRoute,
+    kWebhookDeleteRoute,
 }};
 
 }  // namespace tgw::http
