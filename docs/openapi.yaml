@@ -22,6 +22,7 @@ tags:
 - name: files
 - name: reactions
 - name: updates
+- name: webhooks
 security:
 - bearerAuth: []
 paths:
@@ -1063,6 +1064,99 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '502':
           $ref: '#/components/responses/UpstreamError'
+  /v1/webhooks:
+    post:
+      tags:
+      - webhooks
+      summary: Зарегистрировать вебхук mention/dm/reply-событий
+      description: 'Требует admin-скоуп (см. security scheme bearerAuth) — список и секреты
+        вебхуков определяют, куда утечёт содержимое чужой переписки. Повторный вызов с тем же
+        url обновляет существующую запись на месте (id детерминирован от url), а не создаёт
+        дубликат.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - url
+              properties:
+                url:
+                  type: string
+                  description: Куда доставлять событие POST'ом (заголовки X-TGW-Signature/X-TGW-Event-Id)
+                  example: https://example.com/hooks/tgw
+                secret:
+                  type: string
+                  description: Секрет для HMAC-SHA256 подписи тела (X-TGW-Signature); пусто — без секрета
+                active:
+                  type: boolean
+                  default: true
+                  description: Неактивные вебхуки остаются в реестре, но не получают рассылку
+      responses:
+        '200':
+          description: Вебхук зарегистрирован (или обновлён, если url уже был известен)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Webhook'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    get:
+      tags:
+      - webhooks
+      summary: Список зарегистрированных вебхуков
+      description: Требует admin-скоуп. secret в ответе не возвращается.
+      responses:
+        '200':
+          description: Вебхуки (без secret)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Webhook'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/webhooks/{id}:
+    delete:
+      tags:
+      - webhooks
+      summary: Удалить вебхук
+      description: 'id — hex(sha256(url))[0:16], возвращается в data.id ответа POST/GET
+        /v1/webhooks. Требует admin-скоуп.'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Вебхук удалён
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
 components:
   securitySchemes:
     bearerAuth:
@@ -1291,3 +1385,14 @@ components:
         emoji:
           type: string
           example: 👍
+    Webhook:
+      type: object
+      description: Проекция вебхука без секрета (GET/POST /v1/webhooks не возвращают secret).
+      properties:
+        id:
+          type: string
+          description: hex(sha256(url))[0:16]
+        url:
+          type: string
+        active:
+          type: boolean
