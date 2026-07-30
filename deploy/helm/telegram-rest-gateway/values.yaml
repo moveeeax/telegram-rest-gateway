@@ -49,6 +49,8 @@ config:
   #   TGW_MAX_UPLOAD_BYTES: "67108864"          # лимит тела POST /v1/chats/{chatId}/files (64 MiB).
   #   TGW_USE_TEST_DC: "false"                  # "1"/"true" — тестовый DC Telegram вместо прод.
   #   TGW_TDLIB_LOG_VERBOSITY: "1"              # уровень логов TDLib (0 — тихо).
+  # TGW_KEEP_ONLINE: "true"                     # держать аккаунт online (setOption online=true
+  #                                             # после авторизации + переустановка при реконнекте).
 
 service:
   type: ClusterIP
