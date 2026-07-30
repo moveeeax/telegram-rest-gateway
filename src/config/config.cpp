@@ -109,6 +109,12 @@ Config Config::load() {
     const std::string keep_online = envOrFile("TGW_KEEP_ONLINE");
     c.keep_online = (keep_online == "1" || keep_online == "true");
 
+    const std::string keep_online_interval = envOrFile("TGW_KEEP_ONLINE_INTERVAL_SECONDS");
+    if (!keep_online_interval.empty()) {
+        c.keep_online_interval_seconds =
+            parseNumericEnv<int>("TGW_KEEP_ONLINE_INTERVAL_SECONDS", keep_online_interval);
+    }
+
     const std::string verbosity = envOrFile("TGW_TDLIB_LOG_VERBOSITY");
     if (!verbosity.empty()) {
         c.tdlib_log_verbosity = parseNumericEnv<std::int32_t>("TGW_TDLIB_LOG_VERBOSITY", verbosity);
