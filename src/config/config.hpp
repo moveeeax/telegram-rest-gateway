@@ -48,6 +48,12 @@ struct Config {
     // соединение между ними. Таймер — страховка на этот случай (образец s3_sync_interval_seconds).
     int keep_online_interval_seconds = 60;
 
+    // Конфигурация вебхуков mention/reply-событий (TGW_WEBHOOKS_*).
+    bool webhooks_enabled = false;
+    int webhook_timeout_ms = 10000;
+    std::size_t webhook_queue_max = 10000;
+    bool webhook_ssrf_guard = false;
+
     std::int32_t tdlib_log_verbosity = 1;
 
     std::string listen_address = "127.0.0.1";

@@ -31,6 +31,10 @@ constexpr const char* kEnvBases[] = {
     "TGW_USE_TEST_DC",
     "TGW_KEEP_ONLINE",
     "TGW_KEEP_ONLINE_INTERVAL_SECONDS",
+    "TGW_WEBHOOKS_ENABLED",
+    "TGW_WEBHOOK_TIMEOUT_MS",
+    "TGW_WEBHOOK_QUEUE_MAX",
+    "TGW_WEBHOOK_SSRF_GUARD",
     "TGW_TDLIB_LOG_VERBOSITY",
     "TGW_LISTEN_ADDRESS",
     "TGW_LISTEN_PORT",
@@ -257,4 +261,31 @@ TEST_F(ConfigTest, ValidNumericValuesParsed) {
     EXPECT_EQ(c.max_upload_bytes, 1048576u);
     EXPECT_EQ(c.ws_max_pending_bytes, 2048u);
     EXPECT_EQ(c.tdlib_log_verbosity, 3);
+}
+
+// TGW_WEBHOOKS_* флаги парсятся корректно: boolean значения ("1"/"true"),
+// числовые через parseNumericEnv с ИМЕНОВАННОЙ ошибкой при невалидных значениях.
+TEST_F(ConfigTest, WebhookFlagsParsing) {
+    setRequired();
+    set("TGW_WEBHOOKS_ENABLED", "true");
+    set("TGW_WEBHOOK_TIMEOUT_MS", "5000");
+    set("TGW_WEBHOOK_QUEUE_MAX", "500");
+    set("TGW_WEBHOOK_SSRF_GUARD", "1");
+
+    const Config c = Config::load();
+    EXPECT_TRUE(c.webhooks_enabled);
+    EXPECT_EQ(c.webhook_timeout_ms, 5000);
+    EXPECT_EQ(c.webhook_queue_max, 500u);
+    EXPECT_TRUE(c.webhook_ssrf_guard);
+}
+
+// Дефолтные значения при отсутствии TGW_WEBHOOKS_* переменных.
+TEST_F(ConfigTest, WebhookFlagsDefaults) {
+    setRequired();
+
+    const Config c = Config::load();
+    EXPECT_FALSE(c.webhooks_enabled);
+    EXPECT_EQ(c.webhook_timeout_ms, 10000);
+    EXPECT_EQ(c.webhook_queue_max, 10000u);
+    EXPECT_FALSE(c.webhook_ssrf_guard);
 }

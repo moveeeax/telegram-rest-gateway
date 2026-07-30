@@ -69,6 +69,18 @@ std::string renderMetrics(tgw::bridge::TdBridge& bridge, tgw::auth::AuthStateMan
         << "# TYPE tgw_kafka_dropped_total counter\n"
         << "tgw_kafka_dropped_total " << c.kafka_dropped_total.load() << "\n";
 
+    out << "# HELP tgw_webhook_delivered_total Webhook POSTs acknowledged with 2xx\n"
+        << "# TYPE tgw_webhook_delivered_total counter\n"
+        << "tgw_webhook_delivered_total " << c.webhook_delivered_total.load() << "\n";
+
+    out << "# HELP tgw_webhook_failed_total Webhook POSTs failed (non-2xx or transport)\n"
+        << "# TYPE tgw_webhook_failed_total counter\n"
+        << "tgw_webhook_failed_total " << c.webhook_failed_total.load() << "\n";
+
+    out << "# HELP tgw_webhook_dropped_total Webhook events dropped on full dispatch queue\n"
+        << "# TYPE tgw_webhook_dropped_total counter\n"
+        << "tgw_webhook_dropped_total " << c.webhook_dropped_total.load() << "\n";
+
     return out.str();
 }
 
