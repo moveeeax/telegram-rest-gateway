@@ -35,6 +35,13 @@ struct Config {
     std::string files_directory = "/data/files";
 
     bool use_test_dc = false;
+
+    // Держать Telegram-статус аккаунта online (TGW_KEEP_ONLINE). По умолчанию TDLib offline;
+    // при включении gateway после авторизации шлёт setOption("online", true) и переустанавливает
+    // его при каждом восстановлении соединения (connectionStateReady), чтобы статус пережил
+    // реконнекты. Последствие: last-seen аккаунта виден 24/7.
+    bool keep_online = false;
+
     std::int32_t tdlib_log_verbosity = 1;
 
     std::string listen_address = "127.0.0.1";

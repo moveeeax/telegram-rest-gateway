@@ -29,6 +29,7 @@ constexpr const char* kEnvBases[] = {
     "TGW_DATABASE_DIR",
     "TGW_FILES_DIR",
     "TGW_USE_TEST_DC",
+    "TGW_KEEP_ONLINE",
     "TGW_TDLIB_LOG_VERBOSITY",
     "TGW_LISTEN_ADDRESS",
     "TGW_LISTEN_PORT",
@@ -209,6 +210,25 @@ TEST_F(ConfigTest, ListenPortBoundaries) {
         const Config c = Config::load();
         EXPECT_EQ(c.listen_port, 0);  // 0 — валидный uint16_t; load() не отвергает и не трактует
     }
+}
+
+// TGW_KEEP_ONLINE: "1"/"true" → true; отсутствие/"0"/"false" → false (образец use_test_dc).
+TEST_F(ConfigTest, KeepOnlineFlagParsing) {
+    setRequired();
+    {
+        const Config c = Config::load();
+        EXPECT_FALSE(c.keep_online);  // не задано — дефолт false
+    }
+    set("TGW_KEEP_ONLINE", "1");
+    EXPECT_TRUE(Config::load().keep_online);
+    set("TGW_KEEP_ONLINE", "true");
+    EXPECT_TRUE(Config::load().keep_online);
+    set("TGW_KEEP_ONLINE", "0");
+    EXPECT_FALSE(Config::load().keep_online);
+    set("TGW_KEEP_ONLINE", "false");
+    EXPECT_FALSE(Config::load().keep_online);
+    set("TGW_KEEP_ONLINE", "yes");  // любое иное значение трактуется как false
+    EXPECT_FALSE(Config::load().keep_online);
 }
 
 // Валидные числовые значения парсятся без изменения поведения.

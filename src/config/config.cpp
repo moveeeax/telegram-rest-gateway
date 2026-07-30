@@ -106,6 +106,9 @@ Config Config::load() {
     const std::string test_dc = envOrFile("TGW_USE_TEST_DC");
     c.use_test_dc = (test_dc == "1" || test_dc == "true");
 
+    const std::string keep_online = envOrFile("TGW_KEEP_ONLINE");
+    c.keep_online = (keep_online == "1" || keep_online == "true");
+
     const std::string verbosity = envOrFile("TGW_TDLIB_LOG_VERBOSITY");
     if (!verbosity.empty()) {
         c.tdlib_log_verbosity = parseNumericEnv<std::int32_t>("TGW_TDLIB_LOG_VERBOSITY", verbosity);

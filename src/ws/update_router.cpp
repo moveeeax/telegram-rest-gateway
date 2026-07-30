@@ -153,6 +153,18 @@ void UpdateRouter::onUpdate(api::object_ptr<api::Object> update) {
         auth_.onUpdate(std::move(update));
         return;
     }
+    // Переход соединения в Ready (стартовый и каждый реконнект) — служебный апдейт, наружу и так
+    // не шёл (buildForwardable вернул бы nullopt). Дёргаем колбэк keep-online ДО ветки forwardable
+    // и выходим: обрабатывать updateConnectionState дальше нечем.
+    if (update->get_id() == api::updateConnectionState::ID) {
+        if (on_connection_ready_) {
+            const auto& upd = static_cast<const api::updateConnectionState&>(*update);
+            if (upd.state_ != nullptr && upd.state_->get_id() == api::connectionStateReady::ID) {
+                on_connection_ready_();
+            }
+        }
+        return;
+    }
     std::optional<ForwardableUpdate> forwardable = buildForwardable(*update);
     if (!forwardable) {
         return;  // служебный/непроецируемый апдейт — наружу не отдаём

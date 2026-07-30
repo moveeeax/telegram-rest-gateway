@@ -73,6 +73,7 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 | `TGW_DATABASE_DIR` | `/data/session` | Каталог БД TDLib (`td.binlog`); должен быть на persistent-томе (или восстанавливаться из S3, см. ниже) |
 | `TGW_FILES_DIR` | `/data/files` | Каталог файлов TDLib (скачанные/аплоады); тоже должен переживать рестарт пода |
 | `TGW_USE_TEST_DC` | `false` (`0`) | `1`/`true` — подключаться к тестовому дата-центру Telegram вместо прод (`use_test_dc` TDLib) |
+| `TGW_KEEP_ONLINE` | `false` | `1`/`true` — держать аккаунт online: `setOption("online", true)` после авторизации + переустановка при каждом реконнекте (`connectionStateReady`). Делает last-seen аккаунта видимым 24/7 |
 | `TGW_TDLIB_LOG_VERBOSITY` | `1` | Уровень логирования TDLib (0 — тихо, выше — подробнее); см. `Td::TdStatic` |
 | `TGW_MAX_UPLOAD_BYTES` | `67108864` (64 MiB) | Лимит тела `POST /v1/chats/{chatId}/files` (`setClientMaxBodySize`); больше — `413` |
 | `TGW_WS_MAX_PENDING_BYTES` | `8388608` | WS back-pressure: лимит байт с последнего pong; 0 — выкл |
@@ -80,6 +81,12 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 | `TGW_KAFKA_BROKERS` | — | Kafka/Redpanda bootstrap; пусто — события в Kafka выключены |
 | `TGW_KAFKA_TOPIC` | `tgw.updates` | Топик событий |
 | `TGW_KAFKA_CLIENT_ID` | `tgw-<session_id>` | client.id продюсера |
+
+**Онлайн-статус (`TGW_KEEP_ONLINE`).** По умолчанию TDLib держит аккаунт offline. При включении
+gateway после авторизации шлёт `setOption("online", true)` и переустанавливает его при каждом
+восстановлении соединения (`connectionStateReady`), чтобы статус пережил реконнекты. Учти: аккаунт
+будет виден как online (и last-seen обновляется) круглосуточно, пока процесс жив. При штатном
+завершении спец-действий не нужно — TDLib на `close` сам выставит offline.
 
 ### Хранение сессии в S3/MinIO (опционально)
 
