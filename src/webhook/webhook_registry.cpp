@@ -46,6 +46,8 @@ bool jsonToWebhook(const Json::Value& item, Webhook& out) {
 WebhookRegistry::WebhookRegistry(IWebhookStore& store) : store_(store) {}
 
 void WebhookRegistry::loadFromStore() {
+    // Сеть — НИКОГДА под mutex_ (см. persist()): store_.load() у прод-реализации тоже блокирующий
+    // HTTP GET, зовём его до захвата лока; сам лок берём только на короткое присваивание hooks_.
     const auto raw = store_.load();
     std::vector<Webhook> parsed;
     if (!raw.has_value()) {
@@ -78,30 +80,38 @@ std::string WebhookRegistry::add(const std::string& url, const std::string& secr
     // Детерминированный id: первые 16 hex-символов sha256(url) (8 байт) — стабилен между
     // рестартами без хранения отдельного счётчика/генератора uuid.
     const std::string id = tgw::util::sha256Hex(url).substr(0, 16);
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto it =
-        std::find_if(hooks_.begin(), hooks_.end(), [&id](const Webhook& h) { return h.id == id; });
-    if (it != hooks_.end()) {
-        // Дубль url -> тот же id: обновляем запись на месте, не плодим дубликаты.
-        it->url = url;
-        it->secret = secret;
-        it->active = active;
-    } else {
-        hooks_.push_back(Webhook{id, url, secret, active});
-    }
-    persist();
+    std::string snapshot_json;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto it = std::find_if(hooks_.begin(), hooks_.end(),
+                                      [&id](const Webhook& h) { return h.id == id; });
+        if (it != hooks_.end()) {
+            // Дубль url -> тот же id: обновляем запись на месте, не плодим дубликаты.
+            it->url = url;
+            it->secret = secret;
+            it->active = active;
+        } else {
+            hooks_.push_back(Webhook{id, url, secret, active});
+        }
+        snapshot_json = serializeLocked();
+    }  // лок отпущен ДО сетевого save() — см. persist().
+    persist(snapshot_json);
     return id;
 }
 
 bool WebhookRegistry::remove(const std::string& id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto it =
-        std::find_if(hooks_.begin(), hooks_.end(), [&id](const Webhook& h) { return h.id == id; });
-    if (it == hooks_.end()) {
-        return false;
-    }
-    hooks_.erase(it);
-    persist();
+    std::string snapshot_json;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto it = std::find_if(hooks_.begin(), hooks_.end(),
+                                      [&id](const Webhook& h) { return h.id == id; });
+        if (it == hooks_.end()) {
+            return false;
+        }
+        hooks_.erase(it);
+        snapshot_json = serializeLocked();
+    }  // лок отпущен ДО сетевого save() — см. persist().
+    persist(snapshot_json);
     return true;
 }
 
@@ -122,16 +132,28 @@ std::vector<Webhook> WebhookRegistry::activeSnapshot() const {
     return out;
 }
 
-void WebhookRegistry::persist() {
+// Сериализует hooks_ в JSON-массив. ТОЛЬКО из-под mutex_ (см. add/remove) — сама сеть не трогает,
+// значит безопасна под локом (в отличие от persist() ниже).
+std::string WebhookRegistry::serializeLocked() const {
     Json::Value arr(Json::arrayValue);
     for (const auto& hook : hooks_) {
         arr.append(webhookToJson(hook));
     }
     Json::StreamWriterBuilder builder;
     builder["indentation"] = "";
-    const std::string json = Json::writeString(builder, arr);
-    if (!store_.save(json)) {
-        LOG_ERROR << "webhook registry: failed to persist " << hooks_.size() << " webhook(s)";
+    return Json::writeString(builder, arr);
+}
+
+// Сеть — НИКОГДА под mutex_. store_.save() у прод-реализации (S3WebhookStore) делает синхронный
+// HTTP PUT (до S3Client::kRequestTimeout = 30s, см. util/s3_client.hpp) — вызов под mutex_ держал
+// бы лок всё это время и стопорил бы activeSnapshot() диспетчера (горячий путь доставки
+// вебхуков) на время одной админской add/remove при медленном/недоступном S3. Поэтому вызывающий
+// (add/remove) обязан собрать snapshot_json через serializeLocked() ПОД локом, отпустить лок и
+// только потом позвать persist(snapshot_json) — см. прецедент auth/s3_session.cpp (startS3Sync:
+// "S3Client::send блокирующий, поэтому саму заливку уносим...").
+void WebhookRegistry::persist(const std::string& snapshot_json) {
+    if (!store_.save(snapshot_json)) {
+        LOG_ERROR << "webhook registry: failed to persist webhook registry";
     }
 }
 

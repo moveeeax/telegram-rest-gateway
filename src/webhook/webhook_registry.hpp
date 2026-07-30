@@ -34,7 +34,10 @@ class IWebhookStore {
 
 // In-memory реестр вебхуков с персистом в store_ на каждую мутацию (add/remove). Читается
 // диспетчером обновлений (activeSnapshot, другой поток) и пишется REST-роутами (add/remove) —
-// все методы под mutex_, list/activeSnapshot возвращают КОПИЮ под локом.
+// все обращения к hooks_ под mutex_, list/activeSnapshot возвращают КОПИЮ под локом. Сетевой
+// save()/load() у прод-стора — ВНЕ лока (см. приватные serializeLocked()/persist() ниже):
+// иначе одна медленная админская add/remove стопорила бы activeSnapshot() на горячем пути
+// доставки вебхуков на время S3-таймаута.
 class WebhookRegistry {
    public:
     explicit WebhookRegistry(IWebhookStore& store);
@@ -61,9 +64,15 @@ class WebhookRegistry {
     std::vector<Webhook> hooks_;
     IWebhookStore& store_;
 
-    // Сериализует hooks_ в JSON и сохраняет через store_.save(). Вызывается ТОЛЬКО из-под
-    // mutex_ (add/remove) — сам лок не берёт.
-    void persist();
+    // Сеть — НИКОГДА под mutex_ (store_.save()/store_.load() у прод-реализации — блокирующий
+    // HTTP; удержание mutex_ на время сетевого таймаута стопорило бы activeSnapshot() диспетчера
+    // на горячем пути доставки). Поэтому персист разбит на два шага:
+    //  - serializeLocked(): сериализует hooks_ в JSON-строку. Вызывается ТОЛЬКО из-под mutex_.
+    //  - persist(json): сохраняет уже готовую строку через store_.save(). Вызывается ТОЛЬКО ПОСЛЕ
+    //    того, как mutex_ отпущен (add/remove лочат, мутируют, сериализуют, отпускают лок, зовут
+    //    persist() снаружи).
+    std::string serializeLocked() const;
+    void persist(const std::string& snapshot_json);
 };
 
 // S3-реализация IWebhookStore: хранит реестр по ключу из config (тот же объект/бакет, что и
