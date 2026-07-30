@@ -3,9 +3,8 @@
 #include "auth/auth_state_manager.hpp"
 #include "bridge/message_send_tracker.hpp"
 
-#include <td/telegram/td_api.h>
-
 #include <drogon/utils/coroutine.h>
+#include <td/telegram/td_api.h>
 #include <trantor/net/EventLoop.h>
 
 #include <atomic>
