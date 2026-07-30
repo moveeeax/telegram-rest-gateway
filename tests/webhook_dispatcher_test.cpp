@@ -127,7 +127,7 @@ TEST(WebhookDispatcher, LifecycleStartDispatchStopNoActiveHooks) {
         d.dispatch(makeEvent("e" + std::to_string(i)));
     }
     d.stop();
-    d.stop();  // идемпотентно
+    d.stop();                             // идемпотентно
     d.dispatch(makeEvent("after-stop"));  // после stop() — молча игнорируется
     SUCCEED();  // цель — отсутствие креша/зависания/гонок (проверяется санитайзерами в CI)
 }

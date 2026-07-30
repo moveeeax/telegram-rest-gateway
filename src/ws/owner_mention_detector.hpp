@@ -23,7 +23,7 @@ struct DetectResult {
 // всё равно работают, а reply_pending ставится, но подтвердить его резолвом до готовности owner_id
 // вызывающий код не сможет — это приемлемо, апдейт просто не подтвердится как триггер).
 inline DetectResult detect(const td::td_api::message& msg, std::int64_t owner_id,
-                            bool chat_is_private, bool chat_is_broadcast) {
+                           bool chat_is_private, bool chat_is_broadcast) {
     namespace api = td::td_api;
 
     // Канал-broadcast и собственные исходящие сообщения никогда не триггерят вебхук.
@@ -35,8 +35,9 @@ inline DetectResult detect(const td::td_api::message& msg, std::int64_t owner_id
         static_cast<const api::messageSenderUser&>(*msg.sender_id_).user_id_ == owner_id) {
         return {};
     }
-    // Приоритет причин по спеке (docs/superpowers/specs/2026-07-30-mention-reply-webhooks-design.md,
-    // раздел «Триггеры»): mention > reply > dm. Явное упоминание — сразу подтверждённый триггер.
+    // Приоритет причин по спеке
+    // (docs/superpowers/specs/2026-07-30-mention-reply-webhooks-design.md, раздел «Триггеры»):
+    // mention > reply > dm. Явное упоминание — сразу подтверждённый триггер.
     if (msg.contains_unread_mention_) {
         return {true, false, TriggerReason::Mention};
     }

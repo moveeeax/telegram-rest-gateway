@@ -242,7 +242,7 @@ void deliverOnLoop(trantor::EventLoop* loop, const Webhook& hook, const std::str
         // Держим client и token живыми до уничтожения колбэка; this НЕ захватываем — колбэк
         // самодостаточен (глобальные счётчики + копии строк для лога).
         [client, token, hook_id = hook.id, event_id](drogon::ReqResult result,
-                                                      const drogon::HttpResponsePtr& resp) {
+                                                     const drogon::HttpResponsePtr& resp) {
             auto& c = tgw::metrics::Counters::instance();
             if (result != drogon::ReqResult::Ok || resp == nullptr) {
                 c.webhook_failed_total.fetch_add(1, std::memory_order_relaxed);
@@ -310,8 +310,8 @@ void WebhookDispatcher::start() {
     // петли (mutex+cv) — happens-before для всех последующих queueInLoop (см. detail::LoopThread).
     loop_thread_ = std::make_unique<detail::LoopThread>();
     worker_ = std::thread([this] { workerLoop(); });
-    LOG_INFO << "webhook dispatcher started (timeout=" << timeout_s_
-             << "s queue_max=" << queue_max_ << " ssrf_guard=" << (ssrf_guard_ ? 1 : 0) << ")";
+    LOG_INFO << "webhook dispatcher started (timeout=" << timeout_s_ << "s queue_max=" << queue_max_
+             << " ssrf_guard=" << (ssrf_guard_ ? 1 : 0) << ")";
 }
 
 void WebhookDispatcher::dispatch(const WebhookEvent& ev) {
@@ -325,10 +325,9 @@ void WebhookDispatcher::dispatch(const WebhookEvent& ev) {
         if (queue_.size() >= queue_max_) {
             // Воркер/приёмники не успевают — дропаем (сервис первичен), с прореженным логом.
             static std::atomic<std::uint64_t> log_gate{0};
-            const auto dropped =
-                tgw::metrics::Counters::instance().webhook_dropped_total.fetch_add(
-                    1, std::memory_order_relaxed) +
-                1;
+            const auto dropped = tgw::metrics::Counters::instance().webhook_dropped_total.fetch_add(
+                                     1, std::memory_order_relaxed) +
+                                 1;
             if (log_gate.fetch_add(1, std::memory_order_relaxed) % 1000 == 0) {
                 LOG_ERROR << "webhook queue full, dropped (total " << dropped << ")";
             }

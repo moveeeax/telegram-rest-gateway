@@ -2,8 +2,8 @@
 
 #include "bridge/td_bridge.hpp"
 #include "bridge/update_sink.hpp"
-#include "ws/owner_mention_detector.hpp"
 #include "fake_transport.hpp"
+#include "ws/owner_mention_detector.hpp"
 
 #include <drogon/utils/coroutine.h>
 #include <td/telegram/td_api.h>
@@ -195,10 +195,11 @@ ScriptFactory errorScript(std::int32_t code, std::string message) {
 
 // Гоняет buildEvent на петле моста и снимает результат через promise/future (HB на результат).
 // Корутина суспендится на петле, поэтому resolve() возвращает resume в неё через queueInLoop —
-// как в HTTP-контексте. msg живёт в теле теста до future.get(), поэтому передача по const& безопасна.
+// как в HTTP-контексте. msg живёт в теле теста до future.get(), поэтому передача по const&
+// безопасна.
 std::future<std::optional<WebhookEvent>> runBuildEvent(BridgeHarness& h, std::int32_t client_id,
-                                                       const td_api::message& msg,
-                                                       DetectResult det, std::int64_t owner_id,
+                                                       const td_api::message& msg, DetectResult det,
+                                                       std::int64_t owner_id,
                                                        std::string session_id,
                                                        std::int32_t received_at, int chain_limit) {
     auto promise = std::make_shared<std::promise<std::optional<WebhookEvent>>>();
@@ -233,9 +234,9 @@ TEST(ContextBuilder, ReplyChainToRootWithLimit) {
     det.reason = TriggerReason::Reply;
 
     ChainDriver driver(h.transport(), cid,
-                       {msgScript(4100, -100500, 111, 4090),   // родитель = owner
+                       {msgScript(4100, -100500, 111, 4090),  // родитель = owner
                         msgScript(4090, -100500, 999, 4080),
-                        msgScript(4080, -100500, 999, 0)});     // корень, reply нет
+                        msgScript(4080, -100500, 999, 0)});  // корень, reply нет
 
     auto future = runBuildEvent(h, cid, *incoming, det, /*owner=*/111, "sess", 1730000000, 20);
     ASSERT_EQ(future.wait_for(2s), std::future_status::ready);
@@ -321,8 +322,8 @@ TEST(ContextBuilder, GetMessageFailureTruncates) {
     det.reason = TriggerReason::Reply;
 
     ChainDriver driver(h.transport(), cid,
-                       {msgScript(4100, -100500, 111, 4090),   // owner, есть родитель 4090
-                        errorScript(500, "BOOM")});            // 2-е звено падает
+                       {msgScript(4100, -100500, 111, 4090),  // owner, есть родитель 4090
+                        errorScript(500, "BOOM")});           // 2-е звено падает
 
     auto future = runBuildEvent(h, cid, *incoming, det, /*owner=*/111, "sess", 1730000000, 20);
     ASSERT_EQ(future.wait_for(2s), std::future_status::ready);

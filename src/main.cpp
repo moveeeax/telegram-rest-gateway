@@ -245,17 +245,17 @@ int main(int argc, char** argv) {
         // Хук вызывается синхронно из потока-приёмника с ЖИВОЙ ссылкой на message (принадлежит
         // апдейту, до конца onUpdate). Тип чата определяем СИНХРОННО из полей message, БЕЗ getChat:
         // getChat потребовал бы co_await ДО detect, а message — move-only и не переживает suspend
-        // (владения из const& у нас нет), поэтому дешёвый lookup из самого сообщения (санкционирован
-        // брифом: "private/broadcast определить по chat_id знаку/типу"): личка ⟺ chat_id_ > 0
-        // (private-чат = user_id), broadcast-канал ⟺ is_channel_post_. detect — чистый и быстрый.
-        // При срабатывании запускаем EAGER-корутину (drogon::AsyncTask) ПРЯМО тут: её префикс —
-        // buildEvent(...) — снимает всё нужное из message ДО первого co_await (getMessage), пока
-        // message ещё жив; на первом suspend await_suspend в потоке-приёмнике не находит loop и
-        // берёт главный loop Drogon — resume/dispatch идут уже на нём, поток-приёмник не блокируется
-        // сетевым I/O. После первого suspend ни AsyncTask, ни buildEvent к message не обращаются
-        // (контракт buildEvent), поэтому висящая ссылка безопасна.
-        router.setWebhookHook([&bridge, client_id, owner_id,
-                               dispatcher = webhook_dispatcher.get(),
+        // (владения из const& у нас нет), поэтому дешёвый lookup из самого сообщения
+        // (санкционирован брифом: "private/broadcast определить по chat_id знаку/типу"): личка ⟺
+        // chat_id_ > 0 (private-чат = user_id), broadcast-канал ⟺ is_channel_post_. detect — чистый
+        // и быстрый. При срабатывании запускаем EAGER-корутину (drogon::AsyncTask) ПРЯМО тут: её
+        // префикс — buildEvent(...) — снимает всё нужное из message ДО первого co_await
+        // (getMessage), пока message ещё жив; на первом suspend await_suspend в потоке-приёмнике не
+        // находит loop и берёт главный loop Drogon — resume/dispatch идут уже на нём,
+        // поток-приёмник не блокируется сетевым I/O. После первого suspend ни AsyncTask, ни
+        // buildEvent к message не обращаются (контракт buildEvent), поэтому висящая ссылка
+        // безопасна.
+        router.setWebhookHook([&bridge, client_id, owner_id, dispatcher = webhook_dispatcher.get(),
                                session_id = config.session_id](const td::td_api::message& msg) {
             const bool chat_is_private = msg.chat_id_ > 0;
             const bool chat_is_broadcast = msg.is_channel_post_;

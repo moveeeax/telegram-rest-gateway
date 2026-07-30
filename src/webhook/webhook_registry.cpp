@@ -58,8 +58,7 @@ void WebhookRegistry::loadFromStore() {
         Json::CharReaderBuilder builder;
         std::string errs;
         const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-        const bool parsed_ok =
-            reader->parse(raw->data(), raw->data() + raw->size(), &root, &errs);
+        const bool parsed_ok = reader->parse(raw->data(), raw->data() + raw->size(), &root, &errs);
         if (!parsed_ok || !root.isArray()) {
             LOG_WARN << "webhook registry: failed to parse stored JSON, starting empty"
                      << (parsed_ok ? "" : (": " + errs));
@@ -85,7 +84,7 @@ std::string WebhookRegistry::add(const std::string& url, const std::string& secr
     {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto it = std::find_if(hooks_.begin(), hooks_.end(),
-                                      [&id](const Webhook& h) { return h.id == id; });
+                                     [&id](const Webhook& h) { return h.id == id; });
         if (it != hooks_.end()) {
             // Дубль url -> тот же id: обновляем запись на месте, не плодим дубликаты.
             it->url = url;
@@ -105,7 +104,7 @@ bool WebhookRegistry::remove(const std::string& id) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto it = std::find_if(hooks_.begin(), hooks_.end(),
-                                      [&id](const Webhook& h) { return h.id == id; });
+                                     [&id](const Webhook& h) { return h.id == id; });
         if (it == hooks_.end()) {
             return false;
         }

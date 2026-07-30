@@ -71,36 +71,35 @@ void registerWebhookRoutes(tgw::webhook::WebhookRegistry& registry) {
     // POST /v1/webhooks — регистрация нового вебхука. Тело: {"url", "secret"?, "active"?}.
     // Разбор/валидация вынесены в handleWebhookCreate (тестируется без Drogon-роутера).
     registerRoute(kWebhookCreateRoute,
-                 [&registry](const drogon::HttpRequestPtr& req, HttpCallback&& cb) {
-                     cb(handleWebhookCreate(req, registry));
-                 });
+                  [&registry](const drogon::HttpRequestPtr& req, HttpCallback&& cb) {
+                      cb(handleWebhookCreate(req, registry));
+                  });
 
     // GET /v1/webhooks — список БЕЗ secret (webhookToJson secret не проецирует).
-    registerRoute(kWebhookListRoute,
-                 [&registry](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
-                     Json::Value arr(Json::arrayValue);
-                     for (const auto& hook : registry.list()) {
-                         arr.append(webhookToJson(hook));
-                     }
-                     Json::Value body;
-                     body["ok"] = true;
-                     body["data"] = arr;
-                     cb(jsonResponse(std::move(body), drogon::k200OK));
-                 });
+    registerRoute(kWebhookListRoute, [&registry](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+        Json::Value arr(Json::arrayValue);
+        for (const auto& hook : registry.list()) {
+            arr.append(webhookToJson(hook));
+        }
+        Json::Value body;
+        body["ok"] = true;
+        body["data"] = arr;
+        cb(jsonResponse(std::move(body), drogon::k200OK));
+    });
 
     // DELETE /v1/webhooks/{id} — id вебхука строковый (hex(sha256(url))[0:16], см.
     // webhook_registry.hpp), НЕ десятичное число: http_helpers::parseId здесь неприменим,
     // path-параметр используется как есть. 200 — удалили; 404 — такого id не было.
     registerRoute(kWebhookDeleteRoute,
-                 [&registry](const drogon::HttpRequestPtr&, HttpCallback&& cb, std::string id) {
-                     if (!registry.remove(id)) {
-                         cb(serviceError("NOT_FOUND", "webhook not found", drogon::k404NotFound));
-                         return;
-                     }
-                     Json::Value body;
-                     body["ok"] = true;
-                     cb(jsonResponse(std::move(body), drogon::k200OK));
-                 });
+                  [&registry](const drogon::HttpRequestPtr&, HttpCallback&& cb, std::string id) {
+                      if (!registry.remove(id)) {
+                          cb(serviceError("NOT_FOUND", "webhook not found", drogon::k404NotFound));
+                          return;
+                      }
+                      Json::Value body;
+                      body["ok"] = true;
+                      cb(jsonResponse(std::move(body), drogon::k200OK));
+                  });
 }
 
 }  // namespace tgw::http

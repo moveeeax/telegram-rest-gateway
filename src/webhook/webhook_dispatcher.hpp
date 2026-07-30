@@ -62,7 +62,7 @@ class WebhookDispatcher {
 
     void start();                           // поднять loop + воркер
     void dispatch(const WebhookEvent& ev);  // неблокирующе: сериализовать + enqueue (drop)
-    void stop();                            // остановить воркер, дренировать in-flight, снести loop
+    void stop();  // остановить воркер, дренировать in-flight, снести loop
 
    private:
     void workerLoop();
@@ -81,7 +81,8 @@ class WebhookDispatcher {
     // loop-поток, на котором живёт весь HttpClient-код. Собственный detail::LoopThread (а не
     // trantor::EventLoopThread) — ради happens-before на старте (см. forward-decl выше). В
     // unique_ptr, чтобы при недренированном in-flight на shutdown его можно было release() —
-    // намеренно утечь, а не снести под живым коннектом (см. класс опасности 2). Создаётся в start().
+    // намеренно утечь, а не снести под живым коннектом (см. класс опасности 2). Создаётся в
+    // start().
     std::unique_ptr<detail::LoopThread> loop_thread_;
 
     // Очередь (event_id, body) от dispatch() к воркеру.

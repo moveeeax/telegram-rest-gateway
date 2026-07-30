@@ -12,7 +12,7 @@ using tgw::ws::TriggerReason;
 namespace {
 
 api::object_ptr<api::message> mkMsg(bool outgoing, std::int64_t sender_uid, bool mention,
-                                     bool has_reply) {
+                                    bool has_reply) {
     auto m = api::make_object<api::message>();
     m->is_outgoing_ = outgoing;
     m->contains_unread_mention_ = mention;
@@ -63,7 +63,7 @@ TEST(OwnerMentionDetector, BroadcastChannelNeverTriggers) {
 
 TEST(OwnerMentionDetector, OwnSenderNotTrigger) {
     auto m = mkMsg(/*outgoing=*/false, /*sender==owner=*/111, /*mention=*/false,
-                    /*has_reply=*/false);
+                   /*has_reply=*/false);
     auto r = detect(*m, /*owner_id=*/111, /*chat_is_private=*/true, /*chat_is_broadcast=*/false);
     EXPECT_FALSE(r.triggered);
 }

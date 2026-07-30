@@ -150,8 +150,8 @@ TEST(RouteSmoke, ScopeEnforcementThroughRealFilter) {
     EXPECT_TRUE(ro_on_webhooks_delete.fail_called);
     EXPECT_EQ(ro_on_webhooks_delete.status, drogon::k403Forbidden);
 
-    const auto admin_on_webhooks_delete = runFilter(
-        "/v1/webhooks/abc123", tgw::http::kWebhookDeleteRoute.method, "Bearer tgw_admin");
+    const auto admin_on_webhooks_delete =
+        runFilter("/v1/webhooks/abc123", tgw::http::kWebhookDeleteRoute.method, "Bearer tgw_admin");
     EXPECT_TRUE(admin_on_webhooks_delete.next_called);
     EXPECT_FALSE(admin_on_webhooks_delete.fail_called);
 }

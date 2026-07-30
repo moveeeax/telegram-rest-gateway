@@ -346,8 +346,8 @@ Json::Value webhookEntityTypeToJson(const api::TextEntityType& type) {
             break;
         case api::textEntityTypeMentionName::ID:
             json["type"] = "mention_name";
-            json["user_id"] = std::to_string(
-                static_cast<const api::textEntityTypeMentionName&>(type).user_id_);
+            json["user_id"] =
+                std::to_string(static_cast<const api::textEntityTypeMentionName&>(type).user_id_);
             break;
         case api::textEntityTypeHashtag::ID:
             json["type"] = "hashtag";

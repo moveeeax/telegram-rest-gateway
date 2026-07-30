@@ -55,8 +55,7 @@ constexpr bool isWebhooksPath(std::string_view path) {
     if (!startsWithNoCase(path, kWebhooksPathPrefix)) {
         return false;
     }
-    return path.size() == kWebhooksPathPrefix.size() ||
-           path[kWebhooksPathPrefix.size()] == '/';
+    return path.size() == kWebhooksPathPrefix.size() || path[kWebhooksPathPrefix.size()] == '/';
 }
 
 // Требуемый скоуп по маршруту: /v1/auth/* — admin (логин, session export = захват аккаунта);

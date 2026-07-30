@@ -30,7 +30,8 @@ bool senderIsOwner(const api::message& msg, std::int64_t owner_id) {
 
 drogon::Task<std::optional<WebhookEvent>> buildEvent(tgw::bridge::TdBridge& bridge,
                                                      std::int32_t client_id,
-                                                     const api::message& msg, tgw::ws::DetectResult det,
+                                                     const api::message& msg,
+                                                     tgw::ws::DetectResult det,
                                                      std::int64_t owner_id, std::string session_id,
                                                      std::int32_t received_at, int chain_limit) {
     WebhookEvent ev;
@@ -38,13 +39,13 @@ drogon::Task<std::optional<WebhookEvent>> buildEvent(tgw::bridge::TdBridge& brid
     ev.owner_id = std::to_string(owner_id);
     ev.received_at = received_at;
     ev.message = tgw::dto::webhookMessageToJson(msg);
-    ev.event_id =
-        session_id + ":" + std::to_string(msg.chat_id_) + ":" + std::to_string(msg.id_);
+    ev.event_id = session_id + ":" + std::to_string(msg.chat_id_) + ":" + std::to_string(msg.id_);
     ev.reply_chain = Json::Value(Json::arrayValue);
 
     // Снимаем всё нужное из msg ДО первой точки suspend: дальше в цепочке co_await ссылка на msg
     // не используется (chat_id зафиксирован локально, родители приходят из ответов getMessage).
-    // Это делает корутину устойчивой к тому, что вызывающий не удержит msg живым за первым co_await.
+    // Это делает корутину устойчивой к тому, что вызывающий не удержит msg живым за первым
+    // co_await.
     const std::int64_t chat_id = msg.chat_id_;
     const std::optional<std::int64_t> parent_id = replyParentId(msg);
 
@@ -53,8 +54,8 @@ drogon::Task<std::optional<WebhookEvent>> buildEvent(tgw::bridge::TdBridge& brid
         std::int64_t cur = *parent_id;
         int hops = 0;
         while (cur != 0 && hops < chain_limit) {
-            auto obj = co_await bridge.invoke(
-                client_id, api::make_object<api::getMessage>(chat_id, cur));
+            auto obj =
+                co_await bridge.invoke(client_id, api::make_object<api::getMessage>(chat_id, cur));
             if (obj == nullptr || obj->get_id() == api::error::ID) {
                 // Сбой ПЕРВОГО getMessage при неподтверждённом reply-триггере: владельца
                 // проверить не удалось => триггер НЕ подтверждён => nullopt (иначе ушёл бы
@@ -68,7 +69,8 @@ drogon::Task<std::optional<WebhookEvent>> buildEvent(tgw::bridge::TdBridge& brid
                 break;
             }
             const auto& parent = static_cast<const api::message&>(*obj);
-            // Подтверждение reply-триггера — на первом (ближайшем) родителе: автор должен быть owner.
+            // Подтверждение reply-триггера — на первом (ближайшем) родителе: автор должен быть
+            // owner.
             if (hops == 0 && det.reply_pending) {
                 if (!senderIsOwner(parent, owner_id)) {
                     co_return std::nullopt;
@@ -90,9 +92,9 @@ drogon::Task<std::optional<WebhookEvent>> buildEvent(tgw::bridge::TdBridge& brid
 
     ev.chain_truncated = truncated;
     if (ev.trigger_reason.empty()) {
-        ev.trigger_reason = det.reason == tgw::ws::TriggerReason::Mention  ? "mention"
-                            : det.reason == tgw::ws::TriggerReason::Dm     ? "dm"
-                                                                           : "reply";
+        ev.trigger_reason = det.reason == tgw::ws::TriggerReason::Mention ? "mention"
+                            : det.reason == tgw::ws::TriggerReason::Dm    ? "dm"
+                                                                          : "reply";
     }
     co_return std::optional<WebhookEvent>(std::move(ev));
 }
