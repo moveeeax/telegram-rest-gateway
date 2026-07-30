@@ -34,9 +34,12 @@ add_executable(tgw_unit_tests
     context_builder_test.cpp
     webhook_dispatcher_test.cpp
     # Прод-исходники, которых нет в tgw_bridge, но которые нужны тестам напрямую:
-    # config.cpp (парсинг env, тест 3.5) и bearer_filter.cpp (реальный фильтр, тест 3.7).
+    # config.cpp (парсинг env, тест 3.5), bearer_filter.cpp (реальный фильтр, тест 3.7) и
+    # webhook_routes.cpp (handleWebhookCreate, Task 7) — все три собраны в telegram-rest-gateway,
+    # а не в tgw_bridge.
     ${PROJECT_SOURCE_DIR}/src/config/config.cpp
-    ${PROJECT_SOURCE_DIR}/src/http/bearer_filter.cpp)
+    ${PROJECT_SOURCE_DIR}/src/http/bearer_filter.cpp
+    ${PROJECT_SOURCE_DIR}/src/http/webhook_routes.cpp)
 target_include_directories(tgw_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(tgw_unit_tests
     PRIVATE tgw_bridge GTest::gtest_main tgw_project_options)

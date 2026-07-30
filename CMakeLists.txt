@@ -89,6 +89,7 @@ add_executable(telegram-rest-gateway
     src/http/routes.cpp
     src/http/message_routes.cpp
     src/http/directory_routes.cpp
+    src/http/webhook_routes.cpp
     src/http/bearer_filter.cpp
     src/http/login_ui.cpp
     src/http/metrics_routes.cpp

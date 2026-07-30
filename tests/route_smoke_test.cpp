@@ -2,6 +2,8 @@
 #include "http/bearer_filter.hpp"
 #include "http/http_helpers.hpp"
 #include "http/route_table.hpp"
+#include "http/webhook_routes.hpp"
+#include "webhook/webhook_registry.hpp"
 
 #include <drogon/HttpRequest.h>
 #include <drogon/HttpResponse.h>
@@ -9,6 +11,7 @@
 #include <td/telegram/td_api.h>
 
 #include <gtest/gtest.h>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -29,9 +32,10 @@ namespace td_api = td::td_api;
 // tsan.supp покрывает лишь libcrypto/libssl) хрупко и невозможно верифицировать в этой среде.
 //
 // ОБЛАСТЬ: таблица и этот тест покрывают маршруты routes.cpp (системные + вся auth-поверхность +
-// /v1/me). Ресурсные маршруты message_routes.cpp/directory_routes.cpp регистрируются прежним
-// способом и в таблицу НЕ включены (иначе тест давал бы по ним ложно-зелёный результат) — их
-// миграция в таблицу отдельный follow-up.
+// /v1/me) и webhook_routes.cpp (/v1/webhooks*, Task 7). Ресурсные маршруты
+// message_routes.cpp/directory_routes.cpp регистрируются прежним способом и в таблицу НЕ включены
+// (иначе тест давал бы по ним ложно-зелёный результат) — их миграция в таблицу отдельный
+// follow-up.
 
 namespace {
 
@@ -66,6 +70,17 @@ FilterOutcome runFilter(const std::string& path, drogon::HttpMethod method,
         [&outcome]() { outcome.next_called = true; });
     return outcome;
 }
+
+// Фейковый стор без сети для WebhookRegistry в тестах парсинга тела (тот же паттерн, что
+// tests/webhook_registry_test.cpp).
+struct FakeWebhookStore : tgw::webhook::IWebhookStore {
+    std::optional<std::string> data;
+    std::optional<std::string> load() override { return data; }
+    bool save(const std::string& j) override {
+        data = j;
+        return true;
+    }
+};
 
 }  // namespace
 
@@ -114,6 +129,80 @@ TEST(RouteSmoke, ScopeEnforcementThroughRealFilter) {
     const auto ro_on_read = runFilter(me_path, tgw::http::kMeRoute.method, "Bearer tgw_ro");
     EXPECT_TRUE(ro_on_read.next_called);
     EXPECT_FALSE(ro_on_read.fail_called);
+
+    // Task 7: /v1/webhooks* — тот же admin-скоуп, что и /v1/auth/*. Проверяем и список/создание
+    // (без {id} в пути), и DELETE .../{id} — оба варианта matches isWebhooksPath в scope_policy.
+    const std::string webhooks_path{tgw::http::kWebhookCreateRoute.path};
+    const auto ro_on_webhooks_create =
+        runFilter(webhooks_path, tgw::http::kWebhookCreateRoute.method, "Bearer tgw_ro");
+    EXPECT_TRUE(ro_on_webhooks_create.fail_called);
+    EXPECT_EQ(ro_on_webhooks_create.status, drogon::k403Forbidden);
+
+    const auto admin_on_webhooks_create =
+        runFilter(webhooks_path, tgw::http::kWebhookCreateRoute.method, "Bearer tgw_admin");
+    EXPECT_TRUE(admin_on_webhooks_create.next_called);
+    EXPECT_FALSE(admin_on_webhooks_create.fail_called);
+
+    // DELETE /v1/webhooks/{id}: путь с реальным id-сегментом (сам фильтр на {placeholders} не
+    // матчит — ему достаточно префикса), read-токен всё равно должен получить 403, не 200.
+    const auto ro_on_webhooks_delete =
+        runFilter("/v1/webhooks/abc123", tgw::http::kWebhookDeleteRoute.method, "Bearer tgw_ro");
+    EXPECT_TRUE(ro_on_webhooks_delete.fail_called);
+    EXPECT_EQ(ro_on_webhooks_delete.status, drogon::k403Forbidden);
+
+    const auto admin_on_webhooks_delete = runFilter(
+        "/v1/webhooks/abc123", tgw::http::kWebhookDeleteRoute.method, "Bearer tgw_admin");
+    EXPECT_TRUE(admin_on_webhooks_delete.next_called);
+    EXPECT_FALSE(admin_on_webhooks_delete.fail_called);
+}
+
+// Юнит на парсинг тела POST /v1/webhooks (Task 7, брифовое требование Step 1): валидный
+// {url,secret} -> 200 + непустой id; отсутствие url -> 400 VALIDATION_ERROR. handleWebhookCreate
+// вынесена из registerWebhookRoutes ровно ради этого теста — без поднятия HTTP-роутера.
+TEST(RouteSmoke, WebhookCreateValidBodyReturns200WithId) {
+    FakeWebhookStore store;
+    tgw::webhook::WebhookRegistry registry(store);
+
+    auto req = drogon::HttpRequest::newHttpRequest();
+    req->setMethod(drogon::Post);
+    req->setPath("/v1/webhooks");
+    req->addHeader("Content-Type", "application/json");
+    req->setBody(R"({"url":"https://example.com/hook","secret":"s3cr3t"})");
+
+    const auto resp = tgw::http::handleWebhookCreate(req, registry);
+    ASSERT_EQ(resp->statusCode(), drogon::k200OK);
+    const auto json = resp->getJsonObject();
+    ASSERT_TRUE(json != nullptr);
+    EXPECT_TRUE((*json)["ok"].asBool());
+    EXPECT_FALSE((*json)["data"]["id"].asString().empty());
+    EXPECT_EQ((*json)["data"]["url"].asString(), "https://example.com/hook");
+    EXPECT_TRUE((*json)["data"]["active"].asBool());
+    EXPECT_FALSE((*json)["data"].isMember("secret"));  // секрет наружу не отдаём
+
+    // Реестр реально пополнился (не только ответ выглядит правильно).
+    const auto list = registry.list();
+    ASSERT_EQ(list.size(), 1u);
+    EXPECT_EQ(list[0].url, "https://example.com/hook");
+}
+
+TEST(RouteSmoke, WebhookCreateMissingUrlReturns400ValidationError) {
+    FakeWebhookStore store;
+    tgw::webhook::WebhookRegistry registry(store);
+
+    auto req = drogon::HttpRequest::newHttpRequest();
+    req->setMethod(drogon::Post);
+    req->setPath("/v1/webhooks");
+    req->addHeader("Content-Type", "application/json");
+    req->setBody(R"({"secret":"s3cr3t"})");
+
+    const auto resp = tgw::http::handleWebhookCreate(req, registry);
+    ASSERT_EQ(resp->statusCode(), drogon::k400BadRequest);
+    const auto json = resp->getJsonObject();
+    ASSERT_TRUE(json != nullptr);
+    EXPECT_FALSE((*json)["ok"].asBool());
+    EXPECT_EQ((*json)["error"]["code"].asString(), "VALIDATION_ERROR");
+
+    EXPECT_TRUE(registry.list().empty());  // ничего не добавилось
 }
 
 // (в) Маппинг ошибок TDLib (решение 1.4), через который проходит ответ каждого моста-маршрута:
