@@ -27,6 +27,7 @@ add_executable(tgw_unit_tests
     bearer_auth_test.cpp
     td_bridge_test.cpp
     ws_registry_test.cpp
+    owner_mention_detector_test.cpp
     config_test.cpp
     route_smoke_test.cpp
     # Прод-исходники, которых нет в tgw_bridge, но которые нужны тестам напрямую:
