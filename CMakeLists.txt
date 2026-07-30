@@ -75,6 +75,7 @@ add_library(tgw_bridge STATIC
     src/dto/file_dto.cpp
     src/webhook/webhook_registry.cpp
     src/webhook/context_builder.cpp
+    src/webhook/webhook_dispatcher.cpp
     src/ws/ws_registry.cpp
     src/ws/update_router.cpp)
 target_include_directories(tgw_bridge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

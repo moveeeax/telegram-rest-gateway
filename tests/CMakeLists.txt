@@ -32,6 +32,7 @@ add_executable(tgw_unit_tests
     route_smoke_test.cpp
     webhook_registry_test.cpp
     context_builder_test.cpp
+    webhook_dispatcher_test.cpp
     # Прод-исходники, которых нет в tgw_bridge, но которые нужны тестам напрямую:
     # config.cpp (парсинг env, тест 3.5) и bearer_filter.cpp (реальный фильтр, тест 3.7).
     ${PROJECT_SOURCE_DIR}/src/config/config.cpp
