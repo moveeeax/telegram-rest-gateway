@@ -207,13 +207,32 @@ int main(int argc, char** argv) {
     // Ready ещё в StartupBootstrapper — регистрация после него теряет событие.
     // Warmup чатов (§бэклог ChatCache): TDLib наполняет главный список лениво — без прогрева
     // первый GET /v1/chats после старта может отдать частичный список. Fire-and-forget.
-    auth.setOnReady([&bridge, client_id] {
+    const bool keep_online = config.keep_online;
+    auth.setOnReady([&bridge, client_id, keep_online] {
         auto load = td_api::make_object<td_api::loadChats>();
         load->chat_list_ = td_api::make_object<td_api::chatListMain>();
         load->limit_ = 100;
         bridge.sendOneWay(client_id, std::move(load));
         LOG_INFO << "authorized: warming up main chat list";
+        // keep-online: сразу после авторизации выставляем online (TDLib по умолчанию offline).
+        // Тот же поток-приёмник, что и loadChats — потокобезопасно; порядок неважен.
+        if (keep_online) {
+            bridge.sendOneWay(client_id,
+                              td_api::make_object<td_api::setOption>(
+                                  "online", td_api::make_object<td_api::optionValueBoolean>(true)));
+            LOG_INFO << "keep-online: setting online=true";
+        }
     });
+    // keep-online: переустанавливаем online при КАЖДОМ восстановлении соединения
+    // (connectionStateReady), чтобы статус пережил реконнекты. Колбэк регистрируем ДО start()
+    // (пишется до старта потока-приёмника, вызывается из него после) — гонки на std::function нет.
+    if (keep_online) {
+        router.setOnConnectionReady([&bridge, client_id] {
+            bridge.sendOneWay(client_id,
+                              td_api::make_object<td_api::setOption>(
+                                  "online", td_api::make_object<td_api::optionValueBoolean>(true)));
+        });
+    }
     // Удалённый logout / отзыв сессии (AUTH_KEY_DUPLICATED): останавливаем сервис — с
     // restart-политикой контейнер поднимется и честно попросит новый логин, вместо вечных 409.
     // queueInLoop до run() просто отложит quit до старта loop'а.

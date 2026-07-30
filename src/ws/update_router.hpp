@@ -45,10 +45,18 @@ class UpdateRouter final : public tgw::bridge::IUpdateSink {
         event_publisher_ = std::move(pub);
     }
 
+    // Колбэк на переход соединения в connectionStateReady (в т.ч. после реконнекта). Служит
+    // для keep-online (переустановка setOption("online", true)). Вызывается из потока-приёмника
+    // при КАЖДОМ Ready. UpdateRouter не зависит от TdBridge — само действие инкапсулирует
+    // колбэк (тестируемость). Задавать до start(): пишется до старта потока, читается после —
+    // гонки на самом std::function нет (как у event_publisher_).
+    void setOnConnectionReady(std::function<void()> cb) { on_connection_ready_ = std::move(cb); }
+
    private:
     tgw::auth::AuthStateManager& auth_;
     std::string session_id_;
     std::function<void(const std::string&, const std::string&)> event_publisher_;
+    std::function<void()> on_connection_ready_;
     std::atomic<std::uint64_t> seq_{0};
 };
 
