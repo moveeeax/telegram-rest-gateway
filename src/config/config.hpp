@@ -42,6 +42,12 @@ struct Config {
     // реконнекты. Последствие: last-seen аккаунта виден 24/7.
     bool keep_online = false;
 
+    // Период (сек) повторной установки online при keep_online, помимо событийных хуков выше.
+    // TDLib сама online не поддерживает — статус деградирует без периодического подтверждения от
+    // клиента, а событийные хуки покрывают только старт и реконнект, но не долгое стабильное
+    // соединение между ними. Таймер — страховка на этот случай (образец s3_sync_interval_seconds).
+    int keep_online_interval_seconds = 60;
+
     // Конфигурация вебхуков mention/reply-событий (TGW_WEBHOOKS_*).
     bool webhooks_enabled = false;
     int webhook_timeout_ms = 10000;

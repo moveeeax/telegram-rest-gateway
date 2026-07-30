@@ -324,6 +324,25 @@ int main(int argc, char** argv) {
                               td_api::make_object<td_api::setOption>(
                                   "online", td_api::make_object<td_api::optionValueBoolean>(true)));
         });
+        // keep-online: периодическая страховка поверх событийных хуков выше. TDLib НЕ поддерживает
+        // online-статус сама — без периодического подтверждения от клиента он деградирует по
+        // истечении внутреннего таймаута TDLib. setOnReady/setOnConnectionReady покрывают старт и
+        // реконнект, но соединение может простоять стабильным (без единого connectionStateReady)
+        // часами — именно этот случай прод и показал: за 5+ часов работы без рестартов
+        // connectionStateReady сработал ровно один раз. runEvery закрывает этот пробел, повторяя
+        // setOption на фиксированном интервале независимо от событий соединения. Действие лёгкое
+        // (sendOneWay — постановка в очередь моста, не блокирующий сетевой вызов), поэтому, в
+        // отличие от startS3Sync (src/auth/s3_session.cpp), отдельный поток не нужен — колбэк
+        // выполняется прямо на главном event-loop Drogon. Регистрируется ДО bridge.start(), но
+        // исполняется только после старта loop'а (drogon::app().run()) — как и весь keep-online
+        // блок и upload_cleanup.cpp, это штатно.
+        drogon::app().getLoop()->runEvery(
+            static_cast<double>(config.keep_online_interval_seconds), [&bridge, client_id] {
+                bridge.sendOneWay(
+                    client_id,
+                    td_api::make_object<td_api::setOption>(
+                        "online", td_api::make_object<td_api::optionValueBoolean>(true)));
+            });
     }
     // Удалённый logout / отзыв сессии (AUTH_KEY_DUPLICATED): останавливаем сервис — с
     // restart-политикой контейнер поднимется и честно попросит новый логин, вместо вечных 409.
