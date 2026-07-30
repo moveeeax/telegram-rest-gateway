@@ -63,6 +63,7 @@ add_library(tgw_bridge STATIC
     src/bridge/correlation_map.cpp
     src/bridge/update_sink.cpp
     src/bridge/td_bridge.cpp
+    src/bridge/message_send_tracker.cpp
     src/auth/auth_state_manager.cpp
     src/auth/token_store.cpp
     src/auth/session_io.cpp

@@ -22,10 +22,12 @@ add_executable(tgw_unit_tests
     scope_policy_test.cpp
     aws_sigv4_test.cpp
     byte_range_test.cpp
+    typing_delay_test.cpp
     idempotency_cache_test.cpp
     upload_sanitize_test.cpp
     bearer_auth_test.cpp
     td_bridge_test.cpp
+    message_send_tracker_test.cpp
     ws_registry_test.cpp
     owner_mention_detector_test.cpp
     config_test.cpp

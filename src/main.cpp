@@ -3,6 +3,7 @@
 #include "auth/session_io.hpp"
 #include "auth/startup_bootstrapper.hpp"
 #include "auth/token_store.hpp"
+#include "bridge/message_send_tracker.hpp"
 #include "bridge/real_transport.hpp"
 #include "bridge/td_bridge.hpp"
 #include "config/config.hpp"
@@ -197,8 +198,19 @@ int main(int argc, char** argv) {
     // Мост + приёмник апдейтов = AuthStateManager (обрабатывает updateAuthorizationState).
     tgw::bridge::RealTdTransport transport;
     tgw::auth::AuthStateManager auth;
+    // Трекер подтверждения отправки (humanize typing): конструируется ВСЕГДА — сам объект дёшев.
+    // Объявлен раньше router — обязан пережить его (router держит на него указатель).
+    tgw::bridge::MessageSendTracker send_tracker;
     // авторизационные -> auth, прикладные -> WS fan-out (+ Kafka, если включена)
     tgw::ws::UpdateRouter router(auth, config.session_id);
+    // Резолв updateMessageSendSucceeded/Failed по old_message_id -> корутина sendMessage. Хук
+    // подключаем ТОЛЬКО при включённом флаге: иначе на каждое исходящее сообщение аккаунта
+    // (не только при гуманизации) тратился бы лишний tgw::dto::toJson + захват мьютекса карты
+    // ради заведомого промаха — waitFor() при выключенном флаге всё равно никогда не вызывается.
+    // Задаём до bridge.start() (пишется до старта потока-приёмника, читается из него после).
+    if (config.humanize_typing) {
+        router.setMessageSendTracker(send_tracker);
+    }
     if (kafka) {
         router.setEventPublisher(
             [sink = kafka.get()](const std::string& key, const std::string& payload) {
@@ -381,9 +393,14 @@ int main(int argc, char** argv) {
     drogon::app().setClientMaxBodySize(config.max_upload_bytes);
     // Тела крупнее порога Drogon спулит в temp-файл (mmap) — 64MiB-аплоад не живёт в RAM.
     drogon::app().setClientMaxMemoryBodySize(config.max_memory_body_bytes);
+    // Явный idle-таймаут соединения (без него Drogon использует встроенный дефолт 60с) —
+    // должен покрывать худший случай humanize-паузы (max_delay_ms + id_wait_ms), см.
+    // fail-fast guard в Config::load() и комментарий у idle_connection_timeout_seconds.
+    drogon::app().setIdleConnectionTimeout(
+        static_cast<std::size_t>(config.idle_connection_timeout_seconds));
 
     tgw::http::registerRoutes(bridge, client_id, auth, config.database_directory);
-    tgw::http::registerMessageRoutes(bridge, client_id, upload_dir);
+    tgw::http::registerMessageRoutes(bridge, client_id, upload_dir, config, send_tracker);
     tgw::http::registerDirectoryRoutes(bridge, client_id);
     tgw::ws::WsSubscriberRegistry::instance().setMaxPendingBytes(config.ws_max_pending_bytes);
     tgw::ws::UpdatesWs::setSessionId(config.session_id);
