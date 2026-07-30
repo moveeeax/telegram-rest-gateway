@@ -16,6 +16,10 @@ namespace tgw::auth {
 class AuthStateManager;
 }
 
+namespace tgw::bridge {
+class MessageSendTracker;
+}
+
 namespace tgw::ws {
 
 // Прикладной апдейт, готовый к отдаче наружу.
@@ -52,6 +56,15 @@ class UpdateRouter final : public tgw::bridge::IUpdateSink {
     // гонки на самом std::function нет (как у event_publisher_).
     void setOnConnectionReady(std::function<void()> cb) { on_connection_ready_ = std::move(cb); }
 
+    // Трекер отправки: резолв updateMessageSendSucceeded/Failed по old_message_id (§ humanize
+    // typing). Опциональный, как event_publisher_/on_connection_ready_ — если не задан, резолв не
+    // вызывается, а WS-форворд этих апдейтов работает как раньше. Задавать до start(): пишется до
+    // старта потока-приёмника, читается после (гонки на самом указателе нет). Ссылка обязана
+    // пережить UpdateRouter.
+    void setMessageSendTracker(tgw::bridge::MessageSendTracker& tracker) {
+        message_send_tracker_ = &tracker;
+    }
+
     // Хук вебхуков mention/reply: вызывается из потока-приёмника на КАЖДОМ updateNewMessage
     // (после WS fan-out). Хук получает ссылку на message ТОЛЬКО на время синхронного вызова —
     // message принадлежит апдейту и живёт лишь до конца onUpdate; всё, что нужно пережить
@@ -67,6 +80,7 @@ class UpdateRouter final : public tgw::bridge::IUpdateSink {
     std::string session_id_;
     std::function<void(const std::string&, const std::string&)> event_publisher_;
     std::function<void()> on_connection_ready_;
+    tgw::bridge::MessageSendTracker* message_send_tracker_ = nullptr;
     std::function<void(const td::td_api::message&)> webhook_hook_;
     std::atomic<std::uint64_t> seq_{0};
 };

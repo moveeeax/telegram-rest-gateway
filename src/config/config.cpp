@@ -137,6 +137,43 @@ Config Config::load() {
         c.tdlib_log_verbosity = parseNumericEnv<std::int32_t>("TGW_TDLIB_LOG_VERBOSITY", verbosity);
     }
 
+    // Имитация человеческой печати (см. Config::humanize_typing).
+    const std::string humanize_typing = envOrFile("TGW_HUMANIZE_TYPING");
+    c.humanize_typing = (humanize_typing == "1" || humanize_typing == "true");
+
+    const std::string chars_per_minute = envOrFile("TGW_HUMANIZE_CHARS_PER_MINUTE");
+    if (!chars_per_minute.empty()) {
+        c.humanize_chars_per_minute =
+            parseNumericEnv<int>("TGW_HUMANIZE_CHARS_PER_MINUTE", chars_per_minute);
+    }
+
+    const std::string jitter_percent = envOrFile("TGW_HUMANIZE_JITTER_PERCENT");
+    if (!jitter_percent.empty()) {
+        c.humanize_jitter_percent =
+            parseNumericEnv<int>("TGW_HUMANIZE_JITTER_PERCENT", jitter_percent);
+    }
+
+    const std::string min_delay = envOrFile("TGW_HUMANIZE_MIN_DELAY_MS");
+    if (!min_delay.empty()) {
+        c.humanize_min_delay_ms = parseNumericEnv<int>("TGW_HUMANIZE_MIN_DELAY_MS", min_delay);
+    }
+
+    const std::string max_delay = envOrFile("TGW_HUMANIZE_MAX_DELAY_MS");
+    if (!max_delay.empty()) {
+        c.humanize_max_delay_ms = parseNumericEnv<int>("TGW_HUMANIZE_MAX_DELAY_MS", max_delay);
+    }
+
+    const std::string id_wait = envOrFile("TGW_HUMANIZE_ID_WAIT_MS");
+    if (!id_wait.empty()) {
+        c.humanize_id_wait_ms = parseNumericEnv<int>("TGW_HUMANIZE_ID_WAIT_MS", id_wait);
+    }
+
+    const std::string idle_timeout = envOrFile("TGW_IDLE_CONNECTION_TIMEOUT_SECONDS");
+    if (!idle_timeout.empty()) {
+        c.idle_connection_timeout_seconds =
+            parseNumericEnv<int>("TGW_IDLE_CONNECTION_TIMEOUT_SECONDS", idle_timeout);
+    }
+
     c.listen_address = envOrFile("TGW_LISTEN_ADDRESS", c.listen_address);
     const std::string port = envOrFile("TGW_LISTEN_PORT");
     if (!port.empty()) {
@@ -205,6 +242,18 @@ Config Config::load() {
         if (!line.empty() && line[0] != '#') {
             c.bearer_tokens.push_back(line);
         }
+    }
+
+    // Fail-fast guard: худший случай humanize-паузы (max_delay + id_wait, плюс запас на сетевые
+    // накладные расходы) не должен превышать idle-таймаут соединения — иначе Drogon/ingress
+    // оборвёт соединение раньше, чем гейтвей успеет ответить (см. дизайн-спеку).
+    constexpr int kHumanizeSafetyMarginMs = 2000;
+    if (c.humanize_max_delay_ms + c.humanize_id_wait_ms + kHumanizeSafetyMarginMs >
+        c.idle_connection_timeout_seconds * 1000) {
+        throw std::runtime_error(
+            "config: TGW_HUMANIZE_MAX_DELAY_MS + TGW_HUMANIZE_ID_WAIT_MS (+"
+            " запас 2000мс) превышает TGW_IDLE_CONNECTION_TIMEOUT_SECONDS — "
+            "увеличьте таймаут или уменьшите паузу/окно ожидания");
     }
 
     return c;

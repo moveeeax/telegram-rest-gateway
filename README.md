@@ -86,6 +86,13 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 | `TGW_WEBHOOK_TIMEOUT_MS` | `10000` | Таймаут HTTP-запроса доставки одного вебхука, мс |
 | `TGW_WEBHOOK_QUEUE_MAX` | `10000` | Ёмкость очереди диспетчера вебхуков; при переполнении новые события дропаются (`tgw_webhook_dropped_total`) |
 | `TGW_WEBHOOK_SSRF_GUARD` | `false` | `1`/`true` — блокировать доставку на приватные/loopback/link-local хосты (127.0.0.0/8, 10/8, 172.16/12, 192.168/16, 169.254/16, `localhost`, IPv6 loopback/ULA/link-local) |
+| `TGW_HUMANIZE_TYPING` | `false` | `1`/`true` — перед отправкой текстового `POST /v1/chats/{chatId}/messages` показать "печатает…" и выдержать паузу, пропорциональную длине текста |
+| `TGW_HUMANIZE_CHARS_PER_MINUTE` | `200` | Скорость "печати" для расчёта базовой паузы: `base_ms = chars / (chars_per_minute / 60000)` |
+| `TGW_HUMANIZE_JITTER_PERCENT` | `20` | Разброс паузы в процентах вокруг базового значения (`uniform(1 − jitter, 1 + jitter)`) |
+| `TGW_HUMANIZE_MIN_DELAY_MS` | `1000` | Нижняя граница паузы после применения jitter (`clamp()`) |
+| `TGW_HUMANIZE_MAX_DELAY_MS` | `10000` | Верхняя граница паузы после применения jitter (`clamp()`) |
+| `TGW_HUMANIZE_ID_WAIT_MS` | `4000` | Сколько ждать подтверждение (`updateMessageSendSucceeded`/`Failed`) реального id перед тем, как отдать `202 Accepted` без ожидания |
+| `TGW_IDLE_CONNECTION_TIMEOUT_SECONDS` | `90` | Idle-таймаут Drogon-соединения; должен покрывать худший случай humanize-паузы (`max_delay_ms + id_wait_ms` + запас 2000мс) — иначе старт упадёт с ошибкой конфигурации |
 
 **Онлайн-статус (`TGW_KEEP_ONLINE`).** По умолчанию TDLib держит аккаунт offline. При включении
 gateway после авторизации шлёт `setOption("online", true)` и переустанавливает его при каждом
@@ -95,6 +102,31 @@ gateway после авторизации шлёт `setOption("online", true)` �
 online-статус сама, поэтому без таймера он деградирует. Учти: аккаунт будет виден как online
 (и last-seen обновляется) круглосуточно, пока процесс жив. При штатном завершении спец-действий
 не нужно — TDLib на `close` сам выставит offline.
+
+**Имитация человеческой печати (`TGW_HUMANIZE_TYPING`).** По умолчанию выключено — поведение
+`POST /v1/chats/{chatId}/messages` не меняется (`202 Accepted` + `temporary_message_id` +
+`sending_state: pending`, финал по WS). При включении гейтвей перед реальной отправкой:
+
+1. Считает базовую паузу по длине текста (в UTF-8 кодпоинтах, не байтах — иначе кириллица/эмодзи
+   завышают паузу): `base_ms = длина / (TGW_HUMANIZE_CHARS_PER_MINUTE / 60000)`.
+2. Применяет случайный разброс `± TGW_HUMANIZE_JITTER_PERCENT %` и приводит результат к границам
+   `[TGW_HUMANIZE_MIN_DELAY_MS, TGW_HUMANIZE_MAX_DELAY_MS]`.
+3. На всё время паузы шлёт `sendChatAction(chatActionTyping)` (аккаунт виден собеседнику как
+   "печатает…"), обновляя действие каждые 4с — TDLib гасит статус печати сам примерно через 5с.
+4. После паузы вызывает `sendMessage` как обычно и до `TGW_HUMANIZE_ID_WAIT_MS` мс ждёт
+   подтверждение реального id (`updateMessageSendSucceeded`/`Failed`) от TDLib.
+
+Контракт ответа в результате тройной: если в окно ожидания успело прийти подтверждение
+успешной отправки — `200 OK` с полным объектом сообщения (`Message`, реальный `id`) и
+`sending_state: "sent"`; если пришло подтверждение ОШИБКИ отправки — обычный код ошибки
+(4xx/502, как и для любого другого провала `sendMessage`); если не успело ничего (таймаут)
+или флаг выключен — как и раньше, `202 Accepted` с `temporary_message_id` и
+`sending_state: "pending"` (финал по WS). Клиенту следует обрабатывать все три исхода на этом
+эндпоинте.
+
+При старте гейтвей проверяет, что худший случай паузы влезает в `TGW_IDLE_CONNECTION_TIMEOUT_SECONDS`
+(`TGW_HUMANIZE_MAX_DELAY_MS + TGW_HUMANIZE_ID_WAIT_MS` + запас 2000мс) — иначе падает с понятной
+ошибкой конфигурации при загрузке, не давая заведомо рвущимся соединениям уйти в прод.
 
 ### Хранение сессии в S3/MinIO (опционально)
 

@@ -56,6 +56,26 @@ struct Config {
 
     std::int32_t tdlib_log_verbosity = 1;
 
+    // Имитация человеческой печати перед отправкой текстового сообщения (TGW_HUMANIZE_TYPING):
+    // при включении POST /v1/chats/{chatId}/messages показывает "печатает…" и выдерживает паузу,
+    // пропорциональную длине текста, перед реальной отправкой (см. дизайн-спеку). По умолчанию
+    // выключено — поведение эндпоинта не меняется.
+    bool humanize_typing = false;
+    // Скорость "печати" для расчёта базовой паузы: base_ms = chars / (chars_per_minute / 60000).
+    int humanize_chars_per_minute = 200;
+    // Разброс паузы в процентах вокруг базового значения (uniform(1 − jitter, 1 + jitter)).
+    int humanize_jitter_percent = 20;
+    // Границы, к которым паузу приводит clamp() после применения jitter.
+    int humanize_min_delay_ms = 1000;
+    int humanize_max_delay_ms = 10000;
+    // Сколько ждать подтверждающий updateMessageSendSucceeded/Failed для temp id перед тем,
+    // как отдать 202 Accepted без ожидания (см. MessageSendTracker в дизайн-спеке).
+    int humanize_id_wait_ms = 4000;
+    // Явный idle-таймаут Drogon-соединения (TGW_IDLE_CONNECTION_TIMEOUT_SECONDS), выставляется
+    // через drogon::app().setIdleConnectionTimeout(...) в main.cpp. Должен покрывать худший
+    // случай humanize-паузы (max_delay_ms + id_wait_ms) — см. fail-fast guard в load().
+    int idle_connection_timeout_seconds = 90;
+
     std::string listen_address = "127.0.0.1";
     std::uint16_t listen_port = 8080;
 
