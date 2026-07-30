@@ -27,6 +27,7 @@ add_executable(tgw_unit_tests
     upload_sanitize_test.cpp
     bearer_auth_test.cpp
     td_bridge_test.cpp
+    message_send_tracker_test.cpp
     ws_registry_test.cpp
     config_test.cpp
     route_smoke_test.cpp
