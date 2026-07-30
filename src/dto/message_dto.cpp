@@ -1,6 +1,7 @@
 #include "dto/message_dto.hpp"
 
 #include <string>
+#include <vector>
 
 namespace api = td::td_api;
 
@@ -310,6 +311,174 @@ Json::Value toJson(const api::chatMember& member) {
                 json["status"] = "unknown";
         }
     }
+    return json;
+}
+
+namespace {
+
+// sender{id, is_bot?} вебхук-проекции. MessageSender сам по себе не несёт признака "бот" —
+// это свойство полного api::user, который здесь недоступен (только id отправителя), поэтому
+// is_bot попросту не проставляется (см. бриф task-3: "если доступно, иначе опустить").
+Json::Value webhookSenderToJson(const api::MessageSender& sender) {
+    Json::Value json;
+    switch (sender.get_id()) {
+        case api::messageSenderUser::ID:
+            json["id"] =
+                std::to_string(static_cast<const api::messageSenderUser&>(sender).user_id_);
+            break;
+        case api::messageSenderChat::ID:
+            json["id"] =
+                std::to_string(static_cast<const api::messageSenderChat&>(sender).chat_id_);
+            break;
+        default:
+            break;
+    }
+    return json;
+}
+
+// Короткий дискриминатор типа entity. mention/mention_name — обязательные по брифу, остальные —
+// best-effort (расширяют покрытие форматирования без риска сломать обязательные кейсы).
+Json::Value webhookEntityTypeToJson(const api::TextEntityType& type) {
+    Json::Value json;
+    switch (type.get_id()) {
+        case api::textEntityTypeMention::ID:
+            json["type"] = "mention";
+            break;
+        case api::textEntityTypeMentionName::ID:
+            json["type"] = "mention_name";
+            json["user_id"] = std::to_string(
+                static_cast<const api::textEntityTypeMentionName&>(type).user_id_);
+            break;
+        case api::textEntityTypeHashtag::ID:
+            json["type"] = "hashtag";
+            break;
+        case api::textEntityTypeCashtag::ID:
+            json["type"] = "cashtag";
+            break;
+        case api::textEntityTypeBotCommand::ID:
+            json["type"] = "bot_command";
+            break;
+        case api::textEntityTypeUrl::ID:
+            json["type"] = "url";
+            break;
+        case api::textEntityTypeTextUrl::ID:
+            json["type"] = "text_url";
+            json["url"] = static_cast<const api::textEntityTypeTextUrl&>(type).url_;
+            break;
+        case api::textEntityTypeEmailAddress::ID:
+            json["type"] = "email_address";
+            break;
+        case api::textEntityTypePhoneNumber::ID:
+            json["type"] = "phone_number";
+            break;
+        case api::textEntityTypeBold::ID:
+            json["type"] = "bold";
+            break;
+        case api::textEntityTypeItalic::ID:
+            json["type"] = "italic";
+            break;
+        case api::textEntityTypeUnderline::ID:
+            json["type"] = "underline";
+            break;
+        case api::textEntityTypeStrikethrough::ID:
+            json["type"] = "strikethrough";
+            break;
+        case api::textEntityTypeSpoiler::ID:
+            json["type"] = "spoiler";
+            break;
+        case api::textEntityTypeCode::ID:
+            json["type"] = "code";
+            break;
+        case api::textEntityTypePre::ID:
+            json["type"] = "pre";
+            break;
+        case api::textEntityTypePreCode::ID:
+            json["type"] = "pre_code";
+            break;
+        case api::textEntityTypeBlockQuote::ID:
+            json["type"] = "block_quote";
+            break;
+        case api::textEntityTypeCustomEmoji::ID:
+            json["type"] = "custom_emoji";
+            break;
+        default:
+            json["type"] = "other";
+    }
+    return json;
+}
+
+Json::Value webhookEntitiesToJson(const std::vector<api::object_ptr<api::textEntity>>& entities) {
+    Json::Value arr(Json::arrayValue);
+    for (const auto& entity : entities) {
+        if (entity == nullptr || entity->type_ == nullptr) {
+            continue;
+        }
+        Json::Value json = webhookEntityTypeToJson(*entity->type_);
+        json["offset"] = entity->offset_;
+        json["length"] = entity->length_;
+        arr.append(json);
+    }
+    return arr;
+}
+
+// Источник text/entities для проекции: у messageText — это text_, у контента с подписью
+// (фото/видео/голос/аудио/документ/анимация) — caption_. Остальной контент текста не несёт.
+const api::formattedText* webhookExtractFormattedText(const api::MessageContent& content) {
+    switch (content.get_id()) {
+        case api::messageText::ID:
+            return static_cast<const api::messageText&>(content).text_.get();
+        case api::messagePhoto::ID:
+            return static_cast<const api::messagePhoto&>(content).caption_.get();
+        case api::messageVideo::ID:
+            return static_cast<const api::messageVideo&>(content).caption_.get();
+        case api::messageVoiceNote::ID:
+            return static_cast<const api::messageVoiceNote&>(content).caption_.get();
+        case api::messageAudio::ID:
+            return static_cast<const api::messageAudio&>(content).caption_.get();
+        case api::messageDocument::ID:
+            return static_cast<const api::messageDocument&>(content).caption_.get();
+        case api::messageAnimation::ID:
+            return static_cast<const api::messageAnimation&>(content).caption_.get();
+        default:
+            return nullptr;
+    }
+}
+
+}  // namespace
+
+Json::Value webhookMessageToJson(const api::message& message) {
+    Json::Value json;
+    json["id"] = std::to_string(message.id_);
+    json["chat"]["id"] = std::to_string(message.chat_id_);
+    json["date"] = message.date_;
+    if (message.sender_id_ != nullptr) {
+        json["sender"] = webhookSenderToJson(*message.sender_id_);
+    }
+
+    json["text"] = "";
+    json["entities"] = Json::Value(Json::arrayValue);
+    if (message.content_ != nullptr) {
+        const api::formattedText* formatted = webhookExtractFormattedText(*message.content_);
+        if (formatted != nullptr) {
+            json["text"] = formatted->text_;
+            json["entities"] = webhookEntitiesToJson(formatted->entities_);
+        }
+
+        // Вложение: переиспользуем существующую contentToJson (тип/file_id/метаданные) —
+        // не дублируем логику извлечения file_id/размеров/длительности. Для чистого текста
+        // вложения нет (type == "text").
+        const Json::Value content_json = contentToJson(*message.content_);
+        if (content_json["type"].asString() != "text") {
+            json["attachment"] = content_json;
+        }
+    }
+
+    if (message.reply_to_ != nullptr &&
+        message.reply_to_->get_id() == api::messageReplyToMessage::ID) {
+        json["reply_to_message_id"] = std::to_string(
+            static_cast<const api::messageReplyToMessage&>(*message.reply_to_).message_id_);
+    }
+
     return json;
 }
 

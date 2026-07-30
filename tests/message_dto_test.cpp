@@ -96,6 +96,81 @@ TEST(MessageDto, DocumentProjectsFileMeta) {
     EXPECT_EQ(json["content"]["size"].asInt64(), 2048);  // size==0 -> expected_size
 }
 
+TEST(MessageDto, WebhookProjectionTextReplyEntities) {
+    namespace api = td::td_api;
+    auto m = api::make_object<api::message>();
+    m->id_ = 4200;
+    m->chat_id_ = -100500;
+    m->date_ = 1730000000;
+    m->is_outgoing_ = false;
+    m->sender_id_ = api::make_object<api::messageSenderUser>(555);
+    auto ft = api::make_object<api::formattedText>();
+    ft->text_ = "hi @me";
+    auto ent = api::make_object<api::textEntity>();
+    ent->offset_ = 3;
+    ent->length_ = 3;
+    ent->type_ = api::make_object<api::textEntityTypeMention>();
+    ft->entities_.push_back(std::move(ent));
+    m->content_ = api::make_object<api::messageText>(std::move(ft), nullptr, nullptr);
+    m->reply_to_ = api::make_object<api::messageReplyToMessage>();
+    static_cast<api::messageReplyToMessage&>(*m->reply_to_).message_id_ = 4100;
+
+    const Json::Value j = tgw::dto::webhookMessageToJson(*m);
+    EXPECT_EQ(j["id"].asString(), "4200");
+    EXPECT_EQ(j["chat"]["id"].asString(), "-100500");
+    EXPECT_EQ(j["sender"]["id"].asString(), "555");
+    EXPECT_EQ(j["text"].asString(), "hi @me");
+    ASSERT_TRUE(j["entities"].isArray());
+    EXPECT_EQ(j["entities"][0]["type"].asString(), "mention");
+    EXPECT_EQ(j["reply_to_message_id"].asString(), "4100");
+    EXPECT_FALSE(j.isMember("attachment"));  // чистый текст — вложения нет
+}
+
+TEST(MessageDto, WebhookProjectionMentionNameAndAttachment) {
+    namespace api = td::td_api;
+    auto m = api::make_object<api::message>();
+    m->id_ = 10;
+    m->chat_id_ = 20;
+    m->date_ = 1700000000;
+    m->sender_id_ = api::make_object<api::messageSenderUser>(1);
+
+    auto file = api::make_object<api::file>();
+    file->id_ = 42;
+    file->size_ = 1000;
+    auto size = api::make_object<api::photoSize>();
+    size->width_ = 800;
+    size->height_ = 600;
+    size->photo_ = std::move(file);
+    auto photo = api::make_object<api::photo>();
+    photo->sizes_.push_back(std::move(size));
+
+    auto caption = api::make_object<api::formattedText>();
+    caption->text_ = "look at Alice";
+    auto ent = api::make_object<api::textEntity>();
+    ent->offset_ = 9;
+    ent->length_ = 5;
+    ent->type_ = api::make_object<api::textEntityTypeMentionName>(777);
+    caption->entities_.push_back(std::move(ent));
+
+    auto content = api::make_object<api::messagePhoto>();
+    content->photo_ = std::move(photo);
+    content->caption_ = std::move(caption);
+    m->content_ = std::move(content);
+
+    const Json::Value j = tgw::dto::webhookMessageToJson(*m);
+    EXPECT_EQ(j["text"].asString(), "look at Alice");
+    ASSERT_TRUE(j["entities"].isArray());
+    EXPECT_EQ(j["entities"][0]["type"].asString(), "mention_name");
+    EXPECT_EQ(j["entities"][0]["user_id"].asString(), "777");
+    EXPECT_FALSE(j.isMember("reply_to_message_id"));  // reply_to_ не задан
+
+    // Вложение переиспользует contentToJson: та же проекция типа/file_id/размера, что и toJson().
+    ASSERT_TRUE(j.isMember("attachment"));
+    EXPECT_EQ(j["attachment"]["type"].asString(), "photo");
+    EXPECT_EQ(j["attachment"]["file_id"].asString(), "42");
+    EXPECT_EQ(j["attachment"]["width"].asInt(), 800);
+}
+
 TEST(ChatDto, Basic) {
     auto chat = api::make_object<api::chat>();
     chat->id_ = -100987654321;
