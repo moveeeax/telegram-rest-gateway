@@ -35,17 +35,24 @@ inline DetectResult detect(const td::td_api::message& msg, std::int64_t owner_id
         static_cast<const api::messageSenderUser&>(*msg.sender_id_).user_id_ == owner_id) {
         return {};
     }
-    // Приоритет причин: явное упоминание важнее личной переписки.
+    // Приоритет причин по спеке (docs/superpowers/specs/2026-07-30-mention-reply-webhooks-design.md,
+    // раздел «Триггеры»): mention > reply > dm. Явное упоминание — сразу подтверждённый триггер.
     if (msg.contains_unread_mention_) {
         return {true, false, TriggerReason::Mention};
     }
-    if (chat_is_private) {
-        return {true, false, TriggerReason::Dm};
-    }
+    // Reply проверяем РАНЬШЕ dm: reply на сообщение владельца в личке должен получить ярлык
+    // Reply, а не Dm (иначе приоритет reply > dm нарушается). Резолв автора родителя всё ещё
+    // нужен (reply_pending=true) — в личке единственный собеседник не обязательно владелец
+    // (владелец может писать себе / приватный чат с ботом), семантику подтверждения оставляем
+    // через owner-check на стороне вызывающего, как для группы.
     const bool is_reply =
         msg.reply_to_ != nullptr && msg.reply_to_->get_id() == api::messageReplyToMessage::ID;
     if (is_reply) {
         return {false, true, TriggerReason::Reply};
+    }
+    // Ни упоминания, ни reply — в личке любое входящее адресовано владельцу.
+    if (chat_is_private) {
+        return {true, false, TriggerReason::Dm};
     }
     return {};
 }

@@ -74,3 +74,13 @@ TEST(OwnerMentionDetector, BotSenderStillTriggersDm) {
     auto r = detect(*m, /*owner_id=*/111, /*chat_is_private=*/true, /*chat_is_broadcast=*/false);
     EXPECT_TRUE(r.triggered);
 }
+
+// Reply в личке классифицируется как Reply (приоритет reply > dm), а НЕ Dm, и остаётся pending —
+// автор родителя дорезолвивается на стороне вызывающего.
+TEST(OwnerMentionDetector, ReplyInPrivateIsReplyNotDm) {
+    auto m = mkMsg(/*outgoing=*/false, /*sender=*/555, /*mention=*/false, /*has_reply=*/true);
+    auto r = detect(*m, /*owner_id=*/111, /*chat_is_private=*/true, /*chat_is_broadcast=*/false);
+    EXPECT_FALSE(r.triggered);
+    EXPECT_TRUE(r.reply_pending);
+    EXPECT_EQ(r.reason, TriggerReason::Reply);
+}
