@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -145,16 +146,46 @@ std::string WebhookRegistry::serializeLocked() const {
 }
 
 // Сеть — НИКОГДА под mutex_. store_.save() у прод-реализации (S3WebhookStore) делает синхронный
-// HTTP PUT (до S3Client::kRequestTimeout = 30s, см. util/s3_client.hpp) — вызов под mutex_ держал
+// HTTP PUT (до S3Client::kSendHangTimeout = 35s, см. util/s3_client.hpp) — вызов под mutex_ держал
 // бы лок всё это время и стопорил бы activeSnapshot() диспетчера (горячий путь доставки
 // вебхуков) на время одной админской add/remove при медленном/недоступном S3. Поэтому вызывающий
 // (add/remove) обязан собрать snapshot_json через serializeLocked() ПОД локом, отпустить лок и
-// только потом позвать persist(snapshot_json) — см. прецедент auth/s3_session.cpp (startS3Sync:
-// "S3Client::send блокирующий, поэтому саму заливку уносим...").
+// только потом позвать persist(snapshot_json).
+//
+// Но отпустить лок мало: add/remove — это обычные (НЕ корутинные) HTTP-хендлеры POST /v1/webhooks
+// и DELETE /v1/webhooks/{id}, исполняются НА IO-петле Drogon. Синхронный store_.save() у S3
+// подвесил бы саму петлю на десятки секунд, остановив весь остальной HTTP-трафик на ней. Поэтому
+// для async-стора (isAsync()==true) саму заливку уносим в detached-поток — тот же приём, что
+// auth/s3_session.cpp (startS3Sync: "S3Client::send блокирующий, поэтому саму заливку уносим в
+// отдельный поток, чтобы не застопорить loop"). persist() возвращает управление сразу, реальная
+// сетевая запись идёт в фоне; add/remove остаются неблокирующими для HTTP-хендлера.
+//
+// Компромисс fire-and-forget осознан: результат detached-записи нельзя обработать в вызывающем
+// коде синхронно, только залогировать (LOG_INFO/LOG_ERROR). Это приемлемо: webhooks.json — не
+// критичный для целостности объект уровня td.binlog; snapshot_json — ПОЛНЫЙ снимок реестра (не
+// дельта), поэтому потеря одной фоновой записи между рестартами не фатальна — следующая мутация
+// перезапишет актуальное состояние целиком. Потоки детачим без ограничения (как startS3Sync):
+// админские add/remove редки, осознанный trade-off уже принят в проекте для похожего кейса.
+//
+// Синхронный стор (FakeStore в тестах, isAsync()==false) сохраняем прямо здесь: сети нет,
+// блокировать петлю нечем, а тесты рассчитывают увидеть результат сразу после add/remove.
 void WebhookRegistry::persist(const std::string& snapshot_json) {
-    if (!store_.save(snapshot_json)) {
-        LOG_ERROR << "webhook registry: failed to persist webhook registry";
+    if (!store_.isAsync()) {
+        if (!store_.save(snapshot_json)) {
+            LOG_ERROR << "webhook registry: failed to persist webhook registry";
+        }
+        return;
     }
+    // store_ живёт весь срок жизни процесса (WebhookRegistry — долгоживущий синглтон сервиса),
+    // поэтому захват его по указателю в detached-поток безопасен. snapshot_json копируем в поток.
+    IWebhookStore* const store = &store_;
+    std::thread([store, snapshot_json]() {
+        if (store->save(snapshot_json)) {
+            LOG_INFO << "webhook registry: persisted (" << snapshot_json.size() << " bytes)";
+        } else {
+            LOG_ERROR << "webhook registry: failed to persist webhook registry";
+        }
+    }).detach();
 }
 
 namespace {
@@ -186,6 +217,10 @@ class S3WebhookStore final : public IWebhookStore {
         }
         return result.ok();
     }
+
+    // Прод-стор: put() блокирующий HTTP — persist() уносит save() в detached-поток, чтобы не
+    // застопорить IO-петлю Drogon (см. WebhookRegistry::persist).
+    bool isAsync() const override { return true; }
 
    private:
     tgw::util::S3Client client_;

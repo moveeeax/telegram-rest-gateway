@@ -30,6 +30,11 @@ class IWebhookStore {
     virtual std::optional<std::string> load() = 0;
     // true — успешно сохранено.
     virtual bool save(const std::string& json) = 0;
+    // true — save() блокирующий сетевой (прод S3WebhookStore): persist() унесёт его в
+    // detached-поток, чтобы не застопорить IO-петлю Drogon на таймаут S3. false (дефолт) —
+    // синхронный стор без сети (FakeStore в тестах): persist() сохраняет прямо в вызывающем
+    // потоке, сохраняя детерминизм тестов (ассерт на результат сразу после add/remove).
+    virtual bool isAsync() const { return false; }
 };
 
 // In-memory реестр вебхуков с персистом в store_ на каждую мутацию (add/remove). Читается
@@ -70,7 +75,8 @@ class WebhookRegistry {
     //  - serializeLocked(): сериализует hooks_ в JSON-строку. Вызывается ТОЛЬКО из-под mutex_.
     //  - persist(json): сохраняет уже готовую строку через store_.save(). Вызывается ТОЛЬКО ПОСЛЕ
     //    того, как mutex_ отпущен (add/remove лочат, мутируют, сериализуют, отпускают лок, зовут
-    //    persist() снаружи).
+    //    persist() снаружи). Для async-стора (S3, isAsync()==true) сама сетевая заливка уходит в
+    //    detached-поток — add/remove не блокируют IO-петлю Drogon (см. persist() в .cpp).
     std::string serializeLocked() const;
     void persist(const std::string& snapshot_json);
 };
