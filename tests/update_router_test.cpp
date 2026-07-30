@@ -1,5 +1,7 @@
 #include "ws/update_router.hpp"
 
+#include "auth/auth_state_manager.hpp"
+
 #include <td/telegram/td_api.h>
 
 #include <gtest/gtest.h>
@@ -84,6 +86,35 @@ TEST(UpdateRouter, ForwardsEditedAndContent) {
     ASSERT_TRUE(fc.has_value());
     EXPECT_EQ(fc->update_type, "updateMessageContent");
     EXPECT_EQ(fc->data["new_content"]["text"].asString(), "new");
+}
+
+// keep-online: колбэк setOnConnectionReady вызывается на connectionStateReady и только на нём.
+TEST(UpdateRouter, ConnectionReadyCallbackFiresOnlyOnReady) {
+    tgw::auth::AuthStateManager auth;
+    tgw::ws::UpdateRouter router(auth);
+    int ready_count = 0;
+    router.setOnConnectionReady([&ready_count] { ++ready_count; });
+
+    router.onUpdate(api::make_object<api::updateConnectionState>(
+        api::make_object<api::connectionStateReady>()));
+    EXPECT_EQ(ready_count, 1);  // Ready → колбэк вызван
+
+    router.onUpdate(api::make_object<api::updateConnectionState>(
+        api::make_object<api::connectionStateConnecting>()));
+    EXPECT_EQ(ready_count, 1);  // иное состояние → колбэк НЕ вызван
+
+    router.onUpdate(api::make_object<api::updateConnectionState>(
+        api::make_object<api::connectionStateReady>()));
+    EXPECT_EQ(ready_count, 2);  // повторный Ready (реконнект) → снова вызван
+}
+
+// Без зарегистрированного колбэка updateConnectionState не падает (keep-online выключен).
+TEST(UpdateRouter, ConnectionReadyWithoutCallbackDoesNotCrash) {
+    tgw::auth::AuthStateManager auth;
+    tgw::ws::UpdateRouter router(auth);
+    router.onUpdate(api::make_object<api::updateConnectionState>(
+        api::make_object<api::connectionStateReady>()));
+    SUCCEED();
 }
 
 TEST(UpdateRouter, ForwardsChatActionTypingAndCancel) {
