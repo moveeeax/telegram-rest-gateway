@@ -109,6 +109,23 @@ Config Config::load() {
     const std::string keep_online = envOrFile("TGW_KEEP_ONLINE");
     c.keep_online = (keep_online == "1" || keep_online == "true");
 
+    // Конфигурация вебхуков mention/reply-событий (TGW_WEBHOOKS_*).
+    const std::string webhooks_enabled = envOrFile("TGW_WEBHOOKS_ENABLED");
+    c.webhooks_enabled = (webhooks_enabled == "1" || webhooks_enabled == "true");
+
+    const std::string webhook_timeout = envOrFile("TGW_WEBHOOK_TIMEOUT_MS");
+    if (!webhook_timeout.empty()) {
+        c.webhook_timeout_ms = parseNumericEnv<int>("TGW_WEBHOOK_TIMEOUT_MS", webhook_timeout);
+    }
+
+    const std::string webhook_queue = envOrFile("TGW_WEBHOOK_QUEUE_MAX");
+    if (!webhook_queue.empty()) {
+        c.webhook_queue_max = parseNumericEnv<std::size_t>("TGW_WEBHOOK_QUEUE_MAX", webhook_queue);
+    }
+
+    const std::string webhook_ssrf = envOrFile("TGW_WEBHOOK_SSRF_GUARD");
+    c.webhook_ssrf_guard = (webhook_ssrf == "1" || webhook_ssrf == "true");
+
     const std::string verbosity = envOrFile("TGW_TDLIB_LOG_VERBOSITY");
     if (!verbosity.empty()) {
         c.tdlib_log_verbosity = parseNumericEnv<std::int32_t>("TGW_TDLIB_LOG_VERBOSITY", verbosity);
