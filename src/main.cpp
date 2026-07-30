@@ -217,9 +217,9 @@ int main(int argc, char** argv) {
         // keep-online: сразу после авторизации выставляем online (TDLib по умолчанию offline).
         // Тот же поток-приёмник, что и loadChats — потокобезопасно; порядок неважен.
         if (keep_online) {
-            bridge.sendOneWay(client_id, td_api::make_object<td_api::setOption>(
-                                             "online",
-                                             td_api::make_object<td_api::optionValueBoolean>(true)));
+            bridge.sendOneWay(client_id,
+                              td_api::make_object<td_api::setOption>(
+                                  "online", td_api::make_object<td_api::optionValueBoolean>(true)));
             LOG_INFO << "keep-online: setting online=true";
         }
     });
@@ -228,9 +228,9 @@ int main(int argc, char** argv) {
     // (пишется до старта потока-приёмника, вызывается из него после) — гонки на std::function нет.
     if (keep_online) {
         router.setOnConnectionReady([&bridge, client_id] {
-            bridge.sendOneWay(client_id, td_api::make_object<td_api::setOption>(
-                                             "online",
-                                             td_api::make_object<td_api::optionValueBoolean>(true)));
+            bridge.sendOneWay(client_id,
+                              td_api::make_object<td_api::setOption>(
+                                  "online", td_api::make_object<td_api::optionValueBoolean>(true)));
         });
     }
     // Удалённый logout / отзыв сессии (AUTH_KEY_DUPLICATED): останавливаем сервис — с
