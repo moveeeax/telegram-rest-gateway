@@ -225,7 +225,8 @@ function verifyWebhook(rawBody, signatureHeader, secret) {
 ### Управление вебхуками
 
 - `POST /v1/webhooks` — регистрирует вебхук. Тело: `{"url", "secret"?, "active"?}` (`active` по
-  умолчанию `true`). Ответ: `{"id", "url", "active"}` — `secret` в ответе не возвращается.
+  умолчанию `true`). Ответ (общий конверт гейтвея): `{"ok": true, "data": {"id", "url", "active"}}`
+  — `secret` в ответе не возвращается.
   Повторный `POST` с тем же `url` обновляет запись на месте (не дублирует), так как `id`
   детерминирован от `url`.
 - `GET /v1/webhooks` — список зарегистрированных вебхуков (без `secret`).
