@@ -74,6 +74,7 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 | `TGW_FILES_DIR` | `/data/files` | Каталог файлов TDLib (скачанные/аплоады); тоже должен переживать рестарт пода |
 | `TGW_USE_TEST_DC` | `false` (`0`) | `1`/`true` — подключаться к тестовому дата-центру Telegram вместо прод (`use_test_dc` TDLib) |
 | `TGW_KEEP_ONLINE` | `false` | `1`/`true` — держать аккаунт online: `setOption("online", true)` после авторизации + переустановка при каждом реконнекте (`connectionStateReady`). Делает last-seen аккаунта видимым 24/7 |
+| `TGW_KEEP_ONLINE_INTERVAL_SECONDS` | `60` | Период переотправки `setOption("online", true)` при `TGW_KEEP_ONLINE`: TDLib не подтверждает статус сама — без периодического повтора он деградирует на долгом стабильном соединении между реконнектами |
 | `TGW_TDLIB_LOG_VERBOSITY` | `1` | Уровень логирования TDLib (0 — тихо, выше — подробнее); см. `Td::TdStatic` |
 | `TGW_MAX_UPLOAD_BYTES` | `67108864` (64 MiB) | Лимит тела `POST /v1/chats/{chatId}/files` (`setClientMaxBodySize`); больше — `413` |
 | `TGW_WS_MAX_PENDING_BYTES` | `8388608` | WS back-pressure: лимит байт с последнего pong; 0 — выкл |
@@ -84,9 +85,12 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 
 **Онлайн-статус (`TGW_KEEP_ONLINE`).** По умолчанию TDLib держит аккаунт offline. При включении
 gateway после авторизации шлёт `setOption("online", true)` и переустанавливает его при каждом
-восстановлении соединения (`connectionStateReady`), чтобы статус пережил реконнекты. Учти: аккаунт
-будет виден как online (и last-seen обновляется) круглосуточно, пока процесс жив. При штатном
-завершении спец-действий не нужно — TDLib на `close` сам выставит offline.
+восстановлении соединения (`connectionStateReady`), чтобы статус пережил реконнекты. Дополнительно
+каждые `TGW_KEEP_ONLINE_INTERVAL_SECONDS` (default 60с) статус переотправляется по таймеру —
+на стабильном соединении без реконнектов события не происходит, а TDLib не подтверждает
+online-статус сама, поэтому без таймера он деградирует. Учти: аккаунт будет виден как online
+(и last-seen обновляется) круглосуточно, пока процесс жив. При штатном завершении спец-действий
+не нужно — TDLib на `close` сам выставит offline.
 
 ### Хранение сессии в S3/MinIO (опционально)
 
