@@ -51,6 +51,7 @@ config:
   #   TGW_TDLIB_LOG_VERBOSITY: "1"              # уровень логов TDLib (0 — тихо).
   # TGW_KEEP_ONLINE: "true"                     # держать аккаунт online (setOption online=true
   #                                             # после авторизации + переустановка при реконнекте).
+  # TGW_KEEP_ONLINE_INTERVAL_SECONDS: "60"      # период переотправки online-статуса по таймеру.
 
 service:
   type: ClusterIP
