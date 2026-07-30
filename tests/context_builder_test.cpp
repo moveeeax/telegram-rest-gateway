@@ -335,3 +335,25 @@ TEST(ContextBuilder, GetMessageFailureTruncates) {
     ASSERT_EQ(result->reply_chain.size(), 1u);
     EXPECT_EQ(result->reply_chain[0]["id"].asString(), "4100");
 }
+
+// reply_pending, но ПЕРВЫЙ getMessage вернул error: автора родителя проверить нельзя => триггер
+// не подтверждён => nullopt (а НЕ частичное reply-событие). Отличие от GetMessageFailureTruncates:
+// там сбой на 2-м звене при уже подтверждённом на 1-м владельце.
+TEST(ContextBuilder, ReplyPendingFirstGetMessageErrorReturnsNullopt) {
+    BridgeHarness h{BridgeConfig{}};
+    const auto cid = h.bridge().createClientId();
+
+    const auto incoming = makeMsg(4200, -100500, 999, 4100);
+    DetectResult det;
+    det.triggered = false;
+    det.reply_pending = true;
+    det.reason = TriggerReason::Reply;
+
+    ChainDriver driver(h.transport(), cid, {errorScript(500, "BOOM")});  // 1-е звено падает
+
+    auto future = runBuildEvent(h, cid, *incoming, det, /*owner=*/111, "sess", 1730000000, 20);
+    ASSERT_EQ(future.wait_for(2s), std::future_status::ready);
+    const auto result = future.get();
+
+    EXPECT_FALSE(result.has_value());
+}

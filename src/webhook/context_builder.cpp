@@ -56,7 +56,15 @@ drogon::Task<std::optional<WebhookEvent>> buildEvent(tgw::bridge::TdBridge& brid
             auto obj = co_await bridge.invoke(
                 client_id, api::make_object<api::getMessage>(chat_id, cur));
             if (obj == nullptr || obj->get_id() == api::error::ID) {
-                truncated = true;  // недоступное звено обрывает цепочку, событие остаётся частичным
+                // Сбой ПЕРВОГО getMessage при неподтверждённом reply-триггере: владельца
+                // проверить не удалось => триггер НЕ подтверждён => nullopt (иначе ушёл бы
+                // ложный reply-вебхук по неверифицированному родству; см. контракт в .hpp).
+                if (hops == 0 && det.reply_pending) {
+                    co_return std::nullopt;
+                }
+                // Сбой на hops>0 (или при уже подтверждённом mention/dm): обрываем цепочку,
+                // событие остаётся частичным с пометкой усечения.
+                truncated = true;
                 break;
             }
             const auto& parent = static_cast<const api::message&>(*obj);
