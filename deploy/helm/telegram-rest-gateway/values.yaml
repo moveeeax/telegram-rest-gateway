@@ -61,7 +61,12 @@ service:
 ingress:
   enabled: false
   className: ""
-  annotations: {}
+  # proxy-read/send-timeout согласованы с TGW_IDLE_CONNECTION_TIMEOUT_SECONDS (default 90) —
+  # тот же бюджет паузы humanize-typing (max_delay_ms + id_wait_ms), см. config.hpp. Без этих
+  # аннотаций nginx-ingress-controller использует свой дефолт 60с, который короче бюджета.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "90"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "90"
   hostTemplate: "tg-{sessionId}.example.com"
   tls:
     enabled: false

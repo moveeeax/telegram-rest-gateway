@@ -278,6 +278,11 @@ int main(int argc, char** argv) {
     drogon::app().setClientMaxBodySize(config.max_upload_bytes);
     // Тела крупнее порога Drogon спулит в temp-файл (mmap) — 64MiB-аплоад не живёт в RAM.
     drogon::app().setClientMaxMemoryBodySize(config.max_memory_body_bytes);
+    // Явный idle-таймаут соединения (без него Drogon использует встроенный дефолт 60с) —
+    // должен покрывать худший случай humanize-паузы (max_delay_ms + id_wait_ms), см.
+    // fail-fast guard в Config::load() и комментарий у idle_connection_timeout_seconds.
+    drogon::app().setIdleConnectionTimeout(
+        static_cast<std::size_t>(config.idle_connection_timeout_seconds));
 
     tgw::http::registerRoutes(bridge, client_id, auth, config.database_directory);
     tgw::http::registerMessageRoutes(bridge, client_id, upload_dir, config, send_tracker);
