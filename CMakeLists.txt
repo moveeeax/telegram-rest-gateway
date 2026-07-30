@@ -73,6 +73,7 @@ add_library(tgw_bridge STATIC
     src/util/s3_client.cpp
     src/dto/message_dto.cpp
     src/dto/file_dto.cpp
+    src/webhook/webhook_registry.cpp
     src/ws/ws_registry.cpp
     src/ws/update_router.cpp)
 target_include_directories(tgw_bridge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
