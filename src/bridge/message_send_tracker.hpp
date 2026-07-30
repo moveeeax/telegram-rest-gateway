@@ -1,10 +1,9 @@
 #pragma once
 
-#include <json/value.h>
-
 #include <chrono>
 #include <coroutine>
 #include <cstdint>
+#include <json/value.h>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -59,7 +58,8 @@ class MessageSendTracker {
     }
 
     // Вызываются из потока-приёмника TDLib (UpdateRouter::onUpdate). No-op, если никто не ждёт
-    // этот old_message_id (обычный случай при выключенном флаге — один промах в чужой/пустой карте).
+    // этот old_message_id (обычный случай при выключенном флаге — один промах в чужой/пустой
+    // карте).
     void resolveSucceeded(std::int64_t old_message_id, Json::Value message_json);
     void resolveFailed(std::int64_t old_message_id, std::int32_t error_code,
                        std::string error_message);

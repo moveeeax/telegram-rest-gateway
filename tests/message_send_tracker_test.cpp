@@ -62,7 +62,8 @@ class LoopThread {
 // Планирует корутину co_await tracker.waitFor(id, timeout) на петле и возвращает future исхода.
 // Корутина обязана суспендиться на петле, чтобы resolve*()/таймаут вернули resume в неё (как в
 // HTTP-контексте). Результат читаем ТОЛЬКО после future.wait — promise/future даёт happens-before,
-// поэтому гонки на MessageSendOutcome нет. counter (если задан) считает число резюмирований корутины.
+// поэтому гонки на MessageSendOutcome нет. counter (если задан) считает число резюмирований
+// корутины.
 std::future<std::optional<MessageSendOutcome>> waitOnLoop(
     trantor::EventLoop* loop, MessageSendTracker& tracker, std::int64_t id,
     std::chrono::milliseconds timeout, std::shared_ptr<std::atomic<int>> counter = nullptr) {
@@ -159,7 +160,7 @@ TEST(MessageSendTracker, ResolveForUnknownIdIsNoOp) {
     std::thread receiver([&] {
         std::this_thread::sleep_for(50ms);
         tracker.resolveSucceeded(999, sampleMessage());  // никто не ждёт 999 — no-op
-        tracker.resolveSucceeded(42, sampleMessage());   // реальное ожидание не задето
+        tracker.resolveSucceeded(42, sampleMessage());  // реальное ожидание не задето
     });
 
     ASSERT_EQ(future.wait_for(2s), std::future_status::ready);

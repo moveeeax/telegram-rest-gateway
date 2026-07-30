@@ -41,7 +41,7 @@ TEST(TypingDelay, ShortTextClampsToMin) {
 }
 
 TEST(TypingDelay, JitterSampleZeroGivesLowerBound) {
-    TypingDelayParams p{6000, 0, 0, 100000};  // 6000/мин = 100/сек = 10мс/символ
+    TypingDelayParams p{6000, 0, 0, 100000};     // 6000/мин = 100/сек = 10мс/символ
     auto low = computeTypingDelay(100, p, 0.0);  // base=1000мс, jitter=0 -> всегда 1000
     EXPECT_EQ(low.count(), 1000);
 }

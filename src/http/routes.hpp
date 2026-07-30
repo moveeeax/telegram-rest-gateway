@@ -6,7 +6,7 @@
 namespace tgw::bridge {
 class TdBridge;
 class MessageSendTracker;
-}
+}  // namespace tgw::bridge
 namespace tgw::auth {
 class AuthStateManager;
 }

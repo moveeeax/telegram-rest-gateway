@@ -39,8 +39,8 @@ struct TypingDelayParams {
 // jitter_sample — предрассчитанное значение из [0.0, 1.0): 0.0 даёт нижнюю границу разброса
 // (1 - jitter), 1.0 — верхнюю (1 + jitter), 0.5 — ровно базовое время без джиттера.
 inline std::chrono::milliseconds computeTypingDelay(std::size_t text_length,
-                                                     const TypingDelayParams& params,
-                                                     double jitter_sample) {
+                                                    const TypingDelayParams& params,
+                                                    double jitter_sample) {
     // Скорость печати в символах на миллисекунду и время набора text_length символов без
     // джиттера.
     const double chars_per_ms = static_cast<double>(params.chars_per_minute) / 60000.0;
@@ -50,9 +50,8 @@ inline std::chrono::milliseconds computeTypingDelay(std::size_t text_length,
     const double jitter = static_cast<double>(params.jitter_percent) / 100.0;
     const double factor = (1.0 - jitter) + jitter_sample * 2.0 * jitter;
 
-    const double delay_ms =
-        std::clamp(base_ms * factor, static_cast<double>(params.min_delay_ms),
-                   static_cast<double>(params.max_delay_ms));
+    const double delay_ms = std::clamp(base_ms * factor, static_cast<double>(params.min_delay_ms),
+                                       static_cast<double>(params.max_delay_ms));
 
     // Единственная точка округления во всей формуле — приводим к целым миллисекундам в самом
     // конце, а не на промежуточных шагах.

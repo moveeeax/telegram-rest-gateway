@@ -52,28 +52,27 @@ bool MessageSendTracker::Awaitable::await_suspend(std::coroutine_handle<> handle
     MessageSendTracker* tracker = &tracker_;
     const std::int64_t id = old_message_id_;
     std::shared_ptr<SendWaitState> state = state_;
-    state_->loop->runAfter(std::chrono::duration<double>(timeout_).count(),
-                           [tracker, id, state]() {
-                               // Атомарный find+erase: если запись ещё в map_ — таймаут выиграл
-                               // гонку у resolve*().
-                               std::shared_ptr<SendWaitState> claimed = tracker->claim(id);
-                               if (!claimed) {
-                                   return;  // resolve*() уже забрал узел — no-op.
-                               }
-                               std::coroutine_handle<> resume_handle;
-                               {
-                                   std::lock_guard<std::mutex> lock(claimed->m);
-                                   if (claimed->resolved) {
-                                       return;
-                                   }
-                                   claimed->resolved = true;
-                                   // result остаётся nullopt — сигнал «таймаут без резолва».
-                                   resume_handle = claimed->handle;
-                               }
-                               if (resume_handle) {
-                                   resume_handle.resume();
-                               }
-                           });
+    state_->loop->runAfter(std::chrono::duration<double>(timeout_).count(), [tracker, id, state]() {
+        // Атомарный find+erase: если запись ещё в map_ — таймаут выиграл
+        // гонку у resolve*().
+        std::shared_ptr<SendWaitState> claimed = tracker->claim(id);
+        if (!claimed) {
+            return;  // resolve*() уже забрал узел — no-op.
+        }
+        std::coroutine_handle<> resume_handle;
+        {
+            std::lock_guard<std::mutex> lock(claimed->m);
+            if (claimed->resolved) {
+                return;
+            }
+            claimed->resolved = true;
+            // result остаётся nullopt — сигнал «таймаут без резолва».
+            resume_handle = claimed->handle;
+        }
+        if (resume_handle) {
+            resume_handle.resume();
+        }
+    });
     return true;  // подвесились; разбудит поток-приёмник (resolve*) или таймер
 }
 

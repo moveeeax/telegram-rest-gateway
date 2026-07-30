@@ -318,15 +318,14 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                     constexpr auto kTypingRefreshInterval = std::chrono::milliseconds(4000);
                     static thread_local std::mt19937 rng{std::random_device{}()};
                     std::uniform_real_distribution<double> uni(0.0, 1.0);
-                    auto remaining =
-                        tgw::http::computeTypingDelay(length, delay_params, uni(rng));
+                    auto remaining = tgw::http::computeTypingDelay(length, delay_params, uni(rng));
                     while (remaining.count() > 0) {
                         td.sendOneWay(cid, api::make_object<api::sendChatAction>(
                                                chat_id, nullptr, "",
                                                api::make_object<api::chatActionTyping>()));
                         const auto tick = std::min(remaining, kTypingRefreshInterval);
-                        co_await drogon::sleepCoro(
-                            loop, std::chrono::duration<double>(tick).count());
+                        co_await drogon::sleepCoro(loop,
+                                                   std::chrono::duration<double>(tick).count());
                         remaining -= tick;
                     }
                 }
@@ -374,8 +373,8 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                             if (!idem.empty()) {
                                 IdempotencyCache::instance().release(idem);
                             }
-                            auto tmp_error = api::make_object<api::error>(
-                                confirmed->error_code, confirmed->error_message);
+                            auto tmp_error = api::make_object<api::error>(confirmed->error_code,
+                                                                          confirmed->error_message);
                             callback(telegramError(*tmp_error));
                         }
                         co_return;
@@ -398,12 +397,12 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 callback(resp);
                 co_return;
             }(bridge, client_id, chatId, std::move(reply), std::move(formatted), text_length,
-              idem_key, config.humanize_typing,
-              tgw::http::TypingDelayParams{config.humanize_chars_per_minute,
-                                           config.humanize_jitter_percent,
-                                           config.humanize_min_delay_ms,
-                                           config.humanize_max_delay_ms},
-              config.humanize_id_wait_ms, tracker, std::move(cb));
+                                      idem_key, config.humanize_typing,
+                                      tgw::http::TypingDelayParams{config.humanize_chars_per_minute,
+                                                                   config.humanize_jitter_percent,
+                                                                   config.humanize_min_delay_ms,
+                                                                   config.humanize_max_delay_ms},
+                                      config.humanize_id_wait_ms, tracker, std::move(cb));
         },
         {drogon::Post, kBearerFilter});
 
