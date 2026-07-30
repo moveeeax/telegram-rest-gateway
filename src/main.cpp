@@ -3,6 +3,7 @@
 #include "auth/session_io.hpp"
 #include "auth/startup_bootstrapper.hpp"
 #include "auth/token_store.hpp"
+#include "bridge/message_send_tracker.hpp"
 #include "bridge/real_transport.hpp"
 #include "bridge/td_bridge.hpp"
 #include "config/config.hpp"
@@ -191,8 +192,15 @@ int main(int argc, char** argv) {
     // Мост + приёмник апдейтов = AuthStateManager (обрабатывает updateAuthorizationState).
     tgw::bridge::RealTdTransport transport;
     tgw::auth::AuthStateManager auth;
+    // Трекер подтверждения отправки (humanize typing): конструируется ВСЕГДА — стоит дёшево, а при
+    // выключенном флаге его карта ожиданий пуста и resolve* просто промахивается. Объявлен раньше
+    // router — обязан пережить его (router держит на него указатель).
+    tgw::bridge::MessageSendTracker send_tracker;
     // авторизационные -> auth, прикладные -> WS fan-out (+ Kafka, если включена)
     tgw::ws::UpdateRouter router(auth, config.session_id);
+    // Резолв updateMessageSendSucceeded/Failed по old_message_id -> корутина sendMessage. Задаём
+    // до bridge.start() (пишется до старта потока-приёмника, читается из него после).
+    router.setMessageSendTracker(send_tracker);
     if (kafka) {
         router.setEventPublisher(
             [sink = kafka.get()](const std::string& key, const std::string& payload) {
@@ -272,7 +280,7 @@ int main(int argc, char** argv) {
     drogon::app().setClientMaxMemoryBodySize(config.max_memory_body_bytes);
 
     tgw::http::registerRoutes(bridge, client_id, auth, config.database_directory);
-    tgw::http::registerMessageRoutes(bridge, client_id, upload_dir);
+    tgw::http::registerMessageRoutes(bridge, client_id, upload_dir, config, send_tracker);
     tgw::http::registerDirectoryRoutes(bridge, client_id);
     tgw::ws::WsSubscriberRegistry::instance().setMaxPendingBytes(config.ws_max_pending_bytes);
     tgw::ws::UpdatesWs::setSessionId(config.session_id);

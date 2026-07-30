@@ -1,11 +1,14 @@
 #include "bridge/expect.hpp"
+#include "bridge/message_send_tracker.hpp"
 #include "bridge/td_bridge.hpp"
+#include "config/config.hpp"
 #include "dto/file_dto.hpp"
 #include "dto/message_dto.hpp"
 #include "http/byte_range.hpp"
 #include "http/http_helpers.hpp"
 #include "http/idempotency_cache.hpp"
 #include "http/routes.hpp"
+#include "http/typing_delay.hpp"
 #include "http/upload_sanitize.hpp"
 
 #include <drogon/drogon.h>
@@ -13,12 +16,16 @@
 #include <td/telegram/td_api.h>
 #include <trantor/utils/ConcurrentTaskQueue.h>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <random>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -109,7 +116,8 @@ trantor::ConcurrentTaskQueue& uploadTaskQueue() {
 // Value::isMember на не-объекте кидают Json::LogicError. Обработчики registerHandler у Drogon
 // (HttpControllerBinder) try/catch не оборачивают — исключение ушло бы наружу вместо честного 400.
 void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
-                           const std::string& upload_dir) {
+                           const std::string& upload_dir, const tgw::config::Config& config,
+                           tgw::bridge::MessageSendTracker& tracker) {
     auto& app = drogon::app();
 
     // GET /v1/chats — best-effort loadChats + getChats, затем getChat на каждый id (§8.2.4).
@@ -220,10 +228,13 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
         {drogon::Get, kBearerFilter});
 
     // POST /v1/chats/{chatId}/messages — отправка текста (§8.2.6): 202 + temp id, финал по WS.
+    // При config.humanize_typing перед отправкой держим "печатает…" паузу (typing_delay) и после
+    // отправки опционально ждём реальный id через tracker; при выключенном флаге поведение
+    // бит-в-бит совпадает с прежним (202 + temporary_message_id + sending_state:pending).
     app.registerHandler(
         "/v1/chats/{chatId}/messages",
-        [&bridge, client_id](const drogon::HttpRequestPtr& req, HttpCallback&& cb,
-                             std::string chatIdStr) {
+        [&bridge, client_id, &config, &tracker](const drogon::HttpRequestPtr& req,
+                                                HttpCallback&& cb, std::string chatIdStr) {
             std::int64_t chatId = 0;
             if (!parseId(chatIdStr, chatId)) {
                 cb(serviceError("VALIDATION_ERROR", "invalid chat_id", drogon::k400BadRequest));
@@ -272,45 +283,127 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                 cb(serviceError("VALIDATION_ERROR", parse_err, drogon::k400BadRequest));
                 return;
             }
-            auto content = api::make_object<api::inputMessageText>();
-            content->text_ = std::move(formatted);
-
-            auto fn = api::make_object<api::sendMessage>();
-            fn->chat_id_ = chatId;
-            // Опциональный ответ на сообщение (reply): id строкой, как все id наружу.
+            // Опциональный ответ на сообщение (reply): id строкой, как все id наружу. Разбор и
+            // построение reply-объекта остаются в синхронной части — внутрь корутины уезжает
+            // только вызов sendMessage и формирование ответа. content/sendMessage строятся ниже
+            // внутри корутины из formatted/reply.
+            api::object_ptr<api::inputMessageReplyToMessage> reply;
             std::int64_t replyTo = 0;
             if ((*json)["reply_to_message_id"].isString() &&
                 parseId((*json)["reply_to_message_id"].asString(), replyTo) && replyTo != 0) {
-                auto reply = api::make_object<api::inputMessageReplyToMessage>();
+                reply = api::make_object<api::inputMessageReplyToMessage>();
                 reply->message_id_ = replyTo;
-                fn->reply_to_ = std::move(reply);
             }
-            fn->input_message_content_ = std::move(content);
+            // Длина текста для humanize-паузы — в UTF-8 кодпоинтах (см. utf8CodepointCount):
+            // computeTypingDelay считает по символам, байтовая длина завышала бы паузу на
+            // кириллице/эмодзи. При выключенном флаге значение не используется вовсе.
+            const std::size_t text_length = utf8CodepointCount((*json)["text"].asString());
 
-            launchInvoke(bridge, client_id, std::move(fn), std::move(cb),
-                         [idem_key](api::object_ptr<api::Object> obj) {
-                             auto message = tgw::bridge::expect<api::message>(std::move(obj));
-                             if (!message.ok()) {
-                                 if (!idem_key.empty()) {
-                                     // Ошибку не кэшируем — даём ретраю шанс.
-                                     IdempotencyCache::instance().release(idem_key);
-                                 }
-                                 return telegramError(*message.error);
-                             }
-                             Json::Value data;
-                             data["temporary_message_id"] = std::to_string(message.value->id_);
-                             data["chat_id"] = std::to_string(message.value->chat_id_);
-                             data["sending_state"] = "pending";
-                             Json::Value body;
-                             body["ok"] = true;
-                             body["data"] = data;
-                             auto resp = jsonResponse(std::move(body), drogon::k202Accepted);
-                             if (!idem_key.empty()) {
-                                 IdempotencyCache::instance().store(idem_key, resp->statusCode(),
-                                                                    std::string(resp->body()));
-                             }
-                             return resp;
-                         });
+            // Инлайн-корутина вместо launchInvoke: (опц.) typing-пауза -> sendMessage ->
+            // (опц.) ожидание реального id. Аргументы забираем по значению (корутина переживает
+            // возврат из хендлера); bridge/tracker — по ссылке (живут дольше приложения).
+            [](tgw::bridge::TdBridge& td, std::int32_t cid, std::int64_t chat_id,
+               api::object_ptr<api::inputMessageReplyToMessage> reply_to,
+               api::object_ptr<api::formattedText> formatted_text, std::size_t length,
+               std::string idem, bool humanize_enabled, tgw::http::TypingDelayParams delay_params,
+               int id_wait_ms, tgw::bridge::MessageSendTracker& send_tracker,
+               HttpCallback callback) -> drogon::AsyncTask {
+                trantor::EventLoop* loop = trantor::EventLoop::getEventLoopOfCurrentThread();
+                if (loop == nullptr) {
+                    loop = drogon::app().getLoop();
+                }
+                if (humanize_enabled) {
+                    // Интервал обновления "печатает…": TDLib гасит статус ~через 5с, поэтому при
+                    // длинной паузе рефрешим action каждые 4с (< 5с с запасом).
+                    constexpr auto kTypingRefreshInterval = std::chrono::milliseconds(4000);
+                    static thread_local std::mt19937 rng{std::random_device{}()};
+                    std::uniform_real_distribution<double> uni(0.0, 1.0);
+                    auto remaining =
+                        tgw::http::computeTypingDelay(length, delay_params, uni(rng));
+                    while (remaining.count() > 0) {
+                        td.sendOneWay(cid, api::make_object<api::sendChatAction>(
+                                               chat_id, nullptr, "",
+                                               api::make_object<api::chatActionTyping>()));
+                        const auto tick = std::min(remaining, kTypingRefreshInterval);
+                        co_await drogon::sleepCoro(
+                            loop, std::chrono::duration<double>(tick).count());
+                        remaining -= tick;
+                    }
+                }
+
+                auto content = api::make_object<api::inputMessageText>();
+                content->text_ = std::move(formatted_text);
+                auto fn = api::make_object<api::sendMessage>();
+                fn->chat_id_ = chat_id;
+                fn->reply_to_ = std::move(reply_to);
+                fn->input_message_content_ = std::move(content);
+
+                auto obj = co_await td.invoke(cid, std::move(fn));
+                auto message = tgw::bridge::expect<api::message>(std::move(obj));
+                if (!message.ok()) {
+                    if (!idem.empty()) {
+                        // Ошибку не кэшируем — даём ретраю шанс.
+                        IdempotencyCache::instance().release(idem);
+                    }
+                    callback(telegramError(*message.error));
+                    co_return;
+                }
+                const std::int64_t temp_id = message.value->id_;
+                const std::int64_t out_chat_id = message.value->chat_id_;
+
+                if (humanize_enabled && id_wait_ms > 0) {
+                    auto confirmed = co_await send_tracker.waitFor(
+                        temp_id, std::chrono::milliseconds(id_wait_ms));
+                    if (confirmed.has_value()) {
+                        if (confirmed->succeeded) {
+                            Json::Value data = confirmed->message;  // уже спроецировано dto::toJson
+                            data["sending_state"] = "sent";
+                            Json::Value body;
+                            body["ok"] = true;
+                            body["data"] = data;
+                            auto resp = jsonResponse(std::move(body), drogon::k200OK);
+                            if (!idem.empty()) {
+                                IdempotencyCache::instance().store(idem, resp->statusCode(),
+                                                                   std::string(resp->body()));
+                            }
+                            callback(resp);
+                        } else {
+                            // Ошибку не кэшируем — даём ретраю шанс. Ответ строим тем же путём,
+                            // что telegramError(const error&): временный error-объект
+                            // переиспользует маппинг статусов без дублирования.
+                            if (!idem.empty()) {
+                                IdempotencyCache::instance().release(idem);
+                            }
+                            auto tmp_error = api::make_object<api::error>(
+                                confirmed->error_code, confirmed->error_message);
+                            callback(telegramError(*tmp_error));
+                        }
+                        co_return;
+                    }
+                    // nullopt -> таймаут: падаем в pending-ответ ниже, как при выключенном флаге.
+                }
+
+                Json::Value data;
+                data["temporary_message_id"] = std::to_string(temp_id);
+                data["chat_id"] = std::to_string(out_chat_id);
+                data["sending_state"] = "pending";
+                Json::Value body;
+                body["ok"] = true;
+                body["data"] = data;
+                auto resp = jsonResponse(std::move(body), drogon::k202Accepted);
+                if (!idem.empty()) {
+                    IdempotencyCache::instance().store(idem, resp->statusCode(),
+                                                       std::string(resp->body()));
+                }
+                callback(resp);
+                co_return;
+            }(bridge, client_id, chatId, std::move(reply), std::move(formatted), text_length,
+              idem_key, config.humanize_typing,
+              tgw::http::TypingDelayParams{config.humanize_chars_per_minute,
+                                           config.humanize_jitter_percent,
+                                           config.humanize_min_delay_ms,
+                                           config.humanize_max_delay_ms},
+              config.humanize_id_wait_ms, tracker, std::move(cb));
         },
         {drogon::Post, kBearerFilter});
 

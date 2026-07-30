@@ -3,8 +3,23 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <string_view>
 
 namespace tgw::http {
+
+// Количество UTF-8 кодпоинтов в строке: считаем все байты, кроме продолжающих (10xxxxxx).
+// computeTypingDelay ожидает длину в кодпоинтах, а не в байтах — иначе кириллица (2 байта/символ)
+// и эмодзи (4 байта) завышали бы паузу в разы. Вход — уже провалидированный jsoncpp UTF-8 текст;
+// на битой последовательности результат остаётся в пределах [0, size()] (безопасное приближение).
+inline std::size_t utf8CodepointCount(std::string_view text) {
+    std::size_t count = 0;
+    for (char ch : text) {
+        if ((static_cast<unsigned char>(ch) & 0xC0U) != 0x80U) {
+            ++count;
+        }
+    }
+    return count;
+}
 
 // Настройки имитации скорости печати. Валидность (chars_per_minute > 0,
 // min_delay_ms <= max_delay_ms) — ответственность вызывающего кода/конфига,
