@@ -192,15 +192,19 @@ int main(int argc, char** argv) {
     // Мост + приёмник апдейтов = AuthStateManager (обрабатывает updateAuthorizationState).
     tgw::bridge::RealTdTransport transport;
     tgw::auth::AuthStateManager auth;
-    // Трекер подтверждения отправки (humanize typing): конструируется ВСЕГДА — стоит дёшево, а при
-    // выключенном флаге его карта ожиданий пуста и resolve* просто промахивается. Объявлен раньше
-    // router — обязан пережить его (router держит на него указатель).
+    // Трекер подтверждения отправки (humanize typing): конструируется ВСЕГДА — сам объект дёшев.
+    // Объявлен раньше router — обязан пережить его (router держит на него указатель).
     tgw::bridge::MessageSendTracker send_tracker;
     // авторизационные -> auth, прикладные -> WS fan-out (+ Kafka, если включена)
     tgw::ws::UpdateRouter router(auth, config.session_id);
-    // Резолв updateMessageSendSucceeded/Failed по old_message_id -> корутина sendMessage. Задаём
-    // до bridge.start() (пишется до старта потока-приёмника, читается из него после).
-    router.setMessageSendTracker(send_tracker);
+    // Резолв updateMessageSendSucceeded/Failed по old_message_id -> корутина sendMessage. Хук
+    // подключаем ТОЛЬКО при включённом флаге: иначе на каждое исходящее сообщение аккаунта
+    // (не только при гуманизации) тратился бы лишний tgw::dto::toJson + захват мьютекса карты
+    // ради заведомого промаха — waitFor() при выключенном флаге всё равно никогда не вызывается.
+    // Задаём до bridge.start() (пишется до старта потока-приёмника, читается из него после).
+    if (config.humanize_typing) {
+        router.setMessageSendTracker(send_tracker);
+    }
     if (kafka) {
         router.setEventPublisher(
             [sink = kafka.get()](const std::string& key, const std::string& payload) {
