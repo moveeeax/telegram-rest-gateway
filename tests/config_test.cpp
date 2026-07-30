@@ -31,6 +31,13 @@ constexpr const char* kEnvBases[] = {
     "TGW_USE_TEST_DC",
     "TGW_KEEP_ONLINE",
     "TGW_TDLIB_LOG_VERBOSITY",
+    "TGW_HUMANIZE_TYPING",
+    "TGW_HUMANIZE_CHARS_PER_MINUTE",
+    "TGW_HUMANIZE_JITTER_PERCENT",
+    "TGW_HUMANIZE_MIN_DELAY_MS",
+    "TGW_HUMANIZE_MAX_DELAY_MS",
+    "TGW_HUMANIZE_ID_WAIT_MS",
+    "TGW_IDLE_CONNECTION_TIMEOUT_SECONDS",
     "TGW_LISTEN_ADDRESS",
     "TGW_LISTEN_PORT",
     "TGW_MAX_UPLOAD_BYTES",
@@ -229,6 +236,51 @@ TEST_F(ConfigTest, KeepOnlineFlagParsing) {
     EXPECT_FALSE(Config::load().keep_online);
     set("TGW_KEEP_ONLINE", "yes");  // любое иное значение трактуется как false
     EXPECT_FALSE(Config::load().keep_online);
+}
+
+// TGW_HUMANIZE_TYPING и сопутствующие числовые переменные: явные значения переопределяют дефолты.
+TEST_F(ConfigTest, HumanizeTypingFlagsParsing) {
+    setRequired();
+    set("TGW_HUMANIZE_TYPING", "true");
+    set("TGW_HUMANIZE_CHARS_PER_MINUTE", "150");
+    set("TGW_HUMANIZE_JITTER_PERCENT", "10");
+    set("TGW_HUMANIZE_MIN_DELAY_MS", "500");
+    set("TGW_HUMANIZE_MAX_DELAY_MS", "8000");
+    set("TGW_HUMANIZE_ID_WAIT_MS", "3000");
+    set("TGW_IDLE_CONNECTION_TIMEOUT_SECONDS", "120");
+
+    const Config c = Config::load();
+    EXPECT_TRUE(c.humanize_typing);
+    EXPECT_EQ(c.humanize_chars_per_minute, 150);
+    EXPECT_EQ(c.humanize_jitter_percent, 10);
+    EXPECT_EQ(c.humanize_min_delay_ms, 500);
+    EXPECT_EQ(c.humanize_max_delay_ms, 8000);
+    EXPECT_EQ(c.humanize_id_wait_ms, 3000);
+    EXPECT_EQ(c.idle_connection_timeout_seconds, 120);
+}
+
+// Ничего не задано — дефолты из Config (фича выключена, бюджет паузы укладывается в дефолтный
+// idle-таймаут).
+TEST_F(ConfigTest, HumanizeTypingDefaults) {
+    setRequired();
+    const Config c = Config::load();
+    EXPECT_FALSE(c.humanize_typing);
+    EXPECT_EQ(c.humanize_chars_per_minute, 200);
+    EXPECT_EQ(c.humanize_jitter_percent, 20);
+    EXPECT_EQ(c.humanize_min_delay_ms, 1000);
+    EXPECT_EQ(c.humanize_max_delay_ms, 10000);
+    EXPECT_EQ(c.humanize_id_wait_ms, 4000);
+    EXPECT_EQ(c.idle_connection_timeout_seconds, 90);
+}
+
+// Fail-fast guard: бюджет паузы (max_delay + id_wait + запас 2000мс = 72000мс) превышает
+// idle-таймаут (60000мс) — старт должен отказать с понятной ошибкой, а не тихо продолжить.
+TEST_F(ConfigTest, HumanizeTimeoutBudgetExceedsIdleTimeoutThrows) {
+    setRequired();
+    set("TGW_HUMANIZE_MAX_DELAY_MS", "50000");
+    set("TGW_HUMANIZE_ID_WAIT_MS", "20000");
+    set("TGW_IDLE_CONNECTION_TIMEOUT_SECONDS", "60");  // 70с бюджет + 2с запас > 60с таймаут
+    EXPECT_THROW(Config::load(), std::runtime_error);
 }
 
 // Валидные числовые значения парсятся без изменения поведения.
