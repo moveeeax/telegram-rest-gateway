@@ -246,10 +246,10 @@ int main(int argc, char** argv) {
         // блок и upload_cleanup.cpp, это штатно.
         drogon::app().getLoop()->runEvery(
             static_cast<double>(config.keep_online_interval_seconds), [&bridge, client_id] {
-                bridge.sendOneWay(client_id,
-                                  td_api::make_object<td_api::setOption>(
-                                      "online",
-                                      td_api::make_object<td_api::optionValueBoolean>(true)));
+                bridge.sendOneWay(
+                    client_id,
+                    td_api::make_object<td_api::setOption>(
+                        "online", td_api::make_object<td_api::optionValueBoolean>(true)));
             });
     }
     // Удалённый logout / отзыв сессии (AUTH_KEY_DUPLICATED): останавливаем сервис — с
