@@ -1,6 +1,7 @@
 #include "ws/update_router.hpp"
 
 #include "auth/auth_state_manager.hpp"
+#include "bridge/message_send_tracker.hpp"
 #include "dto/message_dto.hpp"
 #include "util/metrics.hpp"
 #include "ws/ws_registry.hpp"
@@ -164,6 +165,24 @@ void UpdateRouter::onUpdate(api::object_ptr<api::Object> update) {
             }
         }
         return;
+    }
+    // Резолв ожидающего HTTP-запроса по old_message_id (§ humanize typing) — ДО ветки forwardable
+    // и не вместо неё: тот же *update ниже проецируется в WS-кадр как раньше (update не
+    // перемещается между резолвом и форвардом — оба читают один объект).
+    if (message_send_tracker_ != nullptr) {
+        if (update->get_id() == api::updateMessageSendSucceeded::ID) {
+            const auto& upd = static_cast<const api::updateMessageSendSucceeded&>(*update);
+            if (upd.message_ != nullptr) {
+                message_send_tracker_->resolveSucceeded(upd.old_message_id_,
+                                                        tgw::dto::toJson(*upd.message_));
+            }
+        } else if (update->get_id() == api::updateMessageSendFailed::ID) {
+            const auto& upd = static_cast<const api::updateMessageSendFailed&>(*update);
+            if (upd.error_ != nullptr) {
+                message_send_tracker_->resolveFailed(upd.old_message_id_, upd.error_->code_,
+                                                     upd.error_->message_);
+            }
+        }
     }
     std::optional<ForwardableUpdate> forwardable = buildForwardable(*update);
     if (!forwardable) {
