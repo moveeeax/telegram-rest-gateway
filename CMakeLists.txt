@@ -74,6 +74,9 @@ add_library(tgw_bridge STATIC
     src/util/s3_client.cpp
     src/dto/message_dto.cpp
     src/dto/file_dto.cpp
+    src/webhook/webhook_registry.cpp
+    src/webhook/context_builder.cpp
+    src/webhook/webhook_dispatcher.cpp
     src/ws/ws_registry.cpp
     src/ws/update_router.cpp)
 target_include_directories(tgw_bridge PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -87,6 +90,7 @@ add_executable(telegram-rest-gateway
     src/http/routes.cpp
     src/http/message_routes.cpp
     src/http/directory_routes.cpp
+    src/http/webhook_routes.cpp
     src/http/bearer_filter.cpp
     src/http/login_ui.cpp
     src/http/metrics_routes.cpp

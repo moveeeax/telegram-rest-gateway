@@ -65,12 +65,23 @@ class UpdateRouter final : public tgw::bridge::IUpdateSink {
         message_send_tracker_ = &tracker;
     }
 
+    // Хук вебхуков mention/reply: вызывается из потока-приёмника на КАЖДОМ updateNewMessage
+    // (после WS fan-out). Хук получает ссылку на message ТОЛЬКО на время синхронного вызова —
+    // message принадлежит апдейту и живёт лишь до конца onUpdate; всё, что нужно пережить
+    // асинхронную обработку, хук обязан снять/скопировать синхронно (см. wiring в main.cpp).
+    // Обязан быть неблокирующим (как event_publisher_). Задавать до start(): пишется до старта
+    // потока-приёмника, читается из него после — гонки на самом std::function нет.
+    void setWebhookHook(std::function<void(const td::td_api::message&)> hook) {
+        webhook_hook_ = std::move(hook);
+    }
+
    private:
     tgw::auth::AuthStateManager& auth_;
     std::string session_id_;
     std::function<void(const std::string&, const std::string&)> event_publisher_;
     std::function<void()> on_connection_ready_;
     tgw::bridge::MessageSendTracker* message_send_tracker_ = nullptr;
+    std::function<void(const td::td_api::message&)> webhook_hook_;
     std::atomic<std::uint64_t> seq_{0};
 };
 

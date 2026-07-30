@@ -51,6 +51,14 @@ config:
   #   TGW_TDLIB_LOG_VERBOSITY: "1"              # уровень логов TDLib (0 — тихо).
   # TGW_KEEP_ONLINE: "true"                     # держать аккаунт online (setOption online=true
   #                                             # после авторизации + переустановка при реконнекте).
+  # TGW_KEEP_ONLINE_INTERVAL_SECONDS: "60"      # период переотправки online-статуса по таймеру.
+  #   TGW_WEBHOOKS_ENABLED: "false"             # "1"/"true" — рассылать вебхуки на mention/dm/reply
+  #                                             # владельцу (см. README «Вебхуки…»).
+  #   TGW_WEBHOOK_TIMEOUT_MS: "10000"           # таймаут HTTP-запроса доставки одного вебхука, мс.
+  #   TGW_WEBHOOK_QUEUE_MAX: "10000"            # ёмкость очереди диспетчера; переполнение = дроп
+  #                                             # события (tgw_webhook_dropped_total).
+  #   TGW_WEBHOOK_SSRF_GUARD: "false"           # "1"/"true" — блокировать доставку на приватные/
+  #                                             # loopback/link-local хосты.
 
 service:
   type: ClusterIP

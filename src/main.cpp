@@ -13,7 +13,12 @@
 #include "http/metrics_routes.hpp"
 #include "http/routes.hpp"
 #include "http/upload_cleanup.hpp"
+#include "http/webhook_routes.hpp"
 #include "util/s3_client.hpp"
+#include "webhook/context_builder.hpp"
+#include "webhook/webhook_dispatcher.hpp"
+#include "webhook/webhook_registry.hpp"
+#include "ws/owner_mention_detector.hpp"
 #include "ws/update_router.hpp"
 #include "ws/updates_ws.hpp"
 #include "ws/ws_registry.hpp"
@@ -23,6 +28,7 @@
 #include <td/telegram/td_api.h>
 #include <trantor/net/EventLoopThread.h>
 
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -215,12 +221,82 @@ int main(int argc, char** argv) {
 
     const std::int32_t client_id = bridge.createClientId();
 
+    // --- Вебхуки mention/reply (§вебхуки): реестр + диспетчер + owner_id ---
+    // Держатели живут во всём scope main: hook (в router) и REST-роуты (registerWebhookRoutes)
+    // ссылаются на реестр/диспетчер, а shutdown-хвост зовёт dispatcher->stop(). Объявлены ПОСЛЕ
+    // bridge/router, поэтому при выходе из scope разрушаются РАНЬШЕ них — но к тому моменту и
+    // bridge.stop(), и dispatcher->stop() уже вызваны явно, так что хук более не дёргается.
+    // owner_id — атомик в shared_ptr: пишется корутиной getMe (резолв на loop'е Drogon), читается
+    // из хука (поток-приёмник). shared_ptr развязывает время жизни от локалов main (self-contained
+    // захват в обе лямбды). Создаётся всегда (одна дешёвая аллокация на старте), но резолвится и
+    // читается только при webhooks_enabled — при выключенной фиче хук не ставится (ноль оверхеда).
+    auto owner_id = std::make_shared<std::atomic<std::int64_t>>(0);
+    std::unique_ptr<tgw::webhook::IWebhookStore> webhook_store;
+    std::unique_ptr<tgw::webhook::WebhookRegistry> webhook_registry;
+    std::unique_ptr<tgw::webhook::WebhookDispatcher> webhook_dispatcher;
+    const bool webhooks_enabled = config.webhooks_enabled;
+    if (webhooks_enabled) {
+        // S3-стор реестра — соседний с td.binlog объект: та же bucket/creds/endpoint, но ключ
+        // <dir(session_key)>/webhooks.json (по аналогии с auth/s3_session, но другой suffix).
+        tgw::util::S3Config webhook_s3 = config.s3;
+        const std::string& session_key = config.s3.key;
+        const auto slash = session_key.find_last_of('/');
+        webhook_s3.key =
+            (slash == std::string::npos ? std::string{} : session_key.substr(0, slash + 1)) +
+            "webhooks.json";
+        const std::string webhook_key = webhook_s3.key;
+
+        webhook_store = tgw::webhook::makeS3WebhookStore(std::move(webhook_s3));
+        webhook_registry = std::make_unique<tgw::webhook::WebhookRegistry>(*webhook_store);
+        webhook_registry->loadFromStore();
+        webhook_dispatcher = std::make_unique<tgw::webhook::WebhookDispatcher>(
+            *webhook_registry, config.webhook_timeout_ms, config.webhook_queue_max,
+            config.webhook_ssrf_guard);
+        webhook_dispatcher->start();
+
+        // Хук вызывается синхронно из потока-приёмника с ЖИВОЙ ссылкой на message (принадлежит
+        // апдейту, до конца onUpdate). Тип чата определяем СИНХРОННО из полей message, БЕЗ getChat:
+        // getChat потребовал бы co_await ДО detect, а message — move-only и не переживает suspend
+        // (владения из const& у нас нет), поэтому дешёвый lookup из самого сообщения
+        // (санкционирован брифом: "private/broadcast определить по chat_id знаку/типу"): личка ⟺
+        // chat_id_ > 0 (private-чат = user_id), broadcast-канал ⟺ is_channel_post_. detect — чистый
+        // и быстрый. При срабатывании запускаем EAGER-корутину (drogon::AsyncTask) ПРЯМО тут: её
+        // префикс — buildEvent(...) — снимает всё нужное из message ДО первого co_await
+        // (getMessage), пока message ещё жив; на первом suspend await_suspend в потоке-приёмнике не
+        // находит loop и берёт главный loop Drogon — resume/dispatch идут уже на нём,
+        // поток-приёмник не блокируется сетевым I/O. После первого suspend ни AsyncTask, ни
+        // buildEvent к message не обращаются (контракт buildEvent), поэтому висящая ссылка
+        // безопасна.
+        router.setWebhookHook([&bridge, client_id, owner_id, dispatcher = webhook_dispatcher.get(),
+                               session_id = config.session_id](const td::td_api::message& msg) {
+            const bool chat_is_private = msg.chat_id_ > 0;
+            const bool chat_is_broadcast = msg.is_channel_post_;
+            const std::int64_t oid = owner_id->load(std::memory_order_relaxed);
+            const tgw::ws::DetectResult det =
+                tgw::ws::detect(msg, oid, chat_is_private, chat_is_broadcast);
+            if (!det.triggered && !det.reply_pending) {
+                return;  // не триггер — ничего не планируем (горячий путь дешёвый)
+            }
+            const std::int32_t received_at = msg.date_;
+            [](tgw::bridge::TdBridge& td, std::int32_t cid, const td::td_api::message& m,
+               tgw::ws::DetectResult d, std::int64_t o, std::string sid, std::int32_t rcv,
+               tgw::webhook::WebhookDispatcher* disp) -> drogon::AsyncTask {
+                auto ev = co_await tgw::webhook::buildEvent(td, cid, m, d, o, std::move(sid), rcv);
+                if (ev) {
+                    disp->dispatch(*ev);
+                }
+                co_return;
+            }(bridge, client_id, msg, det, oid, session_id, received_at, dispatcher);
+        });
+        LOG_INFO << "webhooks enabled (registry store key " << webhook_key << ")";
+    }
+
     // Колбэки регистрируем ДО start(): восстановленная из S3/TGW_SESSION сессия доходит до
     // Ready ещё в StartupBootstrapper — регистрация после него теряет событие.
     // Warmup чатов (§бэклог ChatCache): TDLib наполняет главный список лениво — без прогрева
     // первый GET /v1/chats после старта может отдать частичный список. Fire-and-forget.
     const bool keep_online = config.keep_online;
-    auth.setOnReady([&bridge, client_id, keep_online] {
+    auth.setOnReady([&bridge, client_id, keep_online, webhooks_enabled, owner_id] {
         auto load = td_api::make_object<td_api::loadChats>();
         load->chat_list_ = td_api::make_object<td_api::chatListMain>();
         load->limit_ = 100;
@@ -234,6 +310,22 @@ int main(int argc, char** argv) {
                                   "online", td_api::make_object<td_api::optionValueBoolean>(true)));
             LOG_INFO << "keep-online: setting online=true";
         }
+        // Вебхуки: резолвим owner_id (id владельца аккаунта) через getMe. Detached-корутина —
+        // co_await ответа, на успехе кладём id в атомик (читается детектором из потока-приёмника).
+        // Запускается из потока-приёмника; первый suspend уводит resume на loop Drogon (там и
+        // происходит store). Повтор при каждом Ready безвреден: id стабилен, запись идемпотентна.
+        if (webhooks_enabled) {
+            [](tgw::bridge::TdBridge& td, std::int32_t cid,
+               std::shared_ptr<std::atomic<std::int64_t>> oid) -> drogon::AsyncTask {
+                auto obj = co_await td.invoke(cid, td_api::make_object<td_api::getMe>());
+                if (obj != nullptr && obj->get_id() == td_api::user::ID) {
+                    oid->store(static_cast<const td_api::user&>(*obj).id_,
+                               std::memory_order_relaxed);
+                    LOG_INFO << "webhooks: resolved owner_id";
+                }
+                co_return;
+            }(bridge, client_id, owner_id);
+        }
     });
     // keep-online: переустанавливаем online при КАЖДОМ восстановлении соединения
     // (connectionStateReady), чтобы статус пережил реконнекты. Колбэк регистрируем ДО start()
@@ -244,6 +336,25 @@ int main(int argc, char** argv) {
                               td_api::make_object<td_api::setOption>(
                                   "online", td_api::make_object<td_api::optionValueBoolean>(true)));
         });
+        // keep-online: периодическая страховка поверх событийных хуков выше. TDLib НЕ поддерживает
+        // online-статус сама — без периодического подтверждения от клиента он деградирует по
+        // истечении внутреннего таймаута TDLib. setOnReady/setOnConnectionReady покрывают старт и
+        // реконнект, но соединение может простоять стабильным (без единого connectionStateReady)
+        // часами — именно этот случай прод и показал: за 5+ часов работы без рестартов
+        // connectionStateReady сработал ровно один раз. runEvery закрывает этот пробел, повторяя
+        // setOption на фиксированном интервале независимо от событий соединения. Действие лёгкое
+        // (sendOneWay — постановка в очередь моста, не блокирующий сетевой вызов), поэтому, в
+        // отличие от startS3Sync (src/auth/s3_session.cpp), отдельный поток не нужен — колбэк
+        // выполняется прямо на главном event-loop Drogon. Регистрируется ДО bridge.start(), но
+        // исполняется только после старта loop'а (drogon::app().run()) — как и весь keep-online
+        // блок и upload_cleanup.cpp, это штатно.
+        drogon::app().getLoop()->runEvery(
+            static_cast<double>(config.keep_online_interval_seconds), [&bridge, client_id] {
+                bridge.sendOneWay(
+                    client_id,
+                    td_api::make_object<td_api::setOption>(
+                        "online", td_api::make_object<td_api::optionValueBoolean>(true)));
+            });
     }
     // Удалённый logout / отзыв сессии (AUTH_KEY_DUPLICATED): останавливаем сервис — с
     // restart-политикой контейнер поднимется и честно попросит новый логин, вместо вечных 409.
@@ -293,6 +404,9 @@ int main(int argc, char** argv) {
     tgw::http::registerDirectoryRoutes(bridge, client_id);
     tgw::ws::WsSubscriberRegistry::instance().setMaxPendingBytes(config.ws_max_pending_bytes);
     tgw::ws::UpdatesWs::setSessionId(config.session_id);
+    if (webhook_registry) {
+        tgw::http::registerWebhookRoutes(*webhook_registry);  // POST/GET /v1/webhooks, DELETE /{id}
+    }
     tgw::http::registerLoginUi();  // GET /ui — страница входа (форма/QR)
     tgw::http::registerMetricsRoutes(bridge, auth);  // GET /metrics (Prometheus)
     tgw::http::startUploadCleanup(upload_dir, std::chrono::hours(1));
@@ -327,6 +441,15 @@ int main(int argc, char** argv) {
         LOG_WARN << "TDLib did not reach Closed within timeout";
     }
     bridge.stop();
+
+    // Диспетчер вебхуков гасим СТРОГО ПОСЛЕ bridge.stop(): пока мост жив, поток-приёмник может
+    // дёргать хук, а drainPending()/stop() резюмирует in-flight buildEvent-корутины (при мёртвом
+    // loop'е — синхронно на потоке-приёмнике), и те вызывают dispatch(). Только после join'а
+    // приёмника новых dispatch() быть не может — тогда безопасно дренировать in-flight HTTP и
+    // снести loop диспетчера. stop() идемпотентен и дублируется деструктором как backstop.
+    if (webhook_dispatcher) {
+        webhook_dispatcher->stop();
+    }
 
     // Дожидаемся доставки хвоста событий в Kafka (не блокирует, если очередь пуста/выключено).
     if (kafka) {
