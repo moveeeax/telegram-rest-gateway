@@ -30,6 +30,7 @@ constexpr const char* kEnvBases[] = {
     "TGW_FILES_DIR",
     "TGW_USE_TEST_DC",
     "TGW_KEEP_ONLINE",
+    "TGW_KEEP_ONLINE_INTERVAL_SECONDS",
     "TGW_TDLIB_LOG_VERBOSITY",
     "TGW_LISTEN_ADDRESS",
     "TGW_LISTEN_PORT",
@@ -229,6 +230,18 @@ TEST_F(ConfigTest, KeepOnlineFlagParsing) {
     EXPECT_FALSE(Config::load().keep_online);
     set("TGW_KEEP_ONLINE", "yes");  // любое иное значение трактуется как false
     EXPECT_FALSE(Config::load().keep_online);
+}
+
+// TGW_KEEP_ONLINE_INTERVAL_SECONDS: дефолт 60, валидное значение парсится (образец
+// s3_sync_interval_seconds/TGW_S3_SYNC_INTERVAL_SECONDS).
+TEST_F(ConfigTest, KeepOnlineIntervalParsing) {
+    setRequired();
+    {
+        const Config c = Config::load();
+        EXPECT_EQ(c.keep_online_interval_seconds, 60);  // не задано — дефолт
+    }
+    set("TGW_KEEP_ONLINE_INTERVAL_SECONDS", "30");
+    EXPECT_EQ(Config::load().keep_online_interval_seconds, 30);
 }
 
 // Валидные числовые значения парсятся без изменения поведения.
