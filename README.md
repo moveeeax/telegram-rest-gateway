@@ -81,12 +81,41 @@ OpenSSL 3.0; конфигурация — через `CMakePresets.json` (`cmake
 | `TGW_KAFKA_BROKERS` | — | Kafka/Redpanda bootstrap; пусто — события в Kafka выключены |
 | `TGW_KAFKA_TOPIC` | `tgw.updates` | Топик событий |
 | `TGW_KAFKA_CLIENT_ID` | `tgw-<session_id>` | client.id продюсера |
+| `TGW_HUMANIZE_TYPING` | `false` | `1`/`true` — перед отправкой текстового `POST /v1/chats/{chatId}/messages` показать "печатает…" и выдержать паузу, пропорциональную длине текста |
+| `TGW_HUMANIZE_CHARS_PER_MINUTE` | `200` | Скорость "печати" для расчёта базовой паузы: `base_ms = chars / (chars_per_minute / 60000)` |
+| `TGW_HUMANIZE_JITTER_PERCENT` | `20` | Разброс паузы в процентах вокруг базового значения (`uniform(1 − jitter, 1 + jitter)`) |
+| `TGW_HUMANIZE_MIN_DELAY_MS` | `1000` | Нижняя граница паузы после применения jitter (`clamp()`) |
+| `TGW_HUMANIZE_MAX_DELAY_MS` | `10000` | Верхняя граница паузы после применения jitter (`clamp()`) |
+| `TGW_HUMANIZE_ID_WAIT_MS` | `4000` | Сколько ждать подтверждение (`updateMessageSendSucceeded`/`Failed`) реального id перед тем, как отдать `202 Accepted` без ожидания |
+| `TGW_IDLE_CONNECTION_TIMEOUT_SECONDS` | `90` | Idle-таймаут Drogon-соединения; должен покрывать худший случай humanize-паузы (`max_delay_ms + id_wait_ms` + запас 2000мс) — иначе старт упадёт с ошибкой конфигурации |
 
 **Онлайн-статус (`TGW_KEEP_ONLINE`).** По умолчанию TDLib держит аккаунт offline. При включении
 gateway после авторизации шлёт `setOption("online", true)` и переустанавливает его при каждом
 восстановлении соединения (`connectionStateReady`), чтобы статус пережил реконнекты. Учти: аккаунт
 будет виден как online (и last-seen обновляется) круглосуточно, пока процесс жив. При штатном
 завершении спец-действий не нужно — TDLib на `close` сам выставит offline.
+
+**Имитация человеческой печати (`TGW_HUMANIZE_TYPING`).** По умолчанию выключено — поведение
+`POST /v1/chats/{chatId}/messages` не меняется (`202 Accepted` + `temporary_message_id` +
+`sending_state: pending`, финал по WS). При включении гейтвей перед реальной отправкой:
+
+1. Считает базовую паузу по длине текста (в UTF-8 кодпоинтах, не байтах — иначе кириллица/эмодзи
+   завышают паузу): `base_ms = длина / (TGW_HUMANIZE_CHARS_PER_MINUTE / 60000)`.
+2. Применяет случайный разброс `± TGW_HUMANIZE_JITTER_PERCENT %` и приводит результат к границам
+   `[TGW_HUMANIZE_MIN_DELAY_MS, TGW_HUMANIZE_MAX_DELAY_MS]`.
+3. На всё время паузы шлёт `sendChatAction(chatActionTyping)` (аккаунт виден собеседнику как
+   "печатает…"), обновляя действие каждые 4с — TDLib гасит статус печати сам примерно через 5с.
+4. После паузы вызывает `sendMessage` как обычно и до `TGW_HUMANIZE_ID_WAIT_MS` мс ждёт
+   подтверждение реального id (`updateMessageSendSucceeded`/`Failed`) от TDLib.
+
+Контракт ответа в результате двойной: если подтверждение успело прийти в окно ожидания —
+`200 OK` с полным объектом сообщения (`Message`, реальный `id`) и `sending_state: "sent"`; если
+не успело (таймаут) или флаг выключен — как и раньше, `202 Accepted` с `temporary_message_id` и
+`sending_state: "pending"` (финал по WS). Клиенту следует обрабатывать оба кода на этом эндпоинте.
+
+При старте гейтвей проверяет, что худший случай паузы влезает в `TGW_IDLE_CONNECTION_TIMEOUT_SECONDS`
+(`TGW_HUMANIZE_MAX_DELAY_MS + TGW_HUMANIZE_ID_WAIT_MS` + запас 2000мс) — иначе падает с понятной
+ошибкой конфигурации при загрузке, не давая заведомо рвущимся соединениям уйти в прод.
 
 ### Хранение сессии в S3/MinIO (опционально)
 

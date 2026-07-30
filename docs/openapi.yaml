@@ -441,8 +441,31 @@ paths:
                   type: string
                   description: Ответ на сообщение
       responses:
+        '200':
+          description: >-
+            Только при включённом `TGW_HUMANIZE_TYPING`: подтверждение реального id
+            (`updateMessageSendSucceeded`) успело прийти в окно `TGW_HUMANIZE_ID_WAIT_MS` — гейтвей
+            отдаёт готовое сообщение сразу, не заставляя клиента ждать WS.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    allOf:
+                    - $ref: '#/components/schemas/Message'
+                    - type: object
+                      properties:
+                        sending_state:
+                          type: string
+                          example: sent
         '202':
-          description: Принято; финальный id придёт по WS (`updateMessageSendSucceeded`)
+          description: >-
+            Принято; финальный id придёт по WS (`updateMessageSendSucceeded`). Ответ по умолчанию
+            (`TGW_HUMANIZE_TYPING` выключен), а также при включённом флаге, если подтверждение не
+            успело прийти за `TGW_HUMANIZE_ID_WAIT_MS` — эндпоинт не ждёт дольше и отдаёт `pending`.
           content:
             application/json:
               schema:
