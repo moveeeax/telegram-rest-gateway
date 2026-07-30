@@ -22,6 +22,7 @@ add_executable(tgw_unit_tests
     scope_policy_test.cpp
     aws_sigv4_test.cpp
     byte_range_test.cpp
+    typing_delay_test.cpp
     idempotency_cache_test.cpp
     upload_sanitize_test.cpp
     bearer_auth_test.cpp
