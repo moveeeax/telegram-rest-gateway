@@ -9,6 +9,7 @@
 #include <trantor/net/EventLoop.h>
 #include <trantor/utils/Logger.h>
 
+#include <arpa/inet.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -23,8 +24,6 @@
 #include <string>
 #include <thread>
 #include <utility>
-
-#include <arpa/inet.h>
 
 namespace tgw::webhook {
 
