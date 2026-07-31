@@ -446,6 +446,12 @@ int main(int argc, char** argv) {
         LOG_WARN << "TDLib did not reach Closed within timeout";
     }
     bridge.stop();
+    // Бэкстоп для пути удалённого логаута (auth.setOnUnexpectedTermination), который зовёт
+    // quit() напрямую и минует sigwait-поток — там send_tracker.drainAll() уже вызывается
+    // (см. выше), но здесь того же дренажа не было. drainAll() безопасен на этой стадии: петли
+    // уже мертвы, поэтому неразрешённые waitFor() резюмируются синхронно (тот же backstop-путь,
+    // что и bridge.stop() выше).
+    send_tracker.drainAll();
 
     // Диспетчер вебхуков гасим СТРОГО ПОСЛЕ bridge.stop(): пока мост жив, поток-приёмник может
     // дёргать хук, а drainPending()/stop() резюмирует in-flight buildEvent-корутины (при мёртвом
