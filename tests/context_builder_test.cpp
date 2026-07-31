@@ -362,8 +362,10 @@ TEST(ContextBuilder, ReplyPendingFirstGetMessageErrorReturnsNullopt) {
 // chain_limit=0: цикл reply-chain не делает ни одного шага, значит проверить владельца
 // первого родителя невозможно — триггер обязан остаться неподтверждённым (регресс на
 // найденный обход: раньше trigger_reason="reply" выставлялся без единой проверки владельца).
-// НЕТ ChainDriver — намеренно: при регрессе buildEvent послал бы getMessage, которого некому
-// обслужить, и тест зависал бы до истечения future.wait_for(2s), а не тихо проходил.
+// НЕТ ChainDriver — намеренно: при регрессе цикл всё равно не отправляет getMessage (условие
+// while(cur != 0 && hops < 0) ложно), поэтому buildEvent вернёт non-nullopt событие с
+// неверифицированным trigger_reason="reply", и EXPECT_FALSE(result.has_value()) упадёт с
+// нормальной быстрой ошибкой утверждения, а не зависанием.
 TEST(ContextBuilder, ReplyPendingChainLimitZeroReturnsNullopt) {
     BridgeHarness h{BridgeConfig{}};
     const auto cid = h.bridge().createClientId();
