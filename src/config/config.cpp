@@ -246,14 +246,27 @@ Config Config::load() {
 
     // Fail-fast guard: худший случай humanize-паузы (max_delay + id_wait, плюс запас на сетевые
     // накладные расходы) не должен превышать idle-таймаут соединения — иначе Drogon/ingress
-    // оборвёт соединение раньше, чем гейтвей успеет ответить (см. дизайн-спеку).
-    constexpr int kHumanizeSafetyMarginMs = 2000;
-    if (c.humanize_max_delay_ms + c.humanize_id_wait_ms + kHumanizeSafetyMarginMs >
-        c.idle_connection_timeout_seconds * 1000) {
-        throw std::runtime_error(
-            "config: TGW_HUMANIZE_MAX_DELAY_MS + TGW_HUMANIZE_ID_WAIT_MS (+"
-            " запас 2000мс) превышает TGW_IDLE_CONNECTION_TIMEOUT_SECONDS — "
-            "увеличьте таймаут или уменьшите паузу/окно ожидания");
+    // оборвёт соединение раньше, чем гейтвей успеет ответить (см. дизайн-спеку). Актуально
+    // ТОЛЬКО когда humanize_typing включён — иначе этот бюджет паузы никогда не расходуется, и
+    // блокировать старт сервиса из-за него было бы ложным отказом (напр. оператор поднял
+    // TGW_IDLE_CONNECTION_TIMEOUT_SECONDS для WS-idle не думая про эту фичу вовсе).
+    if (c.humanize_typing) {
+        constexpr std::int64_t kHumanizeSafetyMarginMs = 2000;
+        // int64_t: idle_connection_timeout_seconds приходит без верхней границы из env, и
+        // умножение на 1000 в int переполняется (signed UB, на практике оборачивается в
+        // отрицательное) уже на не экзотичных значениях (>~24 суток) — тогда guard всегда
+        // ложно срабатывал бы независимо от реального (щедрого) таймаута.
+        const std::int64_t budget_ms = static_cast<std::int64_t>(c.humanize_max_delay_ms) +
+                                       static_cast<std::int64_t>(c.humanize_id_wait_ms) +
+                                       kHumanizeSafetyMarginMs;
+        const std::int64_t idle_ms =
+            static_cast<std::int64_t>(c.idle_connection_timeout_seconds) * 1000;
+        if (budget_ms > idle_ms) {
+            throw std::runtime_error(
+                "config: TGW_HUMANIZE_MAX_DELAY_MS + TGW_HUMANIZE_ID_WAIT_MS (+"
+                " запас 2000мс) превышает TGW_IDLE_CONNECTION_TIMEOUT_SECONDS — "
+                "увеличьте таймаут или уменьшите паузу/окно ожидания");
+        }
     }
 
     return c;
