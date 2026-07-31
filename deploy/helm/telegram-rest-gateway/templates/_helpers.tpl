@@ -33,3 +33,14 @@ tgw.tarassov.me/session-id: {{ .account.sessionId | quote }}
 {{- define "tgw.accountHost" -}}
 {{- replace "{sessionId}" .account.sessionId .root.Values.ingress.hostTemplate -}}
 {{- end -}}
+
+{{/* Guard: ingress без whitelist-source-range выставляет /ui (форма логина аккаунта) и
+     /metrics (без Bearer-auth) в открытый интернет — они полагаются ИСКЛЮЧИТЕЛЬНО на
+     IP-allowlist (см. DEPLOY.md). Тот же fail-fast принцип, что у tgw.imageTag выше: явная
+     ошибка на старте вместо тихой дыры в проде. allowOpenIngress — осознанный опт-аут (напр.
+     если доступ ограничен иначе — mTLS/VPN/NetworkPolicy). */}}
+{{- define "tgw.ingressGuard" -}}
+{{- if and .Values.ingress.enabled (not .Values.ingress.allowOpenIngress) (not (hasKey .Values.ingress.annotations "nginx.ingress.kubernetes.io/whitelist-source-range")) -}}
+{{- fail "ingress.enabled=true без nginx.ingress.kubernetes.io/whitelist-source-range: /ui и /metrics не защищены Bearer-auth и полагаются на IP-allowlist (см. DEPLOY.md). Задай аннотацию, либо прими риск явно через ingress.allowOpenIngress=true." -}}
+{{- end -}}
+{{- end -}}

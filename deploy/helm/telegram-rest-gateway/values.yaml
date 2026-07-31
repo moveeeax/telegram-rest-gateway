@@ -75,6 +75,11 @@ ingress:
   annotations:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "90"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "90"
+  # Явный опт-аут guard'а (см. _helpers.tpl: tgw.ingressGuard). Без
+  # nginx.ingress.kubernetes.io/whitelist-source-range в annotations выше, /ui (форма логина)
+  # и /metrics обслуживаются БЕЗ Bearer-auth — helm install/template откажет с понятной
+  # ошибкой, если это не установлено в true осознанно (напр. доступ ограничен иначе).
+  allowOpenIngress: false
   hostTemplate: "tg-{sessionId}.example.com"
   tls:
     enabled: false
@@ -85,6 +90,10 @@ resources:
     cpu: 50m
     memory: 64Mi
   limits:
+    # CPU-limit отсутствовал: при инварианте «одна сессия = один под» интенсивная нагрузка
+    # одного аккаунта (burst медиа, catch-up после простоя) могла занять весь CPU ноды и
+    # затормозить другие сессии на ней (noisy neighbor) — см. review finding.
+    cpu: 500m
     memory: 256Mi
 
 # ServiceMonitor для Prometheus Operator (скрейпит /metrics без auth).

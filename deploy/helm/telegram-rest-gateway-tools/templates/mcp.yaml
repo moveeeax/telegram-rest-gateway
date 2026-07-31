@@ -29,6 +29,8 @@ spec:
         - name: mcp
           image: "{{ $.Values.mcp.image.repository }}:{{ required "mcp.image.tag обязателен: CI публикует immutable short-sha теги, см. docs/CICD.md" $.Values.mcp.image.tag }}"
           imagePullPolicy: {{ $.Values.mcp.image.pullPolicy }}
+          securityContext:
+            {{- toYaml $.Values.mcp.securityContext | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ $.Values.mcp.httpPort }}
