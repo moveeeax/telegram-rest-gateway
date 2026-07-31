@@ -48,7 +48,17 @@ archiver:
     tokenSecret: { name: tgw-tools, key: TGW_BEARER_TOKEN }
   resources:
     requests: { cpu: 25m, memory: 64Mi }
-    limits: { memory: 256Mi }
+    limits: { cpu: 500m, memory: 256Mi }  # CPU-limit добавлен — см. review finding (noisy neighbor)
+  # Контейнер бежит от USER node (Dockerfile) — тот же класс hardening'а, что у основного
+  # gateway-чарта (deploy/helm/telegram-rest-gateway/values.yaml securityContext), которого тут
+  # раньше не было вовсе (см. review finding).
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
 
 mcp:
   enabled: true
@@ -69,7 +79,15 @@ mcp:
   accounts: []
   resources:
     requests: { cpu: 25m, memory: 48Mi }
-    limits: { memory: 128Mi }
+    limits: { cpu: 250m, memory: 128Mi }  # CPU-limit добавлен — см. review finding
+  # Тот же hardening, что у archiver выше — контейнер бежит от USER node (Dockerfile).
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
 
 # Ingress для MCP (удалённые агенты). host-шаблон с {sessionId}.
 ingress:
