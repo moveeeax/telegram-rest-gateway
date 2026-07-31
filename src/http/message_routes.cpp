@@ -288,9 +288,16 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
             // только вызов sendMessage и формирование ответа. content/sendMessage строятся ниже
             // внутри корутины из formatted/reply.
             api::object_ptr<api::inputMessageReplyToMessage> reply;
-            std::int64_t replyTo = 0;
-            if ((*json)["reply_to_message_id"].isString() &&
-                parseId((*json)["reply_to_message_id"].asString(), replyTo) && replyTo != 0) {
+            if ((*json)["reply_to_message_id"].isString()) {
+                std::int64_t replyTo = 0;
+                if (!parseId((*json)["reply_to_message_id"].asString(), replyTo) || replyTo == 0) {
+                    if (!idem_key.empty()) {
+                        IdempotencyCache::instance().release(idem_key);
+                    }
+                    cb(serviceError("VALIDATION_ERROR", "invalid reply_to_message_id",
+                                    drogon::k400BadRequest));
+                    return;
+                }
                 reply = api::make_object<api::inputMessageReplyToMessage>();
                 reply->message_id_ = replyTo;
             }
@@ -536,6 +543,17 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
             uploadTaskQueue().runTaskInQueue([&bridge, client_id, upload_dir, chatId, req,
                                               cb = std::move(cb)]() mutable {
                 namespace fs = std::filesystem;
+                // ?type= валидируем ДО записи тела на диск: тело может быть до max_upload_bytes (default
+                // 64MiB), и раньше при невалидном type оно уже было бы записано, а ветка ошибки ниже не
+                // чистила директорию — накопление орфанных файлов на диск (см. фикс ниже, было решение
+                // 1.5/C10). Валидировать здесь дёшево: это тот же чистый список значений, что и ниже.
+                const std::string media_type = req->getParameter("type");
+                if (!media_type.empty() && media_type != "document" && media_type != "photo" &&
+                    media_type != "video" && media_type != "voice" && media_type != "audio") {
+                    cb(serviceError("VALIDATION_ERROR", "type must be document|photo|video|voice|audio",
+                                    drogon::k400BadRequest));
+                    return;
+                }
                 const std::string name = sanitizeUploadFilename(req->getParameter("file_name"));
                 static std::atomic<std::uint64_t> counter{0};
                 const auto seq = counter.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -577,7 +595,6 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                     }
                 }
                 api::object_ptr<api::InputMessageContent> content;
-                const std::string media_type = req->getParameter("type");
                 if (media_type.empty() || media_type == "document") {
                     auto document = api::make_object<api::inputDocument>();
                     document->document_ = std::move(local_file);
@@ -612,11 +629,6 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                     msg->audio_ = std::move(audio);
                     msg->caption_ = std::move(caption);
                     content = std::move(msg);
-                } else {
-                    cb(serviceError("VALIDATION_ERROR",
-                                    "type must be document|photo|video|voice|audio",
-                                    drogon::k400BadRequest));
-                    return;
                 }
                 auto fn = api::make_object<api::sendMessage>();
                 fn->chat_id_ = chatId;
