@@ -358,3 +358,26 @@ TEST(ContextBuilder, ReplyPendingFirstGetMessageErrorReturnsNullopt) {
 
     EXPECT_FALSE(result.has_value());
 }
+
+// chain_limit=0: цикл reply-chain не делает ни одного шага, значит проверить владельца
+// первого родителя невозможно — триггер обязан остаться неподтверждённым (регресс на
+// найденный обход: раньше trigger_reason="reply" выставлялся без единой проверки владельца).
+// НЕТ ChainDriver — намеренно: при регрессе buildEvent послал бы getMessage, которого некому
+// обслужить, и тест зависал бы до истечения future.wait_for(2s), а не тихо проходил.
+TEST(ContextBuilder, ReplyPendingChainLimitZeroReturnsNullopt) {
+    BridgeHarness h{BridgeConfig{}};
+    const auto cid = h.bridge().createClientId();
+
+    const auto incoming = makeMsg(4200, -100500, 999, 4100);
+    DetectResult det;
+    det.triggered = false;
+    det.reply_pending = true;
+    det.reason = TriggerReason::Reply;
+
+    auto future = runBuildEvent(h, cid, *incoming, det, /*owner=*/111, "sess", 1730000000,
+                                /*chain_limit=*/0);
+    ASSERT_EQ(future.wait_for(2s), std::future_status::ready);
+    const auto result = future.get();
+
+    EXPECT_FALSE(result.has_value());
+}

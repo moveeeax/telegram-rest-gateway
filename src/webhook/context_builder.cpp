@@ -49,6 +49,13 @@ drogon::Task<std::optional<WebhookEvent>> buildEvent(tgw::bridge::TdBridge& brid
     const std::int64_t chat_id = msg.chat_id_;
     const std::optional<std::int64_t> parent_id = replyParentId(msg);
 
+    // chain_limit<=0 означает, что цикл ниже не сделает ни одного шага — значит, для
+    // reply_pending НЕВОЗМОЖНО проверить автора первого родителя. Тот же отказ, что и для
+    // reply_pending без родителя вовсе (см. ветку else ниже) — иначе (см. review finding)
+    // trigger_reason="reply" выставлялся бы без единой проверки владельца.
+    if (det.reply_pending && chain_limit <= 0) {
+        co_return std::nullopt;
+    }
     bool truncated = false;
     if (parent_id) {
         std::int64_t cur = *parent_id;
