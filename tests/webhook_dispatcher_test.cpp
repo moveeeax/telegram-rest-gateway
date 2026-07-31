@@ -9,6 +9,8 @@
 #include <optional>
 #include <string>
 
+using tgw::webhook::isPrivateHost;
+using tgw::webhook::parseUrl;
 using tgw::webhook::serializeEvent;
 using tgw::webhook::signBody;
 using tgw::webhook::WebhookEvent;
@@ -108,6 +110,71 @@ TEST(WebhookDispatcher, SerializeThenSignIsStable) {
     const std::string body2 = serializeEvent(ev);
     EXPECT_EQ(body1, body2);
     EXPECT_EQ(signBody("sekret", body1), signBody("sekret", body2));
+}
+
+TEST(WebhookDispatcher, IsPrivateHostBasicRanges) {
+    EXPECT_TRUE(isPrivateHost(""));
+    EXPECT_TRUE(isPrivateHost("localhost"));
+    EXPECT_TRUE(isPrivateHost("127.0.0.1"));
+    EXPECT_TRUE(isPrivateHost("10.1.2.3"));
+    EXPECT_TRUE(isPrivateHost("192.168.1.1"));
+    EXPECT_TRUE(isPrivateHost("172.16.0.1"));
+    EXPECT_TRUE(isPrivateHost("172.31.255.255"));
+    EXPECT_FALSE(isPrivateHost("172.32.0.1"));
+    EXPECT_TRUE(isPrivateHost("169.254.169.254"));
+    EXPECT_TRUE(isPrivateHost("0.0.0.0"));
+    EXPECT_FALSE(isPrivateHost("8.8.8.8"));
+    EXPECT_FALSE(isPrivateHost("example.com"));
+}
+
+TEST(WebhookDispatcher, IsPrivateHostIpv6Ranges) {
+    EXPECT_TRUE(isPrivateHost("::1"));
+    EXPECT_TRUE(isPrivateHost("::"));
+    EXPECT_TRUE(isPrivateHost("fc00::1"));
+    EXPECT_TRUE(isPrivateHost("fd12:3456::1"));
+    EXPECT_TRUE(isPrivateHost("fe80::1"));
+    EXPECT_FALSE(isPrivateHost("2001:4860:4860::8888"));  // публичный DNS Google — внешний
+}
+
+// Регрессия на найденный обход guard'а: IPv4-mapped/-compatible IPv6-литералы, кодирующие
+// заблокированный IPv4-адрес, обязаны блокироваться так же, как голый IPv4.
+TEST(WebhookDispatcher, IsPrivateHostIpv4MappedIpv6Blocked) {
+    EXPECT_TRUE(isPrivateHost("::ffff:127.0.0.1"));
+    EXPECT_TRUE(isPrivateHost("::ffff:169.254.169.254"));
+    EXPECT_TRUE(isPrivateHost("::ffff:10.0.0.1"));
+    EXPECT_TRUE(isPrivateHost("::127.0.0.1"));  // устаревшая IPv4-compatible форма
+    EXPECT_FALSE(isPrivateHost("::ffff:8.8.8.8"));  // публичный IPv4 внутри mapped-нотации
+}
+
+TEST(WebhookDispatcher, ParseUrlExtractsHostAndPath) {
+    const auto p1 = parseUrl("http://example.com:8080/a/b?c=1");
+    EXPECT_TRUE(p1.valid);
+    EXPECT_EQ(p1.base, "http://example.com:8080");
+    EXPECT_EQ(p1.path, "/a/b?c=1");
+    EXPECT_EQ(p1.host, "example.com");
+
+    const auto p2 = parseUrl("https://[::ffff:127.0.0.1]:9000/x");
+    EXPECT_TRUE(p2.valid);
+    EXPECT_EQ(p2.host, "::ffff:127.0.0.1");
+
+    EXPECT_FALSE(parseUrl("not-a-url").valid);
+    EXPECT_FALSE(parseUrl("ftp://example.com/").valid);
+}
+
+// TGW_WEBHOOK_QUEUE_MAX=0 — валидное (не отклоняемое конфигом) значение: dispatch должен
+// молча дропать КАЖДОЕ событие (queue_.size() >= queue_max_ истинно с первого раза), а не
+// падать/висеть — граница из ревью, ранее не покрытая ни одним тестом.
+TEST(WebhookDispatcher, QueueMaxZeroDropsEveryEvent) {
+    EmptyStore store;
+    tgw::webhook::WebhookRegistry reg(store);
+    tgw::webhook::WebhookDispatcher d(reg, /*timeout_ms=*/200, /*queue_max=*/0,
+                                      /*ssrf_guard=*/false);
+    d.start();
+    for (int i = 0; i < 10; ++i) {
+        d.dispatch(makeEvent("q" + std::to_string(i)));  // должен дропаться, не падать/висеть
+    }
+    d.stop();
+    SUCCEED();
 }
 
 // Полный lifecycle без сети: пустой реестр → нет active-вебхуков → воркер не шлёт запросов

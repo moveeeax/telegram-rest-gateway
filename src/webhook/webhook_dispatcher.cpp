@@ -14,6 +14,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <future>
 #include <json/value.h>
 #include <json/writer.h>
@@ -22,6 +23,8 @@
 #include <string>
 #include <thread>
 #include <utility>
+
+#include <arpa/inet.h>
 
 namespace tgw::webhook {
 
@@ -116,75 +119,10 @@ class InFlightToken {
     std::shared_ptr<std::atomic<std::size_t>> counter_;
 };
 
-// Разбор URL вебхука на base (scheme://host[:port]) + path-with-query + host (для SSRF).
-struct ParsedUrl {
-    std::string base;  // http(s)://host[:port]
-    std::string path;  // /path?query — как есть (не перекодируем, см. setPathEncode(false))
-    std::string host;  // host без порта/скобок — для SSRF-проверки
-    bool valid = false;
-};
-
-ParsedUrl parseUrl(const std::string& url) {
-    ParsedUrl p;
-    const auto scheme_end = url.find("://");
-    if (scheme_end == std::string::npos) {
-        return p;  // без схемы не работаем (drogon HttpClient требует base со схемой)
-    }
-    const std::string scheme = url.substr(0, scheme_end);
-    if (scheme != "http" && scheme != "https") {
-        return p;
-    }
-    const std::string rest = url.substr(scheme_end + 3);
-    const auto slash = rest.find('/');
-    const std::string authority = (slash == std::string::npos) ? rest : rest.substr(0, slash);
-    if (authority.empty()) {
-        return p;
-    }
-    p.base = scheme + "://" + authority;
-    p.path = (slash == std::string::npos) ? "/" : rest.substr(slash);
-    // Выделяем host из authority (может быть [ipv6]:port или host:port).
-    if (authority.front() == '[') {
-        const auto close = authority.find(']');
-        p.host =
-            (close == std::string::npos) ? authority.substr(1) : authority.substr(1, close - 1);
-    } else {
-        const auto colon = authority.find(':');
-        p.host = (colon == std::string::npos) ? authority : authority.substr(0, colon);
-    }
-    p.valid = true;
-    return p;
-}
-
-// Грубая, но безопасная-по-умолчанию проверка приватного/loopback-хоста для SSRF-guard.
-// Работает по строке хоста: literal-IP разбираем, доменные имена (кроме localhost) считаем
-// внешними (DNS-rebinding вне охвата — резолвинг у drogon, не у нас). Смысл — не дать
-// админскому URL целиться в 127.0.0.1/10.x/метадату-сервис без явного отключения guard'а.
-bool isPrivateHost(const std::string& host) {
-    if (host.empty() || host == "localhost") {
-        return true;
-    }
-    // IPv6: loopback ::1, unspecified ::, unique-local fc00::/7, link-local fe80::/10.
-    if (host.find(':') != std::string::npos) {
-        if (host == "::1" || host == "::") {
-            return true;
-        }
-        if (host.size() >= 2) {
-            const char a = host[0];
-            const char b = host[1];
-            if ((a == 'f' || a == 'F') && (b == 'c' || b == 'C' || b == 'd' || b == 'D')) {
-                return true;  // fc00::/7 unique-local
-            }
-            if ((a == 'f' || a == 'F') && (b == 'e' || b == 'E')) {
-                return true;  // fe80::/10 link-local (грубо: любой fe..)
-            }
-        }
-        return false;
-    }
-    // IPv4-октеты. Не число в первом октете → доменное имя, считаем внешним.
-    unsigned int o0 = 0, o1 = 0, o2 = 0, o3 = 0;
-    if (std::sscanf(host.c_str(), "%u.%u.%u.%u", &o0, &o1, &o2, &o3) != 4) {
-        return false;
-    }
+// Диапазоны приватного/loopback/metadata IPv4 по первым двум октетам (RFC1918 + loopback +
+// облачная metadata 169.254.169.254). Общий хелпер для голого IPv4 и IPv4-mapped/-compatible
+// IPv6 (::ffff:a.b.c.d / ::a.b.c.d) — оба кодируют один и тот же адрес в последних 4 байтах.
+bool isPrivateIpv4Octets(unsigned int o0, unsigned int o1) {
     if (o0 == 127u || o0 == 10u || o0 == 0u) {
         return true;  // loopback / RFC1918 10/8 / 0.0.0.0
     }
@@ -263,6 +201,105 @@ void deliverOnLoop(trantor::EventLoop* loop, const Webhook& hook, const std::str
 }
 
 }  // namespace
+
+// Разбор URL вебхука на base (scheme://host[:port]) + path-with-query + host (для SSRF).
+// Вынесена наружу ради тестов, как signBody/serializeEvent. Определение struct — в .hpp.
+ParsedUrl parseUrl(const std::string& url) {
+    ParsedUrl p;
+    const auto scheme_end = url.find("://");
+    if (scheme_end == std::string::npos) {
+        return p;  // без схемы не работаем (drogon HttpClient требует base со схемой)
+    }
+    const std::string scheme = url.substr(0, scheme_end);
+    if (scheme != "http" && scheme != "https") {
+        return p;
+    }
+    const std::string rest = url.substr(scheme_end + 3);
+    const auto slash = rest.find('/');
+    const std::string authority = (slash == std::string::npos) ? rest : rest.substr(0, slash);
+    if (authority.empty()) {
+        return p;
+    }
+    p.base = scheme + "://" + authority;
+    p.path = (slash == std::string::npos) ? "/" : rest.substr(slash);
+    // Выделяем host из authority (может быть [ipv6]:port или host:port).
+    if (authority.front() == '[') {
+        const auto close = authority.find(']');
+        p.host =
+            (close == std::string::npos) ? authority.substr(1) : authority.substr(1, close - 1);
+    } else {
+        const auto colon = authority.find(':');
+        p.host = (colon == std::string::npos) ? authority : authority.substr(0, colon);
+    }
+    p.valid = true;
+    return p;
+}
+
+// Грубая, но безопасная-по-умолчанию проверка приватного/loopback-хоста для SSRF-guard.
+// Работает по строке хоста: literal-IP разбираем побайтово (inet_pton, не строковый префикс —
+// строковые правила пропускали IPv4-mapped/-compatible IPv6, см. регресс-тест ниже), доменные
+// имена (кроме localhost) считаем внешними (DNS-rebinding вне охвата — резолвинг у drogon, не
+// у нас). Вынесена наружу ради тестов, как signBody/serializeEvent.
+bool isPrivateHost(const std::string& host) {
+    if (host.empty() || host == "localhost") {
+        return true;
+    }
+    if (host.find(':') != std::string::npos) {
+        unsigned char buf[16];
+        if (inet_pton(AF_INET6, host.c_str(), buf) != 1) {
+            return true;  // не распарсили IPv6-литерал — fail-closed, это уже guard, не транспорт
+        }
+        bool all_zero = true;
+        for (int i = 0; i < 16; ++i) {
+            if (buf[i] != 0) {
+                all_zero = false;
+                break;
+            }
+        }
+        if (all_zero) {
+            return true;  // :: (unspecified)
+        }
+        bool loopback = true;
+        for (int i = 0; i < 15; ++i) {
+            if (buf[i] != 0) {
+                loopback = false;
+                break;
+            }
+        }
+        if (loopback && buf[15] == 1) {
+            return true;  // ::1
+        }
+        if ((buf[0] & 0xFEu) == 0xFCu) {
+            return true;  // fc00::/7 unique-local
+        }
+        if (buf[0] == 0xFEu && (buf[1] & 0xC0u) == 0x80u) {
+            return true;  // fe80::/10 link-local
+        }
+        // IPv4-mapped (::ffff:a.b.c.d — bytes 0-9 == 0, 10-11 == 0xff) и устаревшая
+        // IPv4-compatible форма (::a.b.c.d — bytes 0-11 == 0, уже не all-zero/loopback,
+        // проверенные выше) кодируют IPv4-адрес в последних 4 байтах — гоняем ту же
+        // проверку октетов, что и для голого IPv4, вместо того чтобы пропускать их не глядя
+        // (это и был найденный обход guard'а).
+        static const unsigned char kMappedPrefix[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+        const bool ipv4_mapped = std::memcmp(buf, kMappedPrefix, 12) == 0;
+        bool ipv4_compatible = true;
+        for (int i = 0; i < 12; ++i) {
+            if (buf[i] != 0) {
+                ipv4_compatible = false;
+                break;
+            }
+        }
+        if (ipv4_mapped || ipv4_compatible) {
+            return isPrivateIpv4Octets(buf[12], buf[13]);
+        }
+        return false;
+    }
+    unsigned int o0 = 0, o1 = 0, o2 = 0, o3 = 0;
+    if (std::sscanf(host.c_str(), "%u.%u.%u.%u", &o0, &o1, &o2, &o3) != 4) {
+        return false;
+    }
+    return isPrivateIpv4Octets(o0, o1);
+}
 
 std::string signBody(const std::string& secret, const std::string& body) {
     // hmacSha256 → сырые байты; хексим и предваряем алгоритмом (совместимо с GitHub-стилем).

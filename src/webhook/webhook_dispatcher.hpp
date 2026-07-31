@@ -30,6 +30,17 @@ std::string signBody(const std::string& secret, const std::string& body);
 // Именно эта строка уходит в тело POST'а и подписывается — вынесена наружу ради тестов.
 std::string serializeEvent(const WebhookEvent& ev);
 
+// Разбор URL и приватность хоста — вынесены наружу ради тестов (SSRF-guard), как signBody/
+// serializeEvent выше. Определения — в .cpp.
+struct ParsedUrl {
+    std::string base;
+    std::string path;
+    std::string host;
+    bool valid = false;
+};
+ParsedUrl parseUrl(const std::string& url);
+bool isPrivateHost(const std::string& host);
+
 // Воркер-пул доставки вебхуков. АРХИТЕКТУРА (аналог инварианта KafkaSink/S3Client):
 // вся работа с drogon::HttpClient (создание клиента, sendRequest, колбэки) идёт РОВНО на
 // одном выделенном loop-потоке. dispatch() вызывается из потока-приёмника моста и НИКОГДА
