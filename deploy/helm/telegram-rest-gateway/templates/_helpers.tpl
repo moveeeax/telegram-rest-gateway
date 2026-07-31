@@ -40,7 +40,7 @@ tgw.tarassov.me/session-id: {{ .account.sessionId | quote }}
      ошибка на старте вместо тихой дыры в проде. allowOpenIngress — осознанный опт-аут (напр.
      если доступ ограничен иначе — mTLS/VPN/NetworkPolicy). */}}
 {{- define "tgw.ingressGuard" -}}
-{{- if and .Values.ingress.enabled (not .Values.ingress.allowOpenIngress) (not (hasKey .Values.ingress.annotations "nginx.ingress.kubernetes.io/whitelist-source-range")) -}}
+{{- if and .Values.ingress.enabled (not .Values.ingress.allowOpenIngress) (not (hasKey (.Values.ingress.annotations | default dict) "nginx.ingress.kubernetes.io/whitelist-source-range")) -}}
 {{- fail "ingress.enabled=true без nginx.ingress.kubernetes.io/whitelist-source-range: /ui и /metrics не защищены Bearer-auth и полагаются на IP-allowlist (см. DEPLOY.md). Задай аннотацию, либо прими риск явно через ingress.allowOpenIngress=true." -}}
 {{- end -}}
 {{- end -}}
