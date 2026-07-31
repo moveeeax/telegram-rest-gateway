@@ -294,10 +294,33 @@ TEST_F(ConfigTest, HumanizeTypingDefaults) {
 // idle-таймаут (60000мс) — старт должен отказать с понятной ошибкой, а не тихо продолжить.
 TEST_F(ConfigTest, HumanizeTimeoutBudgetExceedsIdleTimeoutThrows) {
     setRequired();
+    set("TGW_HUMANIZE_TYPING", "true");
     set("TGW_HUMANIZE_MAX_DELAY_MS", "50000");
     set("TGW_HUMANIZE_ID_WAIT_MS", "20000");
     set("TGW_IDLE_CONNECTION_TIMEOUT_SECONDS", "60");  // 70с бюджет + 2с запас > 60с таймаут
     EXPECT_THROW(Config::load(), std::runtime_error);
+}
+
+// Fail-fast guard не должен срабатывать, если humanize_typing выключен — бюджет паузы тогда
+// никогда не расходуется, блокировать старт сервиса из-за него было бы ложным отказом.
+TEST_F(ConfigTest, HumanizeTimeoutGuardSkippedWhenFeatureDisabled) {
+    setRequired();
+    // TGW_HUMANIZE_TYPING не задан (default false).
+    set("TGW_HUMANIZE_MAX_DELAY_MS", "50000");
+    set("TGW_HUMANIZE_ID_WAIT_MS", "20000");
+    set("TGW_IDLE_CONNECTION_TIMEOUT_SECONDS", "10");  // будило бы guard при включённой фиче
+    EXPECT_NO_THROW(Config::load());
+}
+
+// Integer-overflow regression: большой (но легитимный) idle-таймаут раньше переполнял int при
+// умножении на 1000 и ложно валил guard независимо от реального бюджета паузы.
+TEST_F(ConfigTest, HumanizeTimeoutGuardHandlesLargeIdleTimeoutWithoutOverflow) {
+    setRequired();
+    set("TGW_HUMANIZE_TYPING", "true");
+    // Дефолты бюджета (10000+4000+2000=16000мс) укладываются в любой таймаут выше ~16с —
+    // 2592000с (30 суток) переполнял бы старую int-арифметику (2592000*1000 > INT_MAX).
+    set("TGW_IDLE_CONNECTION_TIMEOUT_SECONDS", "2592000");
+    EXPECT_NO_THROW(Config::load());
 }
 
 // Валидные числовые значения парсятся без изменения поведения.
