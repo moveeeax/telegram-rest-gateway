@@ -194,3 +194,21 @@ TEST(MessageSendTracker, DoubleResolveDoesNotDoubleResume) {
     EXPECT_FALSE(outcome.has_value());  // выиграл таймаут
     EXPECT_EQ(resumes->load(std::memory_order_relaxed), 1);
 }
+
+// drainAll() на shutdown принудительно резолвит висящий waitFor() как таймаут (nullopt), НЕ
+// дожидаясь реального таймера — таймаут здесь заведомо больше времени теста, поэтому future,
+// готовый раньше своего дедлайна, доказывает, что резолвнул именно drainAll(), а не таймер.
+TEST(MessageSendTracker, DrainAllForceResolvesPendingWaitAsTimeout) {
+    MessageSendTracker tracker;
+    LoopThread loop_thread;
+
+    auto future = waitOnLoop(loop_thread.loop(), tracker, 42, 60s);
+
+    // Дать корутине время дойти до await_suspend/tryInsert.
+    std::this_thread::sleep_for(50ms);
+    tracker.drainAll();
+
+    ASSERT_EQ(future.wait_for(2s), std::future_status::ready);
+    const auto outcome = future.get();
+    EXPECT_FALSE(outcome.has_value());  // nullopt — тот же сигнал, что у обычного таймаута
+}

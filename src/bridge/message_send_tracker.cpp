@@ -152,4 +152,38 @@ void MessageSendTracker::resolveFailed(std::int64_t old_message_id, std::int32_t
     resolveWith(old_message_id, std::move(outcome));
 }
 
+void MessageSendTracker::drainAll() {
+    // Забираем все узлы разом под общим mutex_ (как claimExpired(max) в CorrelationMap) —
+    // единоличный резолв каждого узла сохраняется: он уже извлечён из map_, таймер-колбэк
+    // (если ещё не сработал) при claim() увидит пустую запись и станет no-op.
+    std::unordered_map<std::int64_t, std::shared_ptr<SendWaitState>> to_drain;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        to_drain.swap(map_);
+    }
+    for (auto& [id, state] : to_drain) {
+        {
+            std::lock_guard<std::mutex> lock(state->m);
+            if (state->resolved) {
+                continue;  // таймер уже выиграл гонку раньше — no-op
+            }
+            state->resolved = true;
+            // result остаётся nullopt — тот же сигнал, что и у обычного timeout-резолва.
+        }
+        trantor::EventLoop* loop = state->loop;
+        if (loop == nullptr || !loop->isRunning()) {
+            if (state->handle) {
+                state->handle.resume();
+            }
+            continue;
+        }
+        // state захвачен по значению => жив до resume (как в resolveWith).
+        loop->queueInLoop([state]() {
+            if (state->handle) {
+                state->handle.resume();
+            }
+        });
+    }
+}
+
 }  // namespace tgw::bridge

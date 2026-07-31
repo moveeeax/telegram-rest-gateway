@@ -64,6 +64,12 @@ class MessageSendTracker {
     void resolveFailed(std::int64_t old_message_id, std::int32_t error_code,
                        std::string error_message);
 
+    // Резолвит ВСЕ висящие waitFor() как таймаут (result остаётся nullopt — тот же сигнал, что
+    // и у обычного истечения timeout_). Аналог TdBridge::drainPending() (src/bridge/td_bridge.cpp).
+    // Вызывать на shutdown ДО quit(), пока IO-петли ещё живы: иначе резюм, замаршаленный через
+    // queueInLoop, потеряется и HTTP-хендлер (а с ним и claim Idempotency-Key) зависнет навсегда.
+    void drainAll();
+
    private:
     friend class Awaitable;
     bool tryInsert(std::int64_t old_message_id, std::shared_ptr<SendWaitState> state);

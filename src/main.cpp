@@ -374,13 +374,18 @@ int main(int argc, char** argv) {
     // намеренно (как s3-sync/healthcheck-потоки): при удалённом logout сигнал не придёт вовсе —
     // поток так и стоит в sigwait() до выхода процесса и ничего не трогает (bridge к тому моменту
     // отработал штатный shutdown-хвост ниже, чей bridge.stop() дренирует уже как backstop).
-    std::thread([&bridge, shutdown_signals]() {
+    std::thread([&bridge, &send_tracker, shutdown_signals]() {
         int sig = 0;
         if (sigwait(&shutdown_signals, &sig) != 0) {
             return;  // не должно случаться при валидном наборе
         }
         LOG_INFO << "received signal " << sig << ": draining bridge before quit";
         bridge.drainPending();
+        // MessageSendTracker дренируем тем же способом и на том же шаге: висящие waitFor()
+        // (humanize-typing) иначе не резолвятся при shutdown и вешают HTTP-хендлер навсегда
+        // (см. комментарий у MessageSendTracker::drainAll). Дёшево вызывать безусловно — при
+        // выключенном humanize-typing карта пуста.
+        send_tracker.drainAll();
         drogon::app().getLoop()->queueInLoop([] { drogon::app().quit(); });
     }).detach();
 
