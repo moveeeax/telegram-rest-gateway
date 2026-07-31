@@ -95,12 +95,46 @@ function isPermanentError(e: unknown): boolean {
   return e instanceof MediaError && e.permanent;
 }
 
+/**
+ * Строгий allowlist медиа-типов для inline-рендера в браузере. Всё, что не совпало (в т.ч.
+ * text/html и другие сендер-контролируемые типы, а также image/svg+xml — может нести
+ * <script>), уходит как application/octet-stream + Content-Disposition: attachment, чтобы
+ * браузер не интерпретировал содержимое как разметку/скрипт при открытии media_url (stored
+ * XSS: mime_type в исходном сообщении контролирует отправитель, см. review finding).
+ */
+const INLINE_CONTENT_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/x-matroska",
+  "video/3gpp",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+  "audio/mp4",
+  "audio/x-m4a",
+  "audio/aac",
+  "application/pdf",
+]);
+
+function safeContentType(raw: string): { contentType: string; disposition?: string } {
+  const type = raw.split(";")[0].trim().toLowerCase();
+  if (INLINE_CONTENT_TYPES.has(type)) return { contentType: type };
+  return { contentType: "application/octet-stream", disposition: "attachment" };
+}
+
 export class MediaOffloader {
   private queue: MediaJob[] = [];
   // LRU на базе Map: порядок ключей — порядок вставки, "тронуть" ключ = delete+set (двигает его
   // в конец, most-recently-used), переполнение — удаляем самый старый (первый) ключ. См. SEEN_MAX_SIZE.
   private seen = new Map<string, true>();
   private running = true;
+  private busy = false;
   private s3: S3Client;
   private bucket: string;
   private prefix: string;
@@ -196,6 +230,27 @@ export class MediaOffloader {
     this.running = false;
   }
 
+  /**
+   * Ждёт опустошения очереди и завершения текущего in-flight job (best-effort, до timeoutMs),
+   * затем останавливает воркер. Вызывать на SIGTERM/SIGINT ДО process.exit — иначе очередь и
+   * in-flight job теряются безвозвратно: Kafka-offset для них уже закоммичен к моменту enqueue
+   * (enqueue() выполняется синхронно внутри eachMessage до возврата из колбэка), поэтому на
+   * рестарте они не передоставляются, а очередь сама по себе только in-memory.
+   */
+  async drain(timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while ((this.queue.length > 0 || this.busy) && Date.now() < deadline) {
+      await sleep(200);
+    }
+    this.running = false;
+    if (this.queue.length > 0 || this.busy) {
+      console.error(
+        `media: drain timed out with ${this.queue.length} queued job(s)` +
+          `${this.busy ? " + 1 in-flight" : ""} — those offloads will be lost`,
+      );
+    }
+  }
+
   private urlFor(key: string): string {
     if (this.publicBase) return `${this.publicBase}/${key}`;
     // Путь-стайл к S3-объекту (доступ по правам бакета/пресайну).
@@ -239,6 +294,7 @@ export class MediaOffloader {
         continue;
       }
       const key = this.jobKey(job);
+      this.busy = true;
       try {
         const result = await this.process(job);
         if (result === "retry") {
@@ -255,6 +311,8 @@ export class MediaOffloader {
           console.error(`media: retriable fail ${key}:`, e);
           this.requeueOrGiveUp(job, key, msg);
         }
+      } finally {
+        this.busy = false;
       }
       await sleep(50); // мягкий троттлинг
     }
@@ -325,8 +383,17 @@ export class MediaOffloader {
 
     const safeName = (job.file_name || "file").replace(/[^\w.\-]+/g, "_");
     const key = `${this.prefix}${job.session_id}/${job.chat_id}/${job.message_id}/${safeName}`;
+    const { contentType: safeType, disposition } = safeContentType(contentType);
     try {
-      await this.s3.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: bytes, ContentType: contentType }));
+      await this.s3.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          Body: bytes,
+          ContentType: safeType,
+          ...(disposition ? { ContentDisposition: disposition } : {}),
+        }),
+      );
     } catch (e: any) {
       throw new MediaError(`s3 put: ${String(e?.message ?? e)}`, false);
     }

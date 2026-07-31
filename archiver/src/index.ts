@@ -19,6 +19,7 @@ const PORT = Number(process.env.ARCHIVER_HTTP_PORT ?? "8090");
 const TOKEN = process.env.ARCHIVER_TOKEN ?? "";
 const GW_TEMPLATE = process.env.ARCHIVER_GATEWAY_TEMPLATE ?? "";
 const MAX_BODY_BYTES = 64 * 1024;
+const MEDIA_DRAIN_TIMEOUT_MS = Number(process.env.ARCHIVER_MEDIA_DRAIN_TIMEOUT_MS ?? "30000");
 
 // Fail-closed: без токена /search отдаёт весь архив переписки (все чаты, вся история), /stats
 // палит внутреннее состояние, а /backfill позволяет запустить бэкфилл с произвольным session_id —
@@ -255,7 +256,21 @@ async function runBackfill(state: BackfillState, base: string, token: string, se
         emptyRetries = 0;
         for (const m of page) {
           const row = messageRow(sessionId, m);
-          if (row.chat_id && row.message_id) { await store.upsertMessage(row); maybeOffload(row); state.messages_added++; }
+          if (row.chat_id && row.message_id) {
+            try {
+              await store.upsertMessage(row);
+              maybeOffload(row);
+              state.messages_added++;
+            } catch (e: any) {
+              // Единичный сбой хранилища не должен обрывать весь backfill (все оставшиеся чаты) —
+              // логируем и продолжаем со следующим сообщением, как соседний gwGet() уже делает для
+              // сбоя страницы (см. try/catch чуть выше по функции).
+              console.error(
+                `backfill: failed to store message ${row.chat_id}/${row.message_id}, skipping:`,
+                e?.message ?? e,
+              );
+            }
+          }
         }
         got += page.length;
         if (!next || next === cursor) break;
@@ -467,7 +482,16 @@ async function main() {
 }
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
-  process.on(sig, async () => { try { await consumer.disconnect(); media?.stop(); } finally { process.exit(0); } });
+  process.on(sig, async () => {
+    try {
+      // Отключаемся от Kafka ПЕРВЫМ — новые события больше не enqueue'ятся, дальше можно
+      // дренировать то, что уже в очереди/in-flight, не гоняясь за растущим хвостом.
+      await consumer.disconnect();
+      if (media) await media.drain(MEDIA_DRAIN_TIMEOUT_MS);
+    } finally {
+      process.exit(0);
+    }
+  });
 }
 
 main().catch((e) => { console.error("fatal:", e); process.exit(1); });
