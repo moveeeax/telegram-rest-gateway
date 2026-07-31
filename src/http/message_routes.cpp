@@ -543,14 +543,16 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
             uploadTaskQueue().runTaskInQueue([&bridge, client_id, upload_dir, chatId, req,
                                               cb = std::move(cb)]() mutable {
                 namespace fs = std::filesystem;
-                // ?type= валидируем ДО записи тела на диск: тело может быть до max_upload_bytes (default
-                // 64MiB), и раньше при невалидном type оно уже было бы записано, а ветка ошибки ниже не
-                // чистила директорию — накопление орфанных файлов на диск (см. фикс ниже, было решение
-                // 1.5/C10). Валидировать здесь дёшево: это тот же чистый список значений, что и ниже.
+                // ?type= валидируем ДО записи тела на диск: тело может быть до max_upload_bytes
+                // (default 64MiB), и раньше при невалидном type оно уже было бы записано, а ветка
+                // ошибки ниже не чистила директорию — накопление орфанных файлов на диск (см. фикс
+                // ниже, было решение 1.5/C10). Валидировать здесь дёшево: это тот же чистый список
+                // значений, что и ниже.
                 const std::string media_type = req->getParameter("type");
                 if (!media_type.empty() && media_type != "document" && media_type != "photo" &&
                     media_type != "video" && media_type != "voice" && media_type != "audio") {
-                    cb(serviceError("VALIDATION_ERROR", "type must be document|photo|video|voice|audio",
+                    cb(serviceError("VALIDATION_ERROR",
+                                    "type must be document|photo|video|voice|audio",
                                     drogon::k400BadRequest));
                     return;
                 }
