@@ -177,10 +177,13 @@ void MessageSendTracker::drainAll() {
             }
             continue;
         }
-        // state захвачен по значению => жив до resume (как в resolveWith).
-        loop->queueInLoop([state]() {
-            if (state->handle) {
-                state->handle.resume();
+        // Копия shared_ptr в обычную переменную: structured binding нельзя захватить в лямбду
+        // (clang-tidy это считает ошибкой компиляции). Захват по значению => жив до resume
+        // (как в resolveWith).
+        std::shared_ptr<SendWaitState> keep = state;
+        loop->queueInLoop([keep]() {
+            if (keep->handle) {
+                keep->handle.resume();
             }
         });
     }
