@@ -46,5 +46,10 @@ claude mcp add telegram -e TGW_BASE_URL=http://127.0.0.1:8080 \
 к гейтвею с его полным токеном для любого, кто достучится до порта. Явно принять этот
 риск (доверенная сеть, отладка) можно через `MCP_HTTP_ALLOW_INSECURE=1`.
 
+Клиент предъявляет токен одним из двух способов, значение одно и то же:
+`Authorization: Bearer <MCP_HTTP_TOKEN>` (Claude Code, curl) или `X-API-Key: <MCP_HTTP_TOKEN>`.
+Второй нужен для custom connector в claude.ai: там заголовок `Authorization` занят собственным
+OAuth-токеном claude.ai, а из пользовательских заголовков одобрен `X-API-Key`.
+
 `MCP_SESSION_TTL_MS` — таймаут простоя HTTP-сессии до автозакрытия (по умолчанию 30 минут).
 Клиенты, не присылающие `DELETE /mcp`, не копят сессии в памяти вечно.

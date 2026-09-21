@@ -389,12 +389,24 @@ if (HTTP_PORT) {
   const app = express();
   app.use(express.json({ limit: "8mb" }));
 
+  // Токен принимается из двух мест: `Authorization: Bearer <t>` (Claude Code, curl) и
+  // `X-API-Key: <t>` (custom connector claude.ai: там Authorization занят его собственным
+  // OAuth-токеном, а из пользовательских заголовков одобрен X-API-Key). Токен один и тот же.
+  const presentedToken = (req: express.Request): string => {
+    const auth = req.headers.authorization ?? "";
+    if (auth.startsWith("Bearer ")) return auth.slice("Bearer ".length);
+    const key = req.headers["x-api-key"];
+    if (typeof key === "string") return key;
+    if (Array.isArray(key) && key.length === 1) return key[0];
+    return "";
+  };
+
   const unauthorized = (req: express.Request, res: express.Response): boolean => {
     if (!HTTP_TOKEN) return false; // явный опт-аут через MCP_HTTP_ALLOW_INSECURE=1
     // Сравниваем не сами строки, а их SHA-256-дайджесты фиксированной длины: так timingSafeEqual
     // не бросает исключение при разной длине токенов и не даёт судить о ней по времени ответа.
-    const got = createHash("sha256").update(req.headers.authorization ?? "").digest();
-    const want = createHash("sha256").update(`Bearer ${HTTP_TOKEN}`).digest();
+    const got = createHash("sha256").update(presentedToken(req)).digest();
+    const want = createHash("sha256").update(HTTP_TOKEN).digest();
     if (!timingSafeEqual(got, want)) {
       res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized" }, id: null });
       return true;
