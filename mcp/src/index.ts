@@ -401,8 +401,24 @@ if (HTTP_PORT) {
     return "";
   };
 
+  // Рукопожатие протокола без ключа: claude.ai проверяет custom connector пробным POST /mcp
+  // БЕЗ пользовательских заголовков, и на 401 уходит в OAuth-обнаружение, которого здесь нет.
+  // Поэтому initialize/ping/tools/list (ничего про аккаунт не раскрывают) пропускаются без
+  // токена, а любой вызов инструмента и всё остальное — только с ним.
+  const HANDSHAKE_METHODS = new Set(["initialize", "notifications/initialized", "ping", "tools/list"]);
+  const isHandshakeOnly = (body: unknown): boolean => {
+    const msgs = Array.isArray(body) ? body : [body];
+    return (
+      msgs.length > 0 &&
+      msgs.every(
+        (m) => m !== null && typeof m === "object" && HANDSHAKE_METHODS.has((m as { method?: unknown }).method as string),
+      )
+    );
+  };
+
   const unauthorized = (req: express.Request, res: express.Response): boolean => {
     if (!HTTP_TOKEN) return false; // явный опт-аут через MCP_HTTP_ALLOW_INSECURE=1
+    if (req.method === "POST" && isHandshakeOnly(req.body)) return false;
     // Сравниваем не сами строки, а их SHA-256-дайджесты фиксированной длины: так timingSafeEqual
     // не бросает исключение при разной длине токенов и не даёт судить о ней по времени ответа.
     const got = createHash("sha256").update(presentedToken(req)).digest();
