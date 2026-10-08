@@ -147,6 +147,66 @@ jobs:
           tags: ${{ steps.meta.outputs.image }}
           cache-from: type=gha,scope=builder
 
+  # arm64-тулчейн: тот же рецепт и тот же content-hash, тег с суффиксом -arm64.
+  # Собирается нативно на ubuntu-24.04-arm (TDLib под QEMU нереалистична) и только
+  # если такого тега ещё нет. Нужен только publish'у: тесты гоняются на amd64.
+  builder-arm64:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      available: ${{ steps.meta.outputs.available }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        run: |
+          tdlib=$(grep -E '^TDLIB_REF=' TDLIB_REF | cut -d= -f2)
+          drogon=$(grep -E '^DROGON_REF=' DROGON_REF | cut -d= -f2)
+          hash=$(cat Dockerfile.builder TDLIB_REF DROGON_REF | sha256sum | cut -c1-16)
+          image="${BUILDER_IMAGE}:${hash}-arm64"
+          {
+            echo "tdlib=$tdlib"
+            echo "drogon=$drogon"
+            echo "image=$image"
+          } >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+            echo "content-тег уже в GHCR: $image — пересборка не нужна"
+            echo "exists=true"    >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
+            # Форк-PR: пушить нельзя, а локальная arm64-сборка TDLib на каждый
+            # форк-PR слишком дорога. Рецепт и так проверяет amd64-builder.
+            echo "форк-PR: $image отсутствует, пуш недоступен — пропускаем"
+            echo "exists=false"    >> "$GITHUB_OUTPUT"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "content-тег $image отсутствует — соберём и запушим"
+            echo "exists=false"   >> "$GITHUB_OUTPUT"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: build+push arm64 builder (content tag)
+        if: steps.meta.outputs.exists == 'false' && steps.meta.outputs.available == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.builder
+          platforms: linux/arm64
+          build-args: |
+            TDLIB_REF=${{ steps.meta.outputs.tdlib }}
+            DROGON_REF=${{ steps.meta.outputs.drogon }}
+          tags: ${{ steps.meta.outputs.image }}
+          push: true
+          cache-from: type=gha,scope=builder-arm64
+          cache-to: type=gha,mode=max,scope=builder-arm64
+
   test-asan:
     needs: builder
     if: needs.builder.outputs.available == 'true'
@@ -237,17 +297,28 @@ jobs:
   # Публикация образов в GHCR. Только push в main или git-тег vX.Y.Z — из PR (в т.ч.
   # форков) не срабатывает, поэтому read-only токен форка пайплайн не красит.
   # Гейт на зелёные санитайзеры/tidy/exe — не публикуем непроверенное.
-  # ВНИМАНИЕ (multi-arch): корневой Dockerfile делает FROM ${BUILDER_IMAGE}, а builder
-  # нативен per-arch (сборка TDLib под qemu нереалистична по времени/памяти). arm64-образ
-  # потребовал бы отдельного arm64-builder'а — пока публикуем ТОЛЬКО amd64. Подробности и
-  # TODO по arm64 — в docs/CICD.md.
+  # Multi-arch: каждая архитектура собирается нативно на своём раннере, корневой
+  # Dockerfile делает FROM builder своей архитектуры (amd64: builder:<hash>,
+  # arm64: builder:<hash>-arm64). Образы пушатся по дайджесту без тегов, теги
+  # :<short-sha> и :vX.Y.Z ставит publish-merge, склеивая обе архитектуры.
   publish:
-    needs: [builder, test-asan, test-tsan, tidy, build-app]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
+    name: publish (${{ matrix.arch }})
+    needs: [builder, builder-arm64, test-asan, test-tsan, tidy, build-app]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && needs.builder-arm64.outputs.available == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
+    env:
+      GW_IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -256,47 +327,89 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: tags
-        run: |
-          sha=$(git rev-parse --short HEAD)
-          gw="ghcr.io/${{ github.repository }}"
-          ar="ghcr.io/${{ github.repository }}-archiver"
-          mc="ghcr.io/${{ github.repository }}-mcp"
-          gw_tags="${gw}:${sha}"; ar_tags="${ar}:${sha}"; mc_tags="${mc}:${sha}"
-          # На git-теге vX.Y.Z добавляем человекочитаемый версионный тег.
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            gw_tags="${gw_tags},${gw}:${GITHUB_REF_NAME}"
-            ar_tags="${ar_tags},${ar}:${GITHUB_REF_NAME}"
-            mc_tags="${mc_tags},${mc}:${GITHUB_REF_NAME}"
-          fi
-          {
-            echo "gw_tags=$gw_tags"
-            echo "ar_tags=$ar_tags"
-            echo "mc_tags=$mc_tags"
-          } >> "$GITHUB_OUTPUT"
-      # Корневой сервис: FROM content-addressed builder (тот же, что гоняли тесты).
-      - name: build+push gateway
+      # Корневой сервис: FROM content-addressed builder своей архитектуры.
+      - name: build+push gateway (by digest)
+        id: gateway
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
+          platforms: linux/${{ matrix.arch }}
           build-args: |
-            BUILDER_IMAGE=${{ needs.builder.outputs.image }}
-          tags: ${{ steps.tags.outputs.gw_tags }}
-          push: true
-          cache-from: type=gha,scope=gateway
-          cache-to: type=gha,mode=max,scope=gateway
-      - name: build+push archiver
+            BUILDER_IMAGE=${{ matrix.arch == 'arm64' && needs.builder-arm64.outputs.image || needs.builder.outputs.image }}
+          outputs: type=image,name=${{ env.GW_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch == 'arm64' && 'gateway-arm64' || 'gateway' }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch == 'arm64' && 'gateway-arm64' || 'gateway' }}
+      - name: build+push archiver (by digest)
+        id: archiver
         uses: docker/build-push-action@v6
         with:
           context: archiver
           file: archiver/Dockerfile
-          tags: ${{ steps.tags.outputs.ar_tags }}
-          push: true
-      - name: build+push mcp
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.GW_IMAGE }}-archiver,push-by-digest=true,name-canonical=true,push=true
+      - name: build+push mcp (by digest)
+        id: mcp
         uses: docker/build-push-action@v6
         with:
           context: mcp
           file: mcp/Dockerfile
-          tags: ${{ steps.tags.outputs.mc_tags }}
-          push: true
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.GW_IMAGE }}-mcp,push-by-digest=true,name-canonical=true,push=true
+      - name: export digests
+        env:
+          GW_DIGEST: ${{ steps.gateway.outputs.digest }}
+          AR_DIGEST: ${{ steps.archiver.outputs.digest }}
+          MC_DIGEST: ${{ steps.mcp.outputs.digest }}
+        run: |
+          mkdir -p digests
+          echo "$GW_DIGEST" > digests/gateway
+          echo "$AR_DIGEST" > digests/archiver
+          echo "$MC_DIGEST" > digests/mcp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Склейка per-arch дайджестов в multi-arch теги. Теги те же, что раньше:
+  # :<short-sha> всегда, :vX.Y.Z дополнительно на git-теге.
+  publish-merge:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digests-*
+          path: digests
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: create multi-arch tags
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse --short HEAD)
+          base="ghcr.io/${{ github.repository }}"
+          for img in gateway archiver mcp; do
+            case "$img" in
+              gateway) name="$base" ;;
+              *)       name="${base}-${img}" ;;
+            esac
+            tags=(-t "${name}:${sha}")
+            # На git-теге vX.Y.Z добавляем человекочитаемый версионный тег.
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+              tags+=(-t "${name}:${GITHUB_REF_NAME}")
+            fi
+            docker buildx imagetools create "${tags[@]}" \
+              "${name}@$(cat digests/digests-amd64/${img})" \
+              "${name}@$(cat digests/digests-arm64/${img})"
+            docker buildx imagetools inspect "${name}:${sha}"
+          done

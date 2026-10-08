@@ -79,21 +79,21 @@ docker build -f Dockerfile.builder \
 
 Теги: `:<short-sha>` — всегда; дополнительно `:vX.Y.Z` — на git-теге.
 
-> **⚠️ Пока только amd64 (arm64 — TODO).** Старый GitLab-пайплайн собирал multi-arch
-> (amd64+arm64) нативно на per-arch раннерах и склеивал манифест. Корневой `Dockerfile`
-> делает `FROM ${BUILDER_IMAGE}`, а тулчейн-образ **нативен per-arch** (сборка TDLib под
-> QEMU-эмуляцию нереалистична по времени и памяти — `td_api.cpp` требует ≥8 ГБ RAM).
-> Значит, arm64-образ сервиса потребовал бы отдельного **arm64-builder'а**. Публичные
-> arm64-раннеры (`ubuntu-24.04-arm`) в GitHub есть, но бутстрап arm64-тулчейна внутри
-> publish-джоба (который нельзя прогнать до мержа) — заметный риск и время. Приоритет
-> задачи — **вернуть публикацию как таковую** (образов не было вовсе, оба секьюрити-фикса
-> не выпущены), поэтому publish сейчас **amd64-only**.
->
-> **TODO (arm64):** завести джоб `builder-arm64` на `ubuntu-24.04-arm` (тот же
-> content-addressed тег с суффиксом `-arm64`, собирается при отсутствии), publish-джоб
-> для arm64 на arm64-раннере с `--build-arg BUILDER_IMAGE=<builder>:<hash>-arm64`, и
-> `docker buildx imagetools create` для склейки `:<short-sha>` из per-arch образов —
-> как `image:manifest` в старом `.gitlab-ci.yml`.
+Образы multi-arch: `linux/amd64` + `linux/arm64`. Корневой `Dockerfile` делает
+`FROM ${BUILDER_IMAGE}`, а тулчейн-образ нативен per-arch (сборка TDLib под QEMU-эмуляцию
+нереалистична по времени и памяти — `td_api.cpp` требует ≥8 ГБ RAM), поэтому каждая
+архитектура собирается на своём раннере:
+
+- `builder` (`ubuntu-latest`) — `builder:<hash>`, на нём же гоняются тесты/tidy/build-app;
+- `builder-arm64` (`ubuntu-24.04-arm`) — тот же content-hash с суффиксом: `builder:<hash>-arm64`,
+  собирается только при отсутствии тега, нужен только publish'у;
+- `publish` — матрица amd64/arm64 на нативных раннерах, каждая нога собирает три образа
+  со своим builder'ом и пушит их по дайджесту, без тегов;
+- `publish-merge` — `docker buildx imagetools create` склеивает дайджесты обеих архитектур
+  в `:<short-sha>` (и `:vX.Y.Z` на теге), как `image:manifest` в старом `.gitlab-ci.yml`.
+
+Первый прогон после смены рецепта builder'а собирает TDLib на arm64 с нуля: это самый
+долгий джоб пайплайна. Дальше `builder:<hash>-arm64` переиспользуется.
 
 ### Форки
 
