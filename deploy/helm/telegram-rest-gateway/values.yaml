@@ -75,7 +75,7 @@ ingress:
   className: "traefik"
   annotations: {}
   # CIDR, которым разрешен доступ (Traefik Middleware ipAllowList). Работает, только если
-  # Traefik видит реальный IP клиента (в oci-k3s: PROXY protocol от LB). Пример: ["203.0.113.7/32"]
+  # Traefik видит реальный IP клиента (в oci-k3s на 2026-10-18 не видит, см. DEPLOY.md). Пример: ["203.0.113.7/32"]
   ipAllowList: []
   # Выставить наружу форму логина /ui (без Bearer-auth, держится только на allowlist).
   exposeLoginUi: false

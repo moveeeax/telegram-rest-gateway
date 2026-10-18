@@ -1,6 +1,6 @@
 {{- if and .Values.ingress.enabled .Values.ingress.ipAllowList }}
 # IP-allowlist для Ingress MCP и архиватора (Traefik). Работает, только если Traefik видит
-# реальный IP клиента: в oci-k3s это обеспечивает PROXY protocol от LB (см. DEPLOY.md).
+# реальный IP клиента: в oci-k3s на 2026-10-18 это НЕ так, см. DEPLOY.md.
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:

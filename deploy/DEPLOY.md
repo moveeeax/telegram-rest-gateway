@@ -136,9 +136,14 @@ Allowlist задается списком CIDR в `ingress.ipAllowList`. Чар�
 тоже обслуживает Traefik, так что имя класса ничего не гарантирует. Осознанный опт-аут
 `ingress.allowOpenIngress=true`.
 
-Allowlist работает, только если Traefik видит реальный IP клиента. В `oci-k3s` на entrypoint'ах
-`web` и `websecure` включен PROXY protocol с `trustedIPs` балансировщика (`130.61.178.81/32`), так
-что адрес клиента должен доходить. Проверять это после каждой смены LB или Traefik (см. ниже).
+Allowlist работает, только если Traefik видит реальный IP клиента. В `oci-k3s` он его НЕ видит
+(проверено 2026-10-18): на entrypoint'ах `web` и `websecure` прописан PROXY protocol с
+`trustedIPs` балансировщика, но все внешние запросы доходят до Traefik с адресом LB
+`130.61.178.81`. Allowlist с внешним адресом клиента режет всех, allowlist с адресом LB пускает
+всех. Поэтому прод сейчас открыт (`allowOpenIngress=true`): `/v1` под Bearer-токеном, MCP под
+своим токеном, `/ui` и `/metrics` наружу не выставлены. Чтобы вернуть allowlist, сначала нужно
+доставить IP клиента до Traefik (PROXY protocol на стороне OCI LB или `externalTrafficPolicy: Local`)
+и повторить проверку ниже.
 
 Таймауты: у `websecure` `readTimeout`, `writeTimeout` и `idleTimeout` по 3600 с. Это покрывает
 Streamable HTTP MCP и паузы humanize-typing гейтвея (до 90 с), отдельные аннотации не нужны.
