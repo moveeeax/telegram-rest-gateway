@@ -124,6 +124,9 @@ S3SessionSync::S3SessionSync(std::string database_dir, PutFn put)
     : database_dir_(std::move(database_dir)), put_(std::move(put)) {}
 
 bool S3SessionSync::syncOnce() {
+    if (disabled_->load(std::memory_order_acquire)) {
+        return false;
+    }
     const auto data = readBinlog(database_dir_);
     if (!data) {
         return false;
@@ -163,7 +166,9 @@ bool SyncGate::finishStep() {
 
 S3SyncHandle startS3Sync(tgw::util::S3Config s3, std::string database_dir, int interval_seconds) {
     auto gate = std::make_shared<SyncGate>();
-    S3SyncHandle handle{gate->inFlight(), [] {}};
+    auto disabled = std::make_shared<std::atomic_bool>(false);
+    S3SyncHandle handle{gate->inFlight(), [] {},
+                        [disabled] { disabled->store(true, std::memory_order_release); }, disabled};
     if (!s3.enabled()) {
         return handle;
     }
@@ -177,6 +182,11 @@ S3SyncHandle startS3Sync(tgw::util::S3Config s3, std::string database_dir, int i
             }
             return result.ok();
         });
+    // Флаг один на хэндл и на синк: disable() из logout виден и тику, и финальному push в main.
+    handle.disable = [sync, disabled] {
+        disabled->store(true, std::memory_order_release);
+        sync->disable();
+    };
     // Запрос во время идущего шага (напр. push_now на Ready, пока тик таймера читает binlog еще
     // до авторизации) не теряется: SyncGate откладывает его, и поток делает еще один шаг.
     auto tick = [sync, gate]() {

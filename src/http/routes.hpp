@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace tgw::bridge {
@@ -16,9 +17,12 @@ struct Config;
 
 namespace tgw::http {
 
-// Регистрирует REST-маршруты этапов 1–2: health, ready, me, auth/* (+ session export).
+// Регистрирует REST-маршруты этапов 1–2: health, ready, me, auth/* (+ session export, если
+// session_export_enabled). on_logout вызывается перед td logOut: выключает S3-синк, чтобы снимок
+// после logout не ушел в S3.
 void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
-                    tgw::auth::AuthStateManager& auth, const std::string& database_dir);
+                    tgw::auth::AuthStateManager& auth, const std::string& database_dir,
+                    bool session_export_enabled, std::function<void()> on_logout);
 
 // Регистрирует REST-маршруты этапов 3/5: chats, история, отправка, чтение, файлы.
 // upload_dir — каталог для временных файлов аплоада (создаётся в main). config/tracker нужны

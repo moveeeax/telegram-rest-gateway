@@ -225,7 +225,8 @@ TEST(RouteSmoke, TelegramErrorMappingChatNotFoundIs404) {
 // его 401 без токена.
 TEST(RouteSmoke, ExportRouteDisabledByFlag) {
     using tgw::http::routeEnabled;
-    EXPECT_FALSE(routeEnabled(tgw::http::kAuthSessionExportRoute, /*session_export_enabled=*/false));
+    EXPECT_FALSE(
+        routeEnabled(tgw::http::kAuthSessionExportRoute, /*session_export_enabled=*/false));
     EXPECT_TRUE(routeEnabled(tgw::http::kAuthSessionExportRoute, true));
     for (const auto& route : tgw::http::kRoutesTable) {
         if (route.path != tgw::http::kAuthSessionExportRoute.path) {

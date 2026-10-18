@@ -415,7 +415,11 @@ int main(int argc, char** argv) {
     drogon::app().setIdleConnectionTimeout(
         static_cast<std::size_t>(config.idle_connection_timeout_seconds));
 
-    tgw::http::registerRoutes(bridge, client_id, auth, config.database_directory);
+    tgw::http::registerRoutes(bridge, client_id, auth, config.database_directory,
+                              config.session_export_enabled, [disable = s3_sync.disable] {
+                                  LOG_WARN << "logout requested: s3 sync disabled";
+                                  disable();
+                              });
     tgw::http::registerMessageRoutes(bridge, client_id, upload_dir, config, send_tracker);
     tgw::http::registerDirectoryRoutes(bridge, client_id);
     tgw::ws::WsSubscriberRegistry::instance().setMaxPendingBytes(config.ws_max_pending_bytes);
@@ -474,7 +478,11 @@ int main(int argc, char** argv) {
     }
 
     // Финальный push сессии в S3: binlog закрыт TDLib и консистентен (no-op если S3 выключен).
-    if (config.s3.enabled()) {
+    // После POST /v1/auth/logout снимок в S3 не трогаем: TDLib стер локальные данные, объект в
+    // S3 удаляет control plane, когда под остановлен.
+    if (config.s3.enabled() && s3_sync.disabled->load(std::memory_order_acquire)) {
+        LOG_INFO << "s3 sync disabled after logout — final push skipped";
+    } else if (config.s3.enabled()) {
         // Дожидаемся незавершённого фонового sync-PUT. Loop Drogon уже остановлен — новых
         // runEvery не будет, но detached-поток мог стартовать до quit. Бюджет = hang-timeout
         // send() + запас: до send() detached-поток ещё спаунится, читает и хэширует binlog,
