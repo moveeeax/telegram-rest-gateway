@@ -119,37 +119,64 @@ bool pushToS3(const tgw::util::S3Config& s3, const std::string& database_dir) {
     return result.ok();
 }
 
-std::shared_ptr<std::atomic_bool> startS3Sync(tgw::util::S3Config s3, std::string database_dir,
-                                              int interval_seconds) {
-    auto in_flight = std::make_shared<std::atomic_bool>(false);
-    if (!s3.enabled()) {
-        return in_flight;
+S3SessionSync::S3SessionSync(std::string database_dir, PutFn put)
+    : database_dir_(std::move(database_dir)), put_(std::move(put)) {}
+
+bool S3SessionSync::syncOnce() {
+    const auto data = readBinlog(database_dir_);
+    if (!data) {
+        return false;
     }
-    auto last_hash = std::make_shared<std::string>();
-    drogon::app().getLoop()->runEvery(
-        static_cast<double>(interval_seconds),
-        [s3 = std::move(s3), database_dir = std::move(database_dir), last_hash, in_flight]() {
-            // Колбэк исполняется на главном event-loop Drogon. S3Client::send блокирующий,
-            // поэтому саму заливку уносим в отдельный поток, чтобы не застопорить loop.
-            if (in_flight->exchange(true)) {
-                return;  // предыдущий push ещё идёт
+    std::string hash = tgw::util::sha256Hex(*data);
+    if (hash == last_hash_ || !put_(*data)) {
+        return false;
+    }
+    last_hash_ = std::move(hash);
+    LOG_INFO << "s3 sync: session pushed (" << data->size() << " bytes)";
+    return true;
+}
+
+S3SyncHandle startS3Sync(tgw::util::S3Config s3, std::string database_dir, int interval_seconds) {
+    S3SyncHandle handle{std::make_shared<std::atomic_bool>(false), [] {}};
+    if (!s3.enabled()) {
+        return handle;
+    }
+    auto sync = std::make_shared<S3SessionSync>(
+        std::move(database_dir), [s3 = std::move(s3)](const std::string& data) {
+            const tgw::util::S3Client client(s3);
+            const auto result = client.put(data);
+            if (!result.ok()) {
+                LOG_WARN << "s3 sync: push failed: http=" << result.http_status << " "
+                         << result.error;
             }
-            std::thread([s3, database_dir, last_hash, in_flight]() {
-                const auto data = readBinlog(database_dir);
-                if (data) {
-                    const std::string hash = tgw::util::sha256Hex(*data);
-                    if (*last_hash != hash) {  // изменился — заливаем
-                        const tgw::util::S3Client client(s3);
-                        if (client.put(*data).ok()) {
-                            *last_hash = hash;
-                            LOG_INFO << "s3 sync: session pushed (" << data->size() << " bytes)";
-                        }
-                    }
-                }
-                in_flight->store(false);
-            }).detach();
+            return result.ok();
         });
-    return in_flight;
+    // rerun: шаг запрошен, пока шел предыдущий (напр. push_now на Ready во время тика таймера,
+    // который мог прочитать binlog еще до авторизации). Поток повторяет шаг, а не теряет запрос.
+    auto in_flight = handle.in_flight;
+    auto rerun = std::make_shared<std::atomic_bool>(false);
+    auto tick = [sync, in_flight, rerun]() {
+        // Колбэк исполняется на главном event-loop Drogon. S3Client::send блокирующий,
+        // поэтому саму заливку уносим в отдельный поток, чтобы не застопорить loop.
+        if (in_flight->exchange(true)) {
+            rerun->store(true);
+            return;
+        }
+        std::thread([sync, in_flight, rerun]() {
+            for (;;) {
+                rerun->store(false);
+                sync->syncOnce();
+                in_flight->store(false);
+                // Запрос, пришедший после store(false), сам займет in_flight и запустит поток.
+                if (!rerun->load() || in_flight->exchange(true)) {
+                    break;
+                }
+            }
+        }).detach();
+    };
+    drogon::app().getLoop()->runEvery(static_cast<double>(interval_seconds), tick);
+    handle.push_now = [tick]() { drogon::app().getLoop()->queueInLoop(tick); };
+    return handle;
 }
 
 }  // namespace tgw::auth

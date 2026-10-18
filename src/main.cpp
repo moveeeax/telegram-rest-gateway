@@ -291,12 +291,23 @@ int main(int argc, char** argv) {
         LOG_INFO << "webhooks enabled (registry store key " << webhook_key << ")";
     }
 
+    // Периодический бэкап сессии в S3 (no-op если S3 не сконфигурирован). in_flight нужен, чтобы
+    // на shutdown дождаться незавершённого фонового PUT перед финальным push. Создается до
+    // setOnReady: колбэк Ready сразу пушит свежий binlog, не дожидаясь тика таймера (иначе
+    // логин, сделанный за секунды до рестарта пода, терялся бы).
+    const auto s3_sync = tgw::auth::startS3Sync(config.s3, config.database_directory,
+                                                config.s3_sync_interval_seconds);
+    const auto& s3_sync_in_flight = s3_sync.in_flight;
+
     // Колбэки регистрируем ДО start(): восстановленная из S3/TGW_SESSION сессия доходит до
     // Ready ещё в StartupBootstrapper — регистрация после него теряет событие.
     // Warmup чатов (§бэклог ChatCache): TDLib наполняет главный список лениво — без прогрева
     // первый GET /v1/chats после старта может отдать частичный список. Fire-and-forget.
     const bool keep_online = config.keep_online;
-    auth.setOnReady([&bridge, client_id, keep_online, webhooks_enabled, owner_id] {
+    auth.setOnReady([&bridge, client_id, keep_online, webhooks_enabled, owner_id,
+                     push_now = s3_sync.push_now] {
+        LOG_INFO << "s3 sync: push on ready";
+        push_now();
         auto load = td_api::make_object<td_api::loadChats>();
         load->chat_list_ = td_api::make_object<td_api::chatListMain>();
         load->limit_ = 100;
@@ -421,10 +432,6 @@ int main(int argc, char** argv) {
     // конкурентный доступ к RdKafka::Producer -> heap corruption на amd64 (arm64 терпел). Продюсер
     // теперь single-owner: приёмник во время работы, shutdown-flush уже ПОСЛЕ join приёмника.
 
-    // Периодический бэкап сессии в S3 (no-op если S3 не сконфигурирован). in_flight нужен, чтобы
-    // на shutdown дождаться незавершённого фонового PUT перед финальным push.
-    auto s3_sync_in_flight = tgw::auth::startS3Sync(config.s3, config.database_directory,
-                                                    config.s3_sync_interval_seconds);
 
     LOG_INFO << "telegram-rest-gateway listening on " << config.listen_address << ":"
              << config.listen_port;
