@@ -90,3 +90,37 @@ TEST(S3SessionSync, MissingBinlogNoPut) {
     EXPECT_FALSE(sync.syncOnce());
     EXPECT_TRUE(put.calls.empty());
 }
+
+using tgw::auth::SyncGate;
+
+TEST(SyncGate, FirstRequestStartsWorker) {
+    SyncGate gate;
+    EXPECT_TRUE(gate.tryStart());
+    EXPECT_TRUE(gate.inFlight()->load());
+}
+
+TEST(SyncGate, RequestWhileRunningIsCoalescedNotLost) {
+    SyncGate gate;
+    ASSERT_TRUE(gate.tryStart());
+    EXPECT_FALSE(gate.tryStart());  // поток уже идет: запрос откладывается
+    EXPECT_TRUE(gate.finishStep());  // отложенный запрос: еще один шаг
+    EXPECT_TRUE(gate.inFlight()->load());  // между шагами in_flight не сбрасывается
+    EXPECT_FALSE(gate.finishStep());  // больше запросов нет: поток выходит
+    EXPECT_FALSE(gate.inFlight()->load());
+}
+
+TEST(SyncGate, SeveralRequestsWhileRunningGiveOneExtraStep) {
+    SyncGate gate;
+    ASSERT_TRUE(gate.tryStart());
+    EXPECT_FALSE(gate.tryStart());
+    EXPECT_FALSE(gate.tryStart());
+    EXPECT_TRUE(gate.finishStep());
+    EXPECT_FALSE(gate.finishStep());
+}
+
+TEST(SyncGate, RestartAfterFinish) {
+    SyncGate gate;
+    ASSERT_TRUE(gate.tryStart());
+    ASSERT_FALSE(gate.finishStep());
+    EXPECT_TRUE(gate.tryStart());
+}
