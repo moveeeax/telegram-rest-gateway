@@ -40,9 +40,15 @@ MW_KEY='ingress.annotations.traefik\.ingress\.kubernetes\.io/router\.middlewares
 # --- gateway chart ---
 assert_fails "guard: no protection" "${GW_ARGS[@]}" --set ingress.allowOpenIngress=false
 
-if render "guard: nginx annotation" "${GW_ARGS[@]}" \
-    --set-string 'ingress.annotations.nginx\.ingress\.kubernetes\.io/whitelist-source-range=1.2.3.4/32' >/dev/null; then
-    pass "guard: nginx annotation"; else FAILED=1; fi
+NGINX_WL='ingress.annotations.nginx\.ingress\.kubernetes\.io/whitelist-source-range'
+# nginx-аннотация засчитывается только для nginx-контроллера: Traefik ее не читает.
+if render "guard: nginx annotation on nginx" "${GW_ARGS[@]}" --set ingress.className=nginx \
+    --set-string "$NGINX_WL=1.2.3.4/32" >/dev/null; then
+    pass "guard: nginx annotation on nginx"; else FAILED=1; fi
+assert_fails "guard: nginx annotation on traefik" "${GW_ARGS[@]}" --set-string "$NGINX_WL=1.2.3.4/32"
+assert_fails "guard: empty middlewares" "${GW_ARGS[@]}" --set-string "$MW_KEY="
+assert_fails "guard: traefik annotation on nginx" "${GW_ARGS[@]}" --set ingress.className=nginx \
+    --set-string "$MW_KEY=x@kubernetescrd"
 
 if render "guard: traefik middlewares" "${GW_ARGS[@]}" --set-string "$MW_KEY=x@kubernetescrd" >/dev/null; then
     pass "guard: traefik middlewares"; else FAILED=1; fi
@@ -73,6 +79,8 @@ TOOLS_ARGS=(tt "$TOOLS" --namespace tgw --set archiver.image.tag=x --set mcp.ima
             --set-string 'mcp.accounts[0].sessionId=111' --set-string 'mcp.accounts[1].sessionId=222')
 
 assert_fails "tools guard: no protection" "${TOOLS_ARGS[@]}"
+assert_fails "tools guard: nginx annotation on traefik" "${TOOLS_ARGS[@]}" --set-string "$NGINX_WL=1.2.3.4/32"
+assert_fails "tools guard: empty middlewares" "${TOOLS_ARGS[@]}" --set-string "$MW_KEY="
 
 out="$(render "tools allowlist" "${TOOLS_ARGS[@]}" --set 'ingress.ipAllowList={203.0.113.7/32}')" || { out=""; FAILED=1; }
 # Документы Ingress по одному: awk режет вывод по '---' и берет документ с нужным именем.
