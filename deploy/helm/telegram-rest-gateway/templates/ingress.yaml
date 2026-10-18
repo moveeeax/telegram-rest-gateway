@@ -11,9 +11,9 @@ metadata:
   labels:
     {{- include "tgw.labels" $ | nindent 4 }}
     tgw.tarassov.me/session-id: {{ $account.sessionId | quote }}
-  {{- with $.Values.ingress.annotations }}
+  {{- with include "tgw.ingressAnnotations" $ }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
 spec:
   {{- with $.Values.ingress.className }}
@@ -22,14 +22,26 @@ spec:
   rules:
     - host: {{ $host | quote }}
       http:
+        # Наружу только API и (по флагу) форма логина. /metrics и корень (редирект на /ui) не
+        # выставляются. Traefik матчит префикс с учетом регистра, поэтому /METRICS и /UI сюда
+        # тоже не попадают, хотя Drogon внутри матчит пути без учета регистра.
         paths:
-          - path: /
+          - path: /v1
             pathType: Prefix
             backend:
               service:
                 name: {{ include "tgw.accountName" $ctx }}
                 port:
                   name: http
+          {{- if $.Values.ingress.exposeLoginUi }}
+          - path: /ui
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "tgw.accountName" $ctx }}
+                port:
+                  name: http
+          {{- end }}
   {{- if $.Values.ingress.tls.enabled }}
   tls:
     - hosts: [{{ $host | quote }}]

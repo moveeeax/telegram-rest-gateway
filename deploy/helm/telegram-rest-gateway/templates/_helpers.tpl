@@ -34,13 +34,42 @@ tgw.tarassov.me/session-id: {{ .account.sessionId | quote }}
 {{- replace "{sessionId}" .account.sessionId .root.Values.ingress.hostTemplate -}}
 {{- end -}}
 
-{{/* Guard: ingress без whitelist-source-range выставляет /ui (форма логина аккаунта) и
-     /metrics (без Bearer-auth) в открытый интернет — они полагаются ИСКЛЮЧИТЕЛЬНО на
-     IP-allowlist (см. DEPLOY.md). Тот же fail-fast принцип, что у tgw.imageTag выше: явная
-     ошибка на старте вместо тихой дыры в проде. allowOpenIngress — осознанный опт-аут (напр.
-     если доступ ограничен иначе — mTLS/VPN/NetworkPolicy). */}}
+{{/* Guard: ingress без IP-allowlist выставляет в интернет то, что полагается только на него
+     (форма логина /ui без Bearer-auth, /v1/auth/* под admin-токеном). Тот же fail-fast принцип,
+     что у tgw.imageTag выше: явная ошибка на старте вместо тихой дыры в проде. Защитой считается
+     любое из: ingress.ipAllowList (Traefik Middleware из этого чарта), своя Traefik-аннотация
+     router.middlewares, nginx whitelist-source-range (для nginx-контроллера; Traefik ее не читает).
+     allowOpenIngress: осознанный опт-аут, если доступ ограничен иначе (mTLS, VPN, NetworkPolicy). */}}
 {{- define "tgw.ingressGuard" -}}
-{{- if and .Values.ingress.enabled (not .Values.ingress.allowOpenIngress) (not (hasKey (.Values.ingress.annotations | default dict) "nginx.ingress.kubernetes.io/whitelist-source-range")) -}}
-{{- fail "ingress.enabled=true без nginx.ingress.kubernetes.io/whitelist-source-range: /ui и /metrics не защищены Bearer-auth и полагаются на IP-allowlist (см. DEPLOY.md). Задай аннотацию, либо прими риск явно через ingress.allowOpenIngress=true." -}}
+{{- $ann := .Values.ingress.annotations | default dict -}}
+{{- $protected := or .Values.ingress.allowOpenIngress
+      (gt (len (.Values.ingress.ipAllowList | default list)) 0)
+      (hasKey $ann "traefik.ingress.kubernetes.io/router.middlewares")
+      (hasKey $ann "nginx.ingress.kubernetes.io/whitelist-source-range") -}}
+{{- if and .Values.ingress.enabled (not $protected) -}}
+{{- fail "ingress.enabled=true без IP-allowlist: /ui и /v1/auth/* полагаются на ограничение по IP (см. DEPLOY.md). Задай ingress.ipAllowList, либо аннотацию traefik.ingress.kubernetes.io/router.middlewares (Traefik) или nginx.ingress.kubernetes.io/whitelist-source-range (nginx), либо прими риск явно через ingress.allowOpenIngress=true." -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Имя Traefik Middleware с IP-allowlist (одно на релиз). */}}
+{{- define "tgw.ipAllowListName" -}}
+{{- printf "%s-ip-allowlist" .Release.Name -}}
+{{- end -}}
+
+{{/* Аннотации Ingress: ingress.annotations плюс ссылка на Middleware allowlist'а. Если
+     router.middlewares уже задан пользователем, allowlist ставится первым через запятую,
+     пользовательский список не затирается. */}}
+{{- define "tgw.ingressAnnotations" -}}
+{{- $ann := deepCopy (.Values.ingress.annotations | default dict) -}}
+{{- if .Values.ingress.ipAllowList -}}
+{{- $key := "traefik.ingress.kubernetes.io/router.middlewares" -}}
+{{- $mw := printf "%s-%s@kubernetescrd" .Release.Namespace (include "tgw.ipAllowListName" .) -}}
+{{- with (get $ann $key) -}}
+{{- $mw = printf "%s,%s" $mw . -}}
+{{- end -}}
+{{- $_ := set $ann $key $mw -}}
+{{- end -}}
+{{- if $ann -}}
+{{- toYaml $ann -}}
 {{- end -}}
 {{- end -}}

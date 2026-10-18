@@ -4,7 +4,7 @@ description: >-
   Self-hosted REST/WebSocket gateway to Telegram user accounts (TDLib + Drogon).
   Stateless: sessions live in S3/MinIO; one account = one pod (strictly).
 type: application
-version: 0.2.0
+version: 0.3.0
 appVersion: "1.6.0"
 home: https://gitlab.com/tarassov.me/telegram-rest-gateway
 sources:

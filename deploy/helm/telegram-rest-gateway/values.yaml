@@ -66,18 +66,21 @@ service:
 
 # Ingress: включи и задай host-шаблон; {sessionId} подставляется на аккаунт.
 # Пример: hostTemplate: "tg-{sessionId}.tarassov.me"
+# Наружу выставляется только /v1 (и /ui при exposeLoginUi); /metrics только изнутри кластера.
 ingress:
   enabled: false
-  className: ""
-  # proxy-read/send-timeout согласованы с TGW_IDLE_CONNECTION_TIMEOUT_SECONDS (default 90) —
-  # тот же бюджет паузы humanize-typing (max_delay_ms + id_wait_ms), см. config.hpp. Без этих
-  # аннотаций nginx-ingress-controller использует свой дефолт 60с, который короче бюджета.
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "90"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "90"
-  # Явный опт-аут guard'а (см. _helpers.tpl: tgw.ingressGuard). Без
-  # nginx.ingress.kubernetes.io/whitelist-source-range в annotations выше, /ui (форма логина)
-  # и /metrics обслуживаются БЕЗ Bearer-auth — helm install/template откажет с понятной
+  # Контроллер в oci-k3s: Traefik 3.x. Аннотации nginx.ingress.kubernetes.io/* он НЕ читает
+  # (нет провайдера kubernetesIngressNGINX), поэтому allowlist задается через ipAllowList ниже.
+  # Таймауты: у entrypoint websecure 3600s, больше бюджета humanize-typing (90s).
+  className: "traefik"
+  annotations: {}
+  # CIDR, которым разрешен доступ (Traefik Middleware ipAllowList). Работает, только если
+  # Traefik видит реальный IP клиента (в oci-k3s: PROXY protocol от LB). Пример: ["203.0.113.7/32"]
+  ipAllowList: []
+  # Выставить наружу форму логина /ui (без Bearer-auth, держится только на allowlist).
+  exposeLoginUi: false
+  # Явный опт-аут guard'а (см. _helpers.tpl: tgw.ingressGuard). Без ipAllowList, Traefik-аннотации
+  # router.middlewares или nginx whitelist-source-range helm install/template откажет с понятной
   # ошибкой, если это не установлено в true осознанно (напр. доступ ограничен иначе).
   allowOpenIngress: false
   hostTemplate: "tg-{sessionId}.example.com"

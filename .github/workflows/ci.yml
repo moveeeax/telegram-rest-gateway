@@ -43,6 +43,13 @@ jobs:
 
   # TS-сайдкары (archiver, mcp): сборка tsc + docker build их Dockerfile'ов БЕЗ пуша.
   # Ловит сломанный TS и сломанный образ сайдкара до релиза (на каждом PR/push).
+  helm-render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: bash deploy/helm/tests/render_test.sh
+
   node-build:
     runs-on: ubuntu-latest
     strategy:
