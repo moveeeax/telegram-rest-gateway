@@ -343,6 +343,8 @@ curl -s -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/metrics
 curl -s -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/METRICS          -> 404
 curl -s -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/Ui               -> 404
 curl -s -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/ui               -> 200
+curl -s --path-as-is -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/v1/../metrics  -> не 200
+curl -s -o /dev/null -w '%{http_code}' 'https://tg-1214732998.tarassov.me/v1/..%2Fmetrics'          -> не 200
 ```
 
 С другого IP (мобильная сеть владельца или любой внешний хост, который он укажет) все пять адресов дают `403`. Если с IP владельца тоже `403`, Traefik видит адрес LB, а не клиента. Тогда `ipAllowList` убрать, `exposeLoginUi: false`, `allowOpenIngress: true` с комментарием, повторить шаг 4 и сообщить владельцу.
@@ -353,6 +355,12 @@ curl -s -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/ui     
 Expected: пустой результат. В логах архиватора запрос `/search` содержит `session_id=1214732998`.
 
 - [ ] **Step 7: Проверка push на Ready**
+
+Перед grep'ом (с согласия владельца, на тестовом аккаунте Telegram, не на двух боевых): залогинить
+новую сессию, через 5 с после `ready` удалить под, дождаться нового. Новый под обязан подняться
+авторизованным (`/v1/ready` 200 без повторного логина). Если нет, TDLib не успел записать
+авторизацию в бинлог к моменту Ready: добавить второй шаг синка с задержкой через `SyncGate`.
+
 
 Run: `kubectl --context oci-k3s -n tgw logs deploy/tgw-1214732998 | grep "push on ready"`
 Expected: строка `s3 sync: push on ready` после последнего рестарта и следом `s3 sync: session pushed`.
