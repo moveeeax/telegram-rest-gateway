@@ -1,6 +1,7 @@
 # Деплой в Kubernetes
 
-Гейтвей задеплоен в кластер `talos-nbg1`, namespace `tgw`, релиз v1.2.0.
+Гейтвей задеплоен в кластер `oci-k3s` (k3s, 6 нод), namespace `tgw`. Состояние на 2026-10-18:
+релиз `tgw` (chart 0.2.0) и `tgw-tools` (chart 0.1.0), образы `aab9246`.
 
 ## Предпосылки
 
@@ -8,7 +9,9 @@
   всегда и `:vX.Y.Z` на git-теге; **«последнего»/`latest` образа CI не делает** — пиньте sha,
   см. docs/CICD.md).
 - Kafka в кластере: namespace `kafka`, сервис `kafka.kafka.svc.cluster.local:9092` (PLAINTEXT).
-- S3/MinIO для сессий (`s3.tarassov.me`, бакет `tgw-s3-bucket`).
+- S3 для сессий: MinIO внутри кластера, `http://minio.minio.svc.cluster.local:9000`, бакет
+  `tgw-s3-bucket`. Бакет не должен отдавать объекты анонимно: в нем `td.binlog` всех аккаунтов
+  и медиа архива.
 
 ## Секрет
 
@@ -113,26 +116,63 @@ claude mcp add --transport http telegram http://localhost:8080/mcp \
 
 ## Внешний доступ (Ingress + TLS + IP-allowlist)
 
-Сервисы отдают полный контроль над аккаунтом и всю историю — **в интернет напрямую не выставляем**.
-Прод-вариант: nginx Ingress + Let's Encrypt (cert-manager) + external-dns, **жёстко ограниченный
-IP-allowlist'ом**. Выставляются gateway (`/ui`+API), MCP и архиватор (только `/search` и `/health`,
-хост `ingress.archiverHost` — один, не per-account; `/backfill` и `/stats` остаются ClusterIP).
-Все за одним IP-allowlist'ом. Если архиватор наружу не нужен — оставь `archiverHost` пустым
-(тогда только ClusterIP, MCP всё равно ходит в него внутри кластера).
+Сервисы отдают полный контроль над аккаунтом и всю историю, поэтому наружу они выставляются только
+за IP-allowlist'ом. Выставляются gateway, MCP и архиватор (только `/search` и `/health`, один хост
+`ingress.archiverHost`; `/backfill` и `/stats` остаются ClusterIP). Если архиватор снаружи не нужен,
+оставь `archiverHost` пустым: MCP ходит в него внутри кластера.
 
-Аннотации (см. `values-prod-example.yaml` обоих чартов):
-- `cert-manager.io/cluster-issuer: letsencrypt-prod` — TLS-сертификат.
-- `external-dns.alpha.kubernetes.io/target: <LB-IP>` — external-dns создаёт DNS A-запись (host
-  берётся из rules).
-- `nginx.ingress.kubernetes.io/whitelist-source-range: <ip>/32` — **обязательно**; пускает только
-  доверенные IP (остальным 403).
-- `nginx.ingress.kubernetes.io/ssl-redirect: "true"`.
-- Для MCP: `proxy-buffering: "off"`, `proxy-read/send-timeout: "3600"` (Streamable HTTP/SSE).
+### Ingress-контроллер: Traefik
 
-cert-manager проходит ACME HTTP-01 через отдельный `cm-acme-http-solver` ingress (без whitelist),
-поэтому allowlist выпуску сертификата не мешает. Хосты: `tg-<sessionId>`, `mcp-<sessionId>`.
+В `oci-k3s` стоит Traefik 3.7.13 (`kube-system/traefik`) с провайдерами `kubernetescrd` и
+`kubernetesingress`. Провайдера `kubernetesIngressNGINX` нет, поэтому аннотации
+`nginx.ingress.kubernetes.io/*` (whitelist, таймауты, буферизация) Traefik не читает. В обоих
+чартах `ingress.className: traefik`.
 
-Проверка: с доверенного IP — 200; с любого другого — 403 (whitelist). TLS — Let's Encrypt.
+Allowlist задается списком CIDR в `ingress.ipAllowList`. Чарт создает Traefik Middleware
+`<release>-ip-allowlist` (`ipAllowList.sourceRange`) и вешает его на свои Ingress аннотацией
+`traefik.ingress.kubernetes.io/router.middlewares`. Свои middleware в этой аннотации можно задать
+в `ingress.annotations`, чарт допишет allowlist первым. Без allowlist'а `helm template` падает на
+guard'е; осознанный опт-аут `ingress.allowOpenIngress=true`.
 
-> Даже за allowlist'ом: `/v1/health`, `/v1/ready`, `/ui`, `/metrics` без Bearer — допустимо, т.к.
-> доступ уже ограничен по IP. Не расширяй whitelist без необходимости.
+Allowlist работает, только если Traefik видит реальный IP клиента. В `oci-k3s` на entrypoint'ах
+`web` и `websecure` включен PROXY protocol с `trustedIPs` балансировщика (`130.61.178.81/32`), так
+что адрес клиента должен доходить. Проверять это после каждой смены LB или Traefik (см. ниже).
+
+Таймауты: у `websecure` `readTimeout`, `writeTimeout` и `idleTimeout` по 3600 с. Это покрывает
+Streamable HTTP MCP и паузы humanize-typing гейтвея (до 90 с), отдельные аннотации не нужны.
+
+### Какие пути выставляются
+
+Гейтвей: только префикс `/v1` и, при `ingress.exposeLoginUi=true`, `/ui`. Корень `/` и `/metrics`
+наружу не выставляются, `/metrics` скрейпится только изнутри кластера. Traefik сравнивает префикс с
+учетом регистра, поэтому `/METRICS` и `/UI` до пода тоже не доходят (Drogon внутри сравнивает пути
+без учета регистра, полагаться на его сторону нельзя).
+
+MCP: весь хост `mcp-<sessionId>` (Streamable HTTP на `/mcp`). Архиватор: `/search` и `/health`.
+
+### TLS и DNS
+
+cert-manager, ClusterIssuer `letsencrypt-prod`, ACME DNS-01 через Cloudflare (Secret
+`cloudflare-api-key`). HTTP-01 не используется, allowlist выпуску сертификатов не мешает.
+DNS-записи создает external-dns по аннотации `external-dns.alpha.kubernetes.io/target: <LB-IP>`.
+Хосты: `tg-<sessionId>`, `mcp-<sessionId>`, `tgw-archive`.
+
+### Проверка после выкатки
+
+С IP из allowlist'а:
+
+```bash
+H=https://tg-<sessionId>.tarassov.me
+curl -s -o /dev/null -w '%{http_code}\n' $H/v1/health   # 200
+curl -s -o /dev/null -w '%{http_code}\n' $H/metrics     # 404
+curl -s -o /dev/null -w '%{http_code}\n' $H/METRICS     # 404
+curl -s -o /dev/null -w '%{http_code}\n' $H/Ui          # 404
+curl -s -o /dev/null -w '%{http_code}\n' $H/ui          # 200 при exposeLoginUi=true, иначе 404
+```
+
+С любого другого IP те же запросы дают 403. Если 403 приходит и с IP из allowlist'а, Traefik видит
+адрес балансировщика, а не клиента: allowlist в таком виде бесполезен. Тогда выключи
+`exposeLoginUi`, убери `ipAllowList`, поставь `allowOpenIngress=true` и чини доставку IP клиента.
+
+> `/v1/health`, `/v1/ready` и `/ui` отвечают без Bearer. Это допустимо только потому, что доступ
+> ограничен по IP. Не расширяй allowlist без необходимости.
