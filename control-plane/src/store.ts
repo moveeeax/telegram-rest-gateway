@@ -32,6 +32,8 @@ export type Invite = {
   usedAt: Date | null;
   codeAttempts: number;
   passwordAttempts: number;
+  // Чем кончилась сессия, если не успехом: "duplicate", "wrong_account", "too_many_attempts".
+  outcome: string | null;
 };
 
 export type ClaimResult =
@@ -50,6 +52,9 @@ export interface Store {
   releaseInvite(codeHash: string): Promise<void>;
   markInviteUsed(codeHash: string, now: Date): Promise<void>;
   bumpAttempt(codeHash: string, kind: "code" | "password"): Promise<number>;
+  setOutcome(codeHash: string, outcome: string): Promise<void>;
+  // Атомарно ставит tokenShownAt, если он пуст. true ровно у одного вызывающего.
+  claimTokenShow(accountId: string, now: Date): Promise<boolean>;
   // Занятые, неиспользованные инвайты, чья сессия истекла.
   expiredSessions(now: Date): Promise<Invite[]>;
   insertAccount(a: Account): Promise<void>;

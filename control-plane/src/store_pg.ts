@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS invites (
   session_expires_at timestamptz,
   used_at            timestamptz,
   code_attempts      integer NOT NULL DEFAULT 0,
-  password_attempts  integer NOT NULL DEFAULT 0
+  password_attempts  integer NOT NULL DEFAULT 0,
+  outcome            text
 );
 CREATE INDEX IF NOT EXISTS invites_session ON invites (session_hash);
 `;
@@ -64,7 +65,7 @@ function toInvite(r: Row): Invite {
     expiresAt: r.expires_at as Date, claimedAt: (r.claimed_at as Date | null) ?? null,
     sessionHash: (r.session_hash as string | null) ?? null, sessionExpiresAt: (r.session_expires_at as Date | null) ?? null,
     usedAt: (r.used_at as Date | null) ?? null, codeAttempts: r.code_attempts as number,
-    passwordAttempts: r.password_attempts as number,
+    passwordAttempts: r.password_attempts as number, outcome: (r.outcome as string | null) ?? null,
   };
 }
 
@@ -163,6 +164,16 @@ export class PgStore implements Store {
     const r = await this.pool.query(
       `UPDATE invites SET ${col} = ${col} + 1 WHERE code_hash = $1 RETURNING ${col} AS n`, [codeHash]);
     return r.rows[0]?.n ?? 0;
+  }
+
+  async setOutcome(codeHash: string, outcome: string): Promise<void> {
+    await this.pool.query("UPDATE invites SET outcome = $2 WHERE code_hash = $1", [codeHash, outcome]);
+  }
+
+  async claimTokenShow(accountId: string, now: Date): Promise<boolean> {
+    const r = await this.pool.query(
+      "UPDATE accounts SET token_shown_at = $2 WHERE account_id = $1 AND token_shown_at IS NULL", [accountId, now]);
+    return r.rowCount === 1;
   }
 
   async expiredSessions(now: Date): Promise<Invite[]> {

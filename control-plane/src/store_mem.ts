@@ -10,7 +10,7 @@ export class MemStore implements Store {
   async createInvite(i: { codeHash: string; kind: InviteKind; accountId: string | null; ttlMs: number; now: Date }): Promise<Invite> {
     const inv: Invite = {
       codeHash: i.codeHash, kind: i.kind, accountId: i.accountId, expiresAt: new Date(i.now.getTime() + i.ttlMs),
-      claimedAt: null, sessionHash: null, sessionExpiresAt: null, usedAt: null, codeAttempts: 0, passwordAttempts: 0,
+      claimedAt: null, sessionHash: null, sessionExpiresAt: null, usedAt: null, codeAttempts: 0, passwordAttempts: 0, outcome: null,
     };
     this.invites.set(i.codeHash, inv);
     return { ...inv };
@@ -71,6 +71,18 @@ export class MemStore implements Store {
     if (!i) return 0;
     if (kind === "code") return ++i.codeAttempts;
     return ++i.passwordAttempts;
+  }
+
+  async setOutcome(codeHash: string, outcome: string): Promise<void> {
+    const i = this.invites.get(codeHash);
+    if (i) i.outcome = outcome;
+  }
+
+  async claimTokenShow(accountId: string, now: Date): Promise<boolean> {
+    const a = this.accounts.get(accountId);
+    if (!a || a.tokenShownAt) return false;
+    a.tokenShownAt = now;
+    return true;
   }
 
   async expiredSessions(now: Date): Promise<Invite[]> {

@@ -75,6 +75,17 @@ function suite(name: string, make: () => Promise<Store>, cleanup?: () => Promise
       assert.equal(await s.bumpAttempt("t1", "password"), 1);
     });
 
+    test("outcome and one-time token show", async () => {
+      await s.createInvite({ codeHash: "o1", kind: "new", accountId: null, ttlMs: DAY, now });
+      await s.setOutcome("o1", "duplicate");
+      assert.equal((await s.getInvite("o1"))?.outcome, "duplicate");
+      await s.insertAccount(account("aaaaaaaaaa3"));
+      assert.equal(await s.claimTokenShow("aaaaaaaaaa3", now), true);
+      assert.equal(await s.claimTokenShow("aaaaaaaaaa3", now), false);
+      assert.deepEqual((await s.getAccount("aaaaaaaaaa3"))?.tokenShownAt, now);
+      await s.deleteAccount("aaaaaaaaaa3");
+    });
+
     test("accounts CRUD and activeByTelegramId ignores needs_relogin", async () => {
       await s.insertAccount(account("aaaaaaaaaa2"));
       await s.updateAccount("aaaaaaaaaa2", { status: "needs_relogin", telegramUserId: "777" });
