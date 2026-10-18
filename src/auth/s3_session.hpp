@@ -5,6 +5,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace tgw::auth {
@@ -37,6 +38,27 @@ class S3SessionSync {
     std::string database_dir_;
     PutFn put_;
     std::string last_hash_;
+};
+
+// Сериализация шагов синка: один рабочий поток за раз, запрос во время работы не теряется, а
+// откладывается (несколько отложенных схлопываются в один шаг). Состояние под одним мьютексом,
+// поэтому «отложить запрос» и «завершить поток» не гоняются. in_flight поднят все время жизни
+// потока, между шагами не сбрасывается: на shutdown main по нему ждет, пока поток не выйдет.
+class SyncGate {
+   public:
+    SyncGate();
+    // true: вызывающий должен запустить поток. false: поток уже идет, запрос отложен.
+    bool tryStart();
+    // Вызывает поток после шага. true: был отложенный запрос, сделать еще шаг. false: поток
+    // должен выйти, in_flight сброшен.
+    bool finishStep();
+    const std::shared_ptr<std::atomic_bool>& inFlight() const { return in_flight_; }
+
+   private:
+    std::mutex mutex_;
+    bool running_ = false;
+    bool pending_ = false;
+    std::shared_ptr<std::atomic_bool> in_flight_;
 };
 
 struct S3SyncHandle {

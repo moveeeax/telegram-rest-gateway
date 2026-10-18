@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -136,8 +137,33 @@ bool S3SessionSync::syncOnce() {
     return true;
 }
 
+SyncGate::SyncGate() : in_flight_(std::make_shared<std::atomic_bool>(false)) {}
+
+bool SyncGate::tryStart() {
+    const std::lock_guard lock(mutex_);
+    if (running_) {
+        pending_ = true;
+        return false;
+    }
+    running_ = true;
+    in_flight_->store(true, std::memory_order_release);
+    return true;
+}
+
+bool SyncGate::finishStep() {
+    const std::lock_guard lock(mutex_);
+    if (pending_) {
+        pending_ = false;
+        return true;
+    }
+    running_ = false;
+    in_flight_->store(false, std::memory_order_release);
+    return false;
+}
+
 S3SyncHandle startS3Sync(tgw::util::S3Config s3, std::string database_dir, int interval_seconds) {
-    S3SyncHandle handle{std::make_shared<std::atomic_bool>(false), [] {}};
+    auto gate = std::make_shared<SyncGate>();
+    S3SyncHandle handle{gate->inFlight(), [] {}};
     if (!s3.enabled()) {
         return handle;
     }
@@ -151,27 +177,18 @@ S3SyncHandle startS3Sync(tgw::util::S3Config s3, std::string database_dir, int i
             }
             return result.ok();
         });
-    // rerun: шаг запрошен, пока шел предыдущий (напр. push_now на Ready во время тика таймера,
-    // который мог прочитать binlog еще до авторизации). Поток повторяет шаг, а не теряет запрос.
-    auto in_flight = handle.in_flight;
-    auto rerun = std::make_shared<std::atomic_bool>(false);
-    auto tick = [sync, in_flight, rerun]() {
+    // Запрос во время идущего шага (напр. push_now на Ready, пока тик таймера читает binlog еще
+    // до авторизации) не теряется: SyncGate откладывает его, и поток делает еще один шаг.
+    auto tick = [sync, gate]() {
         // Колбэк исполняется на главном event-loop Drogon. S3Client::send блокирующий,
         // поэтому саму заливку уносим в отдельный поток, чтобы не застопорить loop.
-        if (in_flight->exchange(true)) {
-            rerun->store(true);
+        if (!gate->tryStart()) {
             return;
         }
-        std::thread([sync, in_flight, rerun]() {
-            for (;;) {
-                rerun->store(false);
+        std::thread([sync, gate]() {
+            do {
                 sync->syncOnce();
-                in_flight->store(false);
-                // Запрос, пришедший после store(false), сам займет in_flight и запустит поток.
-                if (!rerun->load() || in_flight->exchange(true)) {
-                    break;
-                }
-            }
+            } while (gate->finishStep());
         }).detach();
     };
     drogon::app().getLoop()->runEvery(static_cast<double>(interval_seconds), tick);

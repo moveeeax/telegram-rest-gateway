@@ -432,7 +432,6 @@ int main(int argc, char** argv) {
     // конкурентный доступ к RdKafka::Producer -> heap corruption на amd64 (arm64 терпел). Продюсер
     // теперь single-owner: приёмник во время работы, shutdown-flush уже ПОСЛЕ join приёмника.
 
-
     LOG_INFO << "telegram-rest-gateway listening on " << config.listen_address << ":"
              << config.listen_port;
     // Отключаем встроенный SIGTERM-хендлер Drogon: завершение ведёт наш sigwait-поток (§2.1),
