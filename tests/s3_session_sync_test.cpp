@@ -124,3 +124,17 @@ TEST(SyncGate, RestartAfterFinish) {
     ASSERT_FALSE(gate.finishStep());
     EXPECT_TRUE(gate.tryStart());
 }
+
+// После logout бинлог в S3 трогать нельзя: TDLib стер локальные данные, а в S3 лежит снимок до
+// logout, который удалит control plane. disable() выключает все последующие PUT.
+TEST(S3SessionSync, DisableStopsPuts) {
+    const auto dir = uniqueDir("disable");
+    writeBinlog(dir, "a");
+    FakePut put;
+    S3SessionSync sync(dir, put.fn());
+    sync.disable();
+    EXPECT_FALSE(sync.syncOnce());
+    writeBinlog(dir, "b");
+    EXPECT_FALSE(sync.syncOnce());
+    EXPECT_TRUE(put.calls.empty());
+}

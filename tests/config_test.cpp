@@ -32,6 +32,7 @@ constexpr const char* kEnvBases[] = {
     "TGW_KEEP_ONLINE",
     "TGW_KEEP_ONLINE_INTERVAL_SECONDS",
     "TGW_WEBHOOKS_ENABLED",
+    "TGW_SESSION_EXPORT_ENABLED",
     "TGW_WEBHOOK_TIMEOUT_MS",
     "TGW_WEBHOOK_QUEUE_MAX",
     "TGW_WEBHOOK_SSRF_GUARD",
@@ -363,4 +364,20 @@ TEST_F(ConfigTest, WebhookFlagsDefaults) {
     EXPECT_EQ(c.webhook_timeout_ms, 10000);
     EXPECT_EQ(c.webhook_queue_max, 10000u);
     EXPECT_FALSE(c.webhook_ssrf_guard);
+}
+
+// TGW_SESSION_EXPORT_ENABLED: по умолчанию true (совместимость), "false"/"0" выключают экспорт.
+TEST_F(ConfigTest, SessionExportDefaultsTrue) {
+    setRequired();
+    EXPECT_TRUE(Config::load().session_export_enabled);
+    set("TGW_SESSION_EXPORT_ENABLED", "true");
+    EXPECT_TRUE(Config::load().session_export_enabled);
+}
+
+TEST_F(ConfigTest, SessionExportFalse) {
+    setRequired();
+    set("TGW_SESSION_EXPORT_ENABLED", "false");
+    EXPECT_FALSE(Config::load().session_export_enabled);
+    set("TGW_SESSION_EXPORT_ENABLED", "0");
+    EXPECT_FALSE(Config::load().session_export_enabled);
 }

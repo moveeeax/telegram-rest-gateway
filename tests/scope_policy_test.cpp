@@ -66,3 +66,8 @@ TEST(ScopePolicy, NonWebhooksPathsAreNotEscalated) {
     EXPECT_EQ(requiredScopeFor("/v1/webhooksomething", true), Scope::Read);
     EXPECT_EQ(requiredScopeFor("/v1/webhook", true), Scope::Read);
 }
+
+// POST /v1/auth/logout закрывает сессию Telegram: только admin, как весь /v1/auth/*.
+TEST(ScopePolicy, LogoutRequiresAdmin) {
+    EXPECT_EQ(requiredScopeFor("/v1/auth/logout", false), Scope::Admin);
+}
