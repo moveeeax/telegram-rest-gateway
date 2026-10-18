@@ -1,5 +1,6 @@
 {{- if .Values.archiver.enabled }}
-{{- if not .Values.archiver.persistence.existingClaim }}
+{{- /* На Postgres SQLite-файла нет, том не нужен: PVC не создаем, /data на emptyDir. */ -}}
+{{- if and (not .Values.archiver.postgres.enabled) (not .Values.archiver.persistence.existingClaim) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -123,8 +124,12 @@ spec:
               mountPath: /data
       volumes:
         - name: data
+          {{- if .Values.archiver.postgres.enabled }}
+          emptyDir: {}
+          {{- else }}
           persistentVolumeClaim:
             claimName: {{ .Values.archiver.persistence.existingClaim | default (printf "%s-archiver" .Release.Name) }}
+          {{- end }}
 ---
 apiVersion: v1
 kind: Service

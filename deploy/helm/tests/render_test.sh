@@ -107,4 +107,12 @@ out="$(render "tools prod example" tt "$TOOLS" --namespace tgw --set archiver.im
     -f "$TOOLS/values-prod-example.yaml")" || { out=""; FAILED=1; }
 assert_contains "tools prod example: allowlist" "$out" "tgw-tt-ip-allowlist@kubernetescrd"
 
+# Архиватор на Postgres: SQLite-том не нужен, PVC не создается (иначе local-path привязал бы под к ноде).
+out="$(render "archiver pg" tt "$TOOLS" --namespace tgw --set archiver.image.tag=x --set mcp.enabled=false \
+    --set archiver.postgres.enabled=true)" || { out=""; FAILED=1; }
+assert_not_contains "archiver pg: no pvc" "$out" "kind: PersistentVolumeClaim"
+assert_contains "archiver pg: emptyDir" "$out" "emptyDir: {}"
+out="$(render "archiver sqlite" tt "$TOOLS" --namespace tgw --set archiver.image.tag=x --set mcp.enabled=false)" || { out=""; FAILED=1; }
+assert_contains "archiver sqlite: pvc" "$out" "kind: PersistentVolumeClaim"
+
 exit "$FAILED"
