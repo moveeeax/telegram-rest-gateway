@@ -142,6 +142,7 @@ spec:
     app.kubernetes.io/name: tgw-archiver
     app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if and .Values.ingress.enabled .Values.ingress.archiverHost }}
+{{- include "tools.ingressGuard" . }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -150,9 +151,9 @@ metadata:
   labels:
     app.kubernetes.io/name: tgw-archiver
     app.kubernetes.io/instance: {{ .Release.Name }}
-  {{- with .Values.ingress.annotations }}
+  {{- with include "tools.ingressAnnotations" . }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
 spec:
   {{- with .Values.ingress.className }}

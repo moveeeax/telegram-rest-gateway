@@ -66,4 +66,21 @@ out="$(render "ui" "${GW_ARGS[@]}" --set 'ingress.ipAllowList={203.0.113.7/32}' 
     --set ingress.exposeLoginUi=true)" || { out=""; FAILED=1; }
 assert_contains "ui exposed on flag" "$out" "path: /ui"
 
+# --- tools chart ---
+TOOLS="$ROOT/deploy/helm/telegram-rest-gateway-tools"
+TOOLS_ARGS=(tt "$TOOLS" --namespace tgw --set archiver.image.tag=x --set mcp.image.tag=x
+            --set ingress.enabled=true --set ingress.archiverHost=a.example
+            --set-string 'mcp.accounts[0].sessionId=111' --set-string 'mcp.accounts[1].sessionId=222')
+
+assert_fails "tools guard: no protection" "${TOOLS_ARGS[@]}"
+
+out="$(render "tools allowlist" "${TOOLS_ARGS[@]}" --set 'ingress.ipAllowList={203.0.113.7/32}')" || { out=""; FAILED=1; }
+# Документы Ingress по одному: awk режет вывод по '---' и берет документ с нужным именем.
+doc() { awk -v n="name: $2" 'BEGIN{RS="\n---\n"} index($0, "kind: Ingress") && index($0, n)' <<<"$1"; }
+assert_contains "tools allowlist on mcp" "$(doc "$out" tt-mcp-111)" "tgw-tt-ip-allowlist@kubernetescrd"
+assert_contains "tools allowlist on archiver" "$(doc "$out" tt-archiver)" "tgw-tt-ip-allowlist@kubernetescrd"
+n_mw="$(grep -c '^kind: Middleware' <<<"$out" || true)"
+if [[ "$n_mw" == 1 ]]; then pass "tools single middleware"; else fail "tools single middleware" "Middleware: $n_mw"; fi
+assert_contains "tools class traefik" "$out" "ingressClassName: traefik"
+
 exit "$FAILED"

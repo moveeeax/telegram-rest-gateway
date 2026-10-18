@@ -1,4 +1,5 @@
 {{- if .Values.mcp.enabled }}
+{{- include "tools.ingressGuard" . }}
 {{- range $account := .Values.mcp.accounts }}
 {{- $name := printf "%s-mcp-%s" $.Release.Name $account.sessionId }}
 {{- $gateway := replace "{sessionId}" $account.sessionId $.Values.gatewayServiceTemplate }}
@@ -92,9 +93,9 @@ metadata:
   labels:
     app.kubernetes.io/name: tgw-mcp
     app.kubernetes.io/instance: {{ $.Release.Name }}
-  {{- with $.Values.ingress.annotations }}
+  {{- with include "tools.ingressAnnotations" $ }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
 spec:
   {{- with $.Values.ingress.className }}

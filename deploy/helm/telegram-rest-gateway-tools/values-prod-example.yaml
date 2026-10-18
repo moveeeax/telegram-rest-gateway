@@ -15,17 +15,14 @@ mcp:
     - sessionId: "1389231240"
 ingress:
   enabled: true
-  className: nginx
+  className: traefik
   mcpHostTemplate: "mcp-{sessionId}.example.com"
   archiverHost: "tgw-archive.example.com"
+  ipAllowList: ["<your.ip>/32"]
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     external-dns.alpha.kubernetes.io/target: "<LB-IP>"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/whitelist-source-range: "<your.ip>/32"
-    # Streamable HTTP / SSE — без буферизации, длинные таймауты.
-    nginx.ingress.kubernetes.io/proxy-buffering: "off"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Streamable HTTP / SSE: у Traefik entrypoint websecure таймауты 3600s и буферизации ответа
+    # по умолчанию нет, отдельные аннотации не нужны.
   tls:
     enabled: true
