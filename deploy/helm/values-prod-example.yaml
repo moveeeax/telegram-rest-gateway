@@ -13,8 +13,8 @@ existingSecret: "telegram-rest-gateway"
 config:
   TGW_LISTEN_ADDRESS: "0.0.0.0"
   TGW_LISTEN_PORT: "8080"
-  # Пример владельца: реальный S3-эндпоинт продовой инсталляции (в дефолтах чарта — пусто).
-  TGW_S3_ENDPOINT: "https://s3.tarassov.me"
+  # Пример владельца: MinIO внутри кластера oci-k3s (в дефолтах чарта пусто).
+  TGW_S3_ENDPOINT: "http://minio.minio.svc.cluster.local:9000"
   TGW_S3_REGION: "us-east-1"
   TGW_S3_BUCKET: "tgw-s3-bucket"
   TGW_S3_PATH_STYLE: "true"
@@ -32,18 +32,20 @@ resources:
   limits:
     memory: 256Mi
 
-# Внешний доступ: Ingress (nginx) + Let's Encrypt (cert-manager) + external-dns,
-# ЖЁСТКО ограниченный IP-allowlist'ом (сервисы отдают контроль над аккаунтом — за периметром).
+# Внешний доступ: Ingress (Traefik) + Let's Encrypt (cert-manager, DNS-01) + external-dns,
+# ограниченный IP-allowlist'ом (сервисы отдают контроль над аккаунтом). Traefik nginx-аннотации
+# не читает, allowlist задается ipAllowList (чарт создает Middleware).
 ingress:
   enabled: true
-  className: nginx
+  className: traefik
   hostTemplate: "tg-{sessionId}.example.com"
+  # ОБЯЗАТЕЛЬНО: список доверенных IP, иначе guard не даст отрендерить Ingress.
+  ipAllowList: ["<your.ip>/32"]
+  # Форма логина /ui наружу (держится только на allowlist).
+  exposeLoginUi: true
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     external-dns.alpha.kubernetes.io/target: "<LB-IP>"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    # ОБЯЗАТЕЛЬНО: список доверенных IP. Голый Bearer в интернет не выставляем.
-    nginx.ingress.kubernetes.io/whitelist-source-range: "<your.ip>/32"
   tls:
     enabled: true
     secretNameTemplate: "tg-{sessionId}-tls"

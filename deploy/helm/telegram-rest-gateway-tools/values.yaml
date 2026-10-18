@@ -98,8 +98,8 @@ ingress:
   # CIDR, которым разрешен доступ (Traefik Middleware ipAllowList, общий для MCP и архиватора).
   # Работает, только если Traefik видит реальный IP клиента. Пример: ["203.0.113.7/32"]
   ipAllowList: []
-  # Явный опт-аут guard'а (tools.ingressGuard): без ipAllowList или аннотации-allowlist'а
-  # helm install/template откажет, если это не установлено в true осознанно.
+  # Явный опт-аут guard'а (tools.ingressGuard): без ipAllowList helm install/template откажет,
+  # если это не установлено в true осознанно. Аннотации-allowlist'ы guard не засчитывает.
   allowOpenIngress: false
   mcpHostTemplate: "mcp-{sessionId}.example.com"
   archiverHost: ""  # хост Ingress архиватора (только /search + /health); пусто = ClusterIP

@@ -131,8 +131,10 @@ claude mcp add --transport http telegram http://localhost:8080/mcp \
 Allowlist задается списком CIDR в `ingress.ipAllowList`. Чарт создает Traefik Middleware
 `<release>-ip-allowlist` (`ipAllowList.sourceRange`) и вешает его на свои Ingress аннотацией
 `traefik.ingress.kubernetes.io/router.middlewares`. Свои middleware в этой аннотации можно задать
-в `ingress.annotations`, чарт допишет allowlist первым. Без allowlist'а `helm template` падает на
-guard'е; осознанный опт-аут `ingress.allowOpenIngress=true`.
+в `ingress.annotations`, чарт допишет allowlist первым. Без `ipAllowList` (или с `0.0.0.0/0`,
+`::/0`) `helm template` падает на guard'е, аннотации он не засчитывает: в `oci-k3s` класс `nginx`
+тоже обслуживает Traefik, так что имя класса ничего не гарантирует. Осознанный опт-аут
+`ingress.allowOpenIngress=true`.
 
 Allowlist работает, только если Traefik видит реальный IP клиента. В `oci-k3s` на entrypoint'ах
 `web` и `websecure` включен PROXY protocol с `trustedIPs` балансировщика (`130.61.178.81/32`), так

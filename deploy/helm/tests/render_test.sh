@@ -40,18 +40,19 @@ MW_KEY='ingress.annotations.traefik\.ingress\.kubernetes\.io/router\.middlewares
 # --- gateway chart ---
 assert_fails "guard: no protection" "${GW_ARGS[@]}" --set ingress.allowOpenIngress=false
 
+# Защитой считается только ipAllowList (Middleware этого чарта) или явный allowOpenIngress.
+# Имя класса не говорит, какой контроллер его читает (в oci-k3s класс nginx обслуживает Traefik),
+# а чужая router.middlewares может быть redirect/headers и ничего не ограничивать.
 NGINX_WL='ingress.annotations.nginx\.ingress\.kubernetes\.io/whitelist-source-range'
-# nginx-аннотация засчитывается только для nginx-контроллера: Traefik ее не читает.
-if render "guard: nginx annotation on nginx" "${GW_ARGS[@]}" --set ingress.className=nginx \
-    --set-string "$NGINX_WL=1.2.3.4/32" >/dev/null; then
-    pass "guard: nginx annotation on nginx"; else FAILED=1; fi
-assert_fails "guard: nginx annotation on traefik" "${GW_ARGS[@]}" --set-string "$NGINX_WL=1.2.3.4/32"
-assert_fails "guard: empty middlewares" "${GW_ARGS[@]}" --set-string "$MW_KEY="
-assert_fails "guard: traefik annotation on nginx" "${GW_ARGS[@]}" --set ingress.className=nginx \
-    --set-string "$MW_KEY=x@kubernetescrd"
-
-if render "guard: traefik middlewares" "${GW_ARGS[@]}" --set-string "$MW_KEY=x@kubernetescrd" >/dev/null; then
-    pass "guard: traefik middlewares"; else FAILED=1; fi
+assert_fails "guard: nginx annotation does not count" "${GW_ARGS[@]}" --set ingress.className=nginx \
+    --set-string "$NGINX_WL=1.2.3.4/32"
+assert_fails "guard: foreign middleware does not count" "${GW_ARGS[@]}" \
+    --set-string "$MW_KEY=kube-system-redirect@kubernetescrd"
+assert_fails "guard: empty cidr" "${GW_ARGS[@]}" --set-json 'ingress.ipAllowList=[""]'
+assert_fails "guard: open ipv4 cidr" "${GW_ARGS[@]}" --set 'ingress.ipAllowList={0.0.0.0/0}'
+assert_fails "guard: open ipv6 cidr" "${GW_ARGS[@]}" --set-json 'ingress.ipAllowList=["::/0"]'
+if render "guard: allowOpenIngress" "${GW_ARGS[@]}" --set ingress.allowOpenIngress=true >/dev/null; then
+    pass "guard: allowOpenIngress"; else FAILED=1; fi
 
 out="$(render "allowlist" "${GW_ARGS[@]}" --set 'ingress.ipAllowList={203.0.113.7/32}')" || { out=""; FAILED=1; }
 assert_contains "allowlist renders middleware: kind" "$out" "kind: Middleware"
@@ -79,8 +80,10 @@ TOOLS_ARGS=(tt "$TOOLS" --namespace tgw --set archiver.image.tag=x --set mcp.ima
             --set-string 'mcp.accounts[0].sessionId=111' --set-string 'mcp.accounts[1].sessionId=222')
 
 assert_fails "tools guard: no protection" "${TOOLS_ARGS[@]}"
-assert_fails "tools guard: nginx annotation on traefik" "${TOOLS_ARGS[@]}" --set-string "$NGINX_WL=1.2.3.4/32"
-assert_fails "tools guard: empty middlewares" "${TOOLS_ARGS[@]}" --set-string "$MW_KEY="
+assert_fails "tools guard: nginx annotation does not count" "${TOOLS_ARGS[@]}" --set-string "$NGINX_WL=1.2.3.4/32"
+assert_fails "tools guard: foreign middleware does not count" "${TOOLS_ARGS[@]}" \
+    --set-string "$MW_KEY=kube-system-redirect@kubernetescrd"
+assert_fails "tools guard: open cidr" "${TOOLS_ARGS[@]}" --set 'ingress.ipAllowList={0.0.0.0/0}'
 
 out="$(render "tools allowlist" "${TOOLS_ARGS[@]}" --set 'ingress.ipAllowList={203.0.113.7/32}')" || { out=""; FAILED=1; }
 # Документы Ingress по одному: awk режет вывод по '---' и берет документ с нужным именем.
@@ -91,7 +94,17 @@ n_mw="$(grep -c '^kind: Middleware' <<<"$out" || true)"
 if [[ "$n_mw" == 1 ]]; then pass "tools single middleware"; else fail "tools single middleware" "Middleware: $n_mw"; fi
 assert_contains "tools class traefik" "$out" "ingressClassName: traefik"
 
-assert_contains "mcp session id env" "$(awk -v n="name: tt-mcp-111" 'BEGIN{RS="\n---\n"} index($0, "kind: Deployment") && index($0, n)' <<<"$out")" \
-    $'name: TGW_SESSION_ID\n              value: "111"'
+# Значение берется из строки сразу после имени: grep -F с переводом строки в шаблоне ищет каждую
+# строку отдельно и пропустил бы чужой value.
+mcp_dep="$(awk -v n="name: tt-mcp-111" 'BEGIN{RS="\n---\n"} index($0, "kind: Deployment") && index($0, n)' <<<"$out")"
+assert_contains "mcp session id env" "$(grep -A1 'name: TGW_SESSION_ID' <<<"$mcp_dep" | tail -1)" 'value: "111"'
+
+# Prod-примеры из репо должны проходить guard и давать allowlist (по ним ставят, см. DEPLOY.md).
+out="$(render "gw prod example" t "$GW" --namespace tgw -f "$ROOT/deploy/helm/values-prod-example.yaml")" || { out=""; FAILED=1; }
+assert_contains "gw prod example: allowlist" "$out" "tgw-t-ip-allowlist@kubernetescrd"
+assert_not_contains "gw prod example: no nginx" "$out" "nginx.ingress.kubernetes.io"
+out="$(render "tools prod example" tt "$TOOLS" --namespace tgw --set archiver.image.tag=x --set mcp.image.tag=x \
+    -f "$TOOLS/values-prod-example.yaml")" || { out=""; FAILED=1; }
+assert_contains "tools prod example: allowlist" "$out" "tgw-tt-ip-allowlist@kubernetescrd"
 
 exit "$FAILED"
