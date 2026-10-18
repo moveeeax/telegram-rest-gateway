@@ -35,6 +35,7 @@ add_executable(tgw_unit_tests
     webhook_registry_test.cpp
     context_builder_test.cpp
     webhook_dispatcher_test.cpp
+    s3_session_sync_test.cpp
     # Прод-исходники, которых нет в tgw_bridge, но которые нужны тестам напрямую:
     # config.cpp (парсинг env, тест 3.5), bearer_filter.cpp (реальный фильтр, тест 3.7) и
     # webhook_routes.cpp (handleWebhookCreate, Task 7) — все три собраны в telegram-rest-gateway,
