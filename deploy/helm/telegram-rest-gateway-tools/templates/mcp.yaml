@@ -40,6 +40,9 @@ spec:
               value: {{ $.Values.mcp.httpPort | quote }}
             - name: TGW_BASE_URL
               value: "http://{{ $gateway }}:{{ $.Values.gatewayPort }}"
+            # Срез архива этого коннектора: без него поиск по архиву выключается.
+            - name: TGW_SESSION_ID
+              value: {{ $account.sessionId | quote }}
             - name: TGW_ARCHIVER_URL
               value: "http://{{ $.Release.Name }}-archiver:8090"
             - name: TGW_BEARER_TOKEN

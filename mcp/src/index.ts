@@ -15,6 +15,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
 import { z } from "zod";
+import { archiveSearchEnabled, buildSearchParams } from "./archive_search.js";
 
 const BASE_URL = (process.env.TGW_BASE_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "");
 const TOKEN = process.env.TGW_BEARER_TOKEN ?? "";
@@ -337,7 +338,12 @@ server.tool(
 // Поиск по архиву переписки (архиватор: Kafka -> SQLite FTS5). Регистрируется только
 // если задан TGW_ARCHIVER_URL — гейтвей сам историю не индексирует.
 const ARCHIVER_URL = (process.env.TGW_ARCHIVER_URL ?? "").replace(/\/$/, "");
-if (ARCHIVER_URL) {
+// session_id аккаунта этого коннектора (= sessionId гейтвея). Модели параметр не выставляется.
+const SESSION_ID = process.env.TGW_SESSION_ID ?? "";
+if (ARCHIVER_URL && !SESSION_ID) {
+  console.error("TGW_ARCHIVER_URL задан без TGW_SESSION_ID: telegram_search_history выключен");
+}
+if (archiveSearchEnabled(ARCHIVER_URL, SESSION_ID)) {
   server.tool(  // eslint-disable-line
     "telegram_search_history",
     "Полнотекстовый поиск по архиву переписки (все чаты, вся сохранённая история). Возвращает сниппеты с подсветкой <<...>>, chat_id и message_id для перехода к контексту через telegram_get_history.",
@@ -347,8 +353,7 @@ if (ARCHIVER_URL) {
       limit: z.number().int().min(1).max(100).default(20),
     },
     async ({ query, chat_id, limit }) => {
-      const params = new URLSearchParams({ q: query, limit: String(limit) });
-      if (chat_id) params.set("chat_id", chat_id);
+      const params = buildSearchParams(SESSION_ID, { query, chat_id, limit });
       const headers: Record<string, string> = {};
       if (process.env.TGW_ARCHIVER_TOKEN) {
         headers.Authorization = `Bearer ${process.env.TGW_ARCHIVER_TOKEN}`;

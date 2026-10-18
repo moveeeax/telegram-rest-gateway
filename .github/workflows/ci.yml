@@ -64,6 +64,8 @@ jobs:
         working-directory: ${{ matrix.pkg }}
       - run: npm run build
         working-directory: ${{ matrix.pkg }}
+      - run: npm run test --if-present
+        working-directory: ${{ matrix.pkg }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:

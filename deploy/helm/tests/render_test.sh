@@ -83,4 +83,7 @@ n_mw="$(grep -c '^kind: Middleware' <<<"$out" || true)"
 if [[ "$n_mw" == 1 ]]; then pass "tools single middleware"; else fail "tools single middleware" "Middleware: $n_mw"; fi
 assert_contains "tools class traefik" "$out" "ingressClassName: traefik"
 
+assert_contains "mcp session id env" "$(awk -v n="name: tt-mcp-111" 'BEGIN{RS="\n---\n"} index($0, "kind: Deployment") && index($0, n)' <<<"$out")" \
+    $'name: TGW_SESSION_ID\n              value: "111"'
+
 exit "$FAILED"
