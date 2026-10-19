@@ -43,3 +43,19 @@ export function parsePurgeId(pathname: string): string | null {
   try { id = decodeURIComponent(m[1]); } catch { return null; }
   return ACCOUNT_ID.test(id) ? id : null;
 }
+
+// Ожидание допуска кадра, пока реестр недоступен. Прерывается остановкой процесса (consumer
+// должен выйти из eachMessage, иначе disconnect и drain медиа не дождутся) и ошибкой heartbeat
+// (ребаланс: kafkajs должен отдать партицию). Выход исключением не коммитит offset.
+export async function waitForAdmission(
+  sessionId: string, lookup: Lookup | null,
+  io: { heartbeat: () => Promise<void>; stopping: () => boolean; sleep: (ms: number) => Promise<unknown> },
+): Promise<"store" | "drop"> {
+  for (;;) {
+    const v = await admitFrame(sessionId, lookup);
+    if (v !== "wait") return v;
+    await io.heartbeat();
+    if (io.stopping()) throw new Error("archiver stopping: frame left uncommitted");
+    await io.sleep(5000);
+  }
+}

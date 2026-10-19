@@ -1,4 +1,5 @@
 import type { MediaJob } from "./media.js";
+import { buildSessionIndex } from "./pg_index.js";
 /**
  * Абстракция хранилища архива. Два бэкенда:
  *  - SqliteStore  — встроенный (better-sqlite3 + FTS5), дефолт;
@@ -150,7 +151,7 @@ CREATE INDEX IF NOT EXISTS messages_session_date_idx ON messages (session_id, da
 // ---------------- PostgreSQL ----------------
 export class PostgresStore implements Store {
   private pool: Pool;
-  constructor(url: string) {
+  constructor(private url: string) {
     // keepAlive + idleTimeout: не даём простаивающему соединению «протухнуть» (сеть/CNPG рвут
     // idle-TCP молча). query/statement_timeout: висящий на мёртвом коннекте запрос падает, а не
     // блокирует хендлер навсегда. pool.on('error'): фоновая ошибка коннекта не копится.
@@ -181,16 +182,11 @@ CREATE INDEX IF NOT EXISTS messages_date_idx ON messages (date DESC);
 CREATE TABLE IF NOT EXISTS chats (session_id text NOT NULL, chat_id text NOT NULL, title text, type text, PRIMARY KEY (session_id, chat_id));
 CREATE TABLE IF NOT EXISTS seq_state (session_id text PRIMARY KEY, last_seq bigint);
 `);
-    // Индекс для поиска в срезе аккаунта. Отдельным соединением без statement_timeout: на большой
-    // таблице построение дольше 20 с пула.
-    const c = await this.pool.connect();
-    try {
-      await c.query("SET statement_timeout = 0");
-      await c.query("CREATE INDEX IF NOT EXISTS messages_session_date_idx ON messages (session_id, date DESC)");
-    } finally {
-      await c.query("RESET statement_timeout").catch(() => {});
-      c.release();
-    }
+    // Индекс для поиска в срезе аккаунта строится в фоне: старт пода его не ждет.
+    void buildSessionIndex(this.url).then(
+      () => console.error("archiver: index messages_session_date_idx ready"),
+      (e) => console.error(`archiver: index build failed (search works without it): ${(e as Error).message}`),
+    );
   }
   async upsertMessage(r: MessageRow): Promise<void> {
     await this.pool.query(

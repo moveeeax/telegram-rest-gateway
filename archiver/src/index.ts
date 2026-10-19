@@ -13,7 +13,7 @@ import { makeStore, type MessageRow } from "./store.js";
 import { MediaOffloader } from "./media.js";
 import { ArchiverRegistry } from "./registry.js";
 import { retryMedia } from "./media_retry.js";
-import { accessLevel, admitFrame, guardAdmin, parsePurgeId } from "./tenancy.js";
+import { accessLevel, guardAdmin, parsePurgeId, waitForAdmission } from "./tenancy.js";
 
 const BROKERS = (process.env.ARCHIVER_KAFKA_BROKERS ?? "redpanda:9092").split(",");
 const TOPIC = process.env.ARCHIVER_KAFKA_TOPIC ?? "tgw.updates";
@@ -62,6 +62,8 @@ let dropped = 0;
 let consecutiveDrops = 0;
 // Кадры аккаунтов без archive_enabled (или удаленных): не пишутся, offset коммитится.
 let skippedNotArchived = 0;
+// Поднимается сигналом остановки: ожидание реестра в eachMessage выходит, не коммитя кадр.
+let stopping = false;
 // Здоровье Kafka-консьюмера — отражается в /health, на который смотрят И liveness, И readiness
 // пробы k8s. Раньше /health был безусловным 200: даже упавший (crashed/stopped) консьюмер не
 // приводил ни к рестарту пода, ни к выводу его из ротации (5.3).
@@ -510,13 +512,8 @@ async function main() {
       // Только аккаунты с archive_enabled. Пока реестр недоступен, кадр держим: не коммитим offset
       // и ждем, иначе при старте без реестра архив молча терял бы события.
       const sid = String((frame as any).session_id ?? "default");
-      for (;;) {
-        const verdict = await admitFrame(sid, registry ? (s) => registry.get(s) : null);
-        if (verdict === "store") break;
-        if (verdict === "drop") { skippedNotArchived += 1; return; }
-        await heartbeat().catch(() => {});
-        await sleep(5000);
-      }
+      const verdict = await waitForAdmission(sid, registry ? (s) => registry.get(s) : null, { heartbeat, stopping: () => stopping, sleep });
+      if (verdict === "drop") { skippedNotArchived += 1; return; }
       // storage/transient: ретраи с бэкоффом, после — drop+commit одного события
       // (не вешаем партицию навсегда). Серия consecutive drops → fail-closed.
       const attempts = 5;
@@ -558,6 +555,7 @@ async function main() {
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, async () => {
+    stopping = true;
     try {
       // Отключаемся от Kafka ПЕРВЫМ — новые события больше не enqueue'ятся, дальше можно
       // дренировать то, что уже в очереди/in-flight, не гоняясь за растущим хвостом.

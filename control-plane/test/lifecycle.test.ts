@@ -121,3 +121,15 @@ test("deletion purges the archive after S3 and only then drops the record", asyn
     assert.equal(await e.store.getAccount(ID), null);
   } finally { arch.close(); }
 });
+
+test("purge is not skipped silently: archiver URL without token keeps the step", async () => {
+  const e = await env("http://127.0.0.1:1");
+  (e.deps as any).cfg = config({ archiverAdminUrl: "http://archiver:8090", archiverAdminToken: "" });
+  await e.store.insertAccount(account(ID, { status: "deleting", deleteStep: "s3_deleted" }));
+  await advanceDeletion((await e.store.getAccount(ID))!, e.deps);
+  assert.equal((await e.store.getAccount(ID))?.deleteStep, "s3_deleted");
+  // архиватора нет вовсе (URL пуст): шаг проходит
+  (e.deps as any).cfg = config({ archiverAdminUrl: "", archiverAdminToken: "" });
+  await advanceDeletion((await e.store.getAccount(ID))!, e.deps);
+  assert.equal(await e.store.getAccount(ID), null);
+});

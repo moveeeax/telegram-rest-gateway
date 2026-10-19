@@ -63,7 +63,12 @@ export async function advanceDeletion(a: Account, d: LifecycleDeps): Promise<voi
   }
   if (step === "s3_deleted") {
     // Архив аккаунта: сообщения, чаты и медиа в S3. Ошибка оставляет шаг до следующего прохода.
-    if (d.cfg.archiverAdminUrl && d.cfg.archiverAdminToken) {
+    // Архиватор есть, а токена нет: не продвигаем шаг, иначе архив удаленного аккаунта остался бы навсегда.
+    if (d.cfg.archiverAdminUrl && !d.cfg.archiverAdminToken) {
+      console.error(`lifecycle: ${id}: CP_ARCHIVER_ADMIN_TOKEN not set, archive purge blocked`);
+      return;
+    }
+    if (d.cfg.archiverAdminUrl) {
       const r = await fetch(`${d.cfg.archiverAdminUrl}/accounts/${encodeURIComponent(id)}`, {
         method: "DELETE", headers: { authorization: `Bearer ${d.cfg.archiverAdminToken}` }, signal: AbortSignal.timeout(120_000),
       }).catch((e: Error) => ({ ok: false, status: 0, statusText: e.message }) as const);
@@ -72,7 +77,7 @@ export async function advanceDeletion(a: Account, d: LifecycleDeps): Promise<voi
         return;
       }
     } else {
-      console.error(`lifecycle: ${id}: CP_ARCHIVER_ADMIN_URL not set, archive purge skipped`);
+      console.error(`lifecycle: ${id}: no archiver configured (CP_ARCHIVER_ADMIN_URL empty), archive purge skipped`);
     }
     await set("archive_purged");
   }

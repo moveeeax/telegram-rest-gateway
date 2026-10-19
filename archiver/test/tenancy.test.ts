@@ -35,3 +35,45 @@ test("parsePurgeId accepts account ids only", () => {
     assert.equal(parsePurgeId(p), null, p);
   }
 });
+
+import { waitForAdmission } from "../src/tenancy.js";
+import { buildSessionIndex } from "../src/pg_index.js";
+
+test("waitForAdmission: waits while unavailable, then admits", async () => {
+  let n = 0;
+  const lookup = async () => (++n < 3 ? "unavailable" : { gatewayUrl: "g", token: "t", archiveEnabled: true }) as any;
+  let beats = 0;
+  const v = await waitForAdmission("a1", lookup, { heartbeat: async () => { beats++; }, stopping: () => false, sleep: async () => {} });
+  assert.equal(v, "store");
+  assert.equal(beats, 2);
+});
+
+test("waitForAdmission: stops on shutdown and rethrows heartbeat errors (rebalance)", async () => {
+  const lookup = async () => "unavailable" as const;
+  let stop = false;
+  const p = waitForAdmission("a1", lookup, { heartbeat: async () => { stop = true; }, stopping: () => stop, sleep: async () => {} });
+  await assert.rejects(p, /stopping/);
+  await assert.rejects(
+    waitForAdmission("a1", lookup, { heartbeat: async () => { throw new Error("REBALANCE_IN_PROGRESS"); }, stopping: () => false, sleep: async () => {} }),
+    /REBALANCE_IN_PROGRESS/,
+  );
+});
+
+test("buildSessionIndex: dedicated client without query_timeout, CONCURRENTLY, always closed", async () => {
+  const configs: any[] = [];
+  const queries: string[] = [];
+  let ended = 0;
+  const make = (cfg: any) => {
+    configs.push(cfg);
+    return { connect: async () => {}, query: async (q: string) => { queries.push(q); return {}; }, end: async () => { ended++; } };
+  };
+  await buildSessionIndex("postgres://x", make);
+  assert.equal(configs[0].connectionString, "postgres://x");
+  assert.equal(configs[0].query_timeout, undefined);
+  assert.equal(configs[0].statement_timeout, undefined);
+  assert.deepEqual(queries, ["CREATE INDEX CONCURRENTLY IF NOT EXISTS messages_session_date_idx ON messages (session_id, date DESC)"]);
+  assert.equal(ended, 1);
+  const failing = () => ({ connect: async () => {}, query: async () => { throw new Error("boom"); }, end: async () => { ended++; } });
+  await assert.rejects(buildSessionIndex("postgres://x", failing as any), /boom/);
+  assert.equal(ended, 2);
+});
