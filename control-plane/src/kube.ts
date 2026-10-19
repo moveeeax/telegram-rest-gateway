@@ -1,5 +1,7 @@
 // Доступ к k8s: только namespace воркеров и только объекты с лейблом managed-by=control-plane.
 import * as k8s from "@kubernetes/client-node";
+import { ObjectSerializer } from "@kubernetes/client-node/dist/serializer.js";
+import { getSerializationType } from "@kubernetes/client-node/dist/util.js";
 import { LABEL_ACCOUNT, LABEL_MANAGED, MANAGED_VALUE, type KubeObject } from "./manifests.js";
 
 export interface Kube {
@@ -16,6 +18,15 @@ export interface Kube {
 
 // Secret в общий список не входит: в нем ключ шифрования БД TDLib, и reconcile его не удаляет
 // никогда. Удаляет его только lifecycle, когда S3 уже зачищен (lifecycle.ts).
+// KubernetesObjectApi.patch сериализует тело по модели типа (V1NetworkPolicy и т.п.), где часть
+// полей названа иначе, чем в JSON k8s: `from` в модели это `_from`. Объект в JSON-форме при этом
+// теряет такие поля молча (так NetworkPolicy ушла в кластер без from и пускала всех). Поэтому
+// перед patch переводим объект в форму модели; сериализатор вернет ровно исходный JSON. Тип без
+// модели (CRD, например IngressRoute) проходит как есть.
+export function toWire<T extends KubeObject>(obj: T): T {
+  return ObjectSerializer.deserialize(JSON.parse(JSON.stringify(obj)), getSerializationType(obj.apiVersion, obj.kind)) as T;
+}
+
 export const MANAGED_KINDS = ["StatefulSet", "Service", "NetworkPolicy", "IngressRoute"] as const;
 
 const API_VERSION: Record<string, string> = {
@@ -46,7 +57,7 @@ export class K8sKube implements Kube {
 
   async apply(obj: KubeObject): Promise<void> {
     if (obj.metadata.namespace !== this.namespace) throw new Error(`refusing to apply outside ${this.namespace}`);
-    await this.api.patch(obj as k8s.KubernetesObject, undefined, undefined, FIELD_MANAGER, true, k8s.PatchStrategy.ServerSideApply);
+    await this.api.patch(toWire(obj) as k8s.KubernetesObject, undefined, undefined, FIELD_MANAGER, true, k8s.PatchStrategy.ServerSideApply);
   }
 
   async delete(kind: string, name: string): Promise<void> {
