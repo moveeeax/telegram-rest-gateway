@@ -15,7 +15,6 @@
 #include <functional>
 #include <memory>
 #include <string>
-#include <thread>
 #include <utility>
 
 namespace td_api = td::td_api;
@@ -243,7 +242,9 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
 
     // POST /v1/auth/logout — выход из Telegram (control plane: удаление аккаунта, дубликат при
     // онбординге). Процесс после logout не завершается: под StatefulSet перезапустился бы и поднял
-    // из S3 снимок до logout. Поэтому S3-синк выключается до logOut, а процесс ждет SIGTERM.
+    // из S3 снимок до logout. S3-синк выключается, как только TDLib принял logOut, процесс ждет
+    // SIGTERM. Closed ждем опросом на event-loop (sleepCoro), без отдельного потока: корутина не
+    // переживает app().quit() и не держит ссылки на объекты main после его выхода.
     registerRoute(kAuthLogoutRoute, [&bridge, client_id, &auth, on_logout](
                                         const drogon::HttpRequestPtr&, HttpCallback&& callback) {
         if (auth.current() != tgw::auth::AuthState::Ready) {
@@ -252,24 +253,34 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
             return;
         }
         auth.expectShutdown();  // терминальные состояния дальше ожидаемы: без quit() процесса
-        on_logout();
         [](tgw::bridge::TdBridge& td, std::int32_t cid, tgw::auth::AuthStateManager& a,
-           HttpCallback cb) -> drogon::AsyncTask {
+           std::function<void()> disable_sync, HttpCallback cb) -> drogon::AsyncTask {
             auto object = co_await td.invoke(cid, td_api::make_object<td_api::logOut>());
             if (object != nullptr && object->get_id() == td_api::error::ID) {
+                a.cancelExpectShutdown();
                 cb(telegramError(static_cast<td_api::error&>(*object)));
                 co_return;
             }
-            // waitForClosed блокирует: ждем в отдельном потоке, а не на IO-петле Drogon.
-            std::thread([&a, cb = std::move(cb)] {
-                const bool closed = a.waitForClosed(std::chrono::seconds(10));
-                Json::Value body;
-                body["ok"] = true;
-                body["data"]["logged_out"] = closed;
-                cb(jsonResponse(std::move(body), drogon::k200OK));
-            }).detach();
+            disable_sync();
+            trantor::EventLoop* loop = trantor::EventLoop::getEventLoopOfCurrentThread();
+            if (loop == nullptr) {
+                loop = drogon::app().getLoop();
+            }
+            constexpr int kPolls = 100;  // 100 x 0.1 с = 10 с, как waitForClosed на shutdown
+            for (int i = 0; i < kPolls && a.current() != tgw::auth::AuthState::Closed; ++i) {
+                co_await drogon::sleepCoro(loop, 0.1);
+            }
+            if (a.current() != tgw::auth::AuthState::Closed) {
+                cb(serviceError("LOGOUT_TIMEOUT", "TDLib did not reach Closed within 10s",
+                                drogon::k504GatewayTimeout));
+                co_return;
+            }
+            Json::Value body;
+            body["ok"] = true;
+            body["data"]["logged_out"] = true;
+            cb(jsonResponse(std::move(body), drogon::k200OK));
             co_return;
-        }(bridge, client_id, auth, std::move(callback));
+        }(bridge, client_id, auth, on_logout, std::move(callback));
     });
 
     // --- GET /v1/me (мост, §12 этап 1) ---

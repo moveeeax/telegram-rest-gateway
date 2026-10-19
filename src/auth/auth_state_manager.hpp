@@ -48,6 +48,8 @@ class AuthStateManager final : public tgw::bridge::IUpdateSink {
 
     // Помечает, что завершение ожидаемо (main начинает shutdown) — колбэк ниже не сработает.
     void expectShutdown() { expect_shutdown_.store(true, std::memory_order_release); }
+    // Откат expectShutdown, если logout не начался (TDLib вернул ошибку на logOut).
+    void cancelExpectShutdown() { expect_shutdown_.store(false, std::memory_order_release); }
     // Колбэк на НЕожидаемый LoggingOut/Closing/Closed (удалённый logout с другого устройства,
     // AUTH_KEY_DUPLICATED и т.п.). Вызывается один раз из потока-приёмника.
     void setOnUnexpectedTermination(std::function<void()> cb) {
