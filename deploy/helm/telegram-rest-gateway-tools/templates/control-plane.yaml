@@ -130,6 +130,17 @@ spec:
               value: {{ $cp.apiBaseUrl | quote }}
             - name: CP_MCP_BASE_URL
               value: {{ $cp.mcpBaseUrl | quote }}
+            {{- if .Values.archiver.enabled }}
+            # Purge архива при удалении аккаунта (admin API архиватора).
+            - name: CP_ARCHIVER_ADMIN_URL
+              value: {{ printf "http://%s-archiver:8090" .Release.Name | quote }}
+            - name: CP_ARCHIVER_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: ARCHIVER_ADMIN_TOKEN
+                  optional: true
+            {{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: public }
             initialDelaySeconds: 3

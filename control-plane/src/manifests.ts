@@ -39,7 +39,7 @@ const PUBLIC_PATHS = "(chats|me|users|contacts|resolve|search|files|updates|heal
 export const API_HOST_DEFAULT = "tg.tarassov.me";
 
 // Шаги удаления (lifecycle.ts), на которых воркер уже вышел из Telegram и должен быть остановлен.
-export const SCALED_DOWN_STEPS = new Set(["logged_out", "scaled", "pod_gone", "s3_deleted"]);
+export const SCALED_DOWN_STEPS = new Set(["logged_out", "scaled", "pod_gone", "s3_deleted", "archive_purged"]);
 
 export function workerName(accountId: string): string {
   if (!isAccountId(accountId)) throw new Error(`invalid accountId: ${accountId}`);

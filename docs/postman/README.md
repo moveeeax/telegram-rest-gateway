@@ -30,21 +30,27 @@
 
 ## Архиватор
 
-Отдельный сервис (HTTP :8090): статистика, полнотекстовый поиск по истории и бэкфилл.
+Внутренний сервис (HTTP :8090), наружу не выставлен. Доступ только через port-forward:
+`kubectl -n tgw port-forward svc/tgw-tools-archiver 8090:8090`.
 
 ### Импорт
-1. Postman → Import → `archiver.postman_collection.json`.
-2. Импортируй окружение:
-   - `archiver-local.postman_environment.json` — `baseUrl=http://localhost:8090` (через `kubectl -n tgw port-forward svc/tgw-tools-archiver 8090:8090`).
-   - `archiver-prod.postman_environment.json` — `baseUrl=https://tgw-archive.tarassov.me` (Ingress). Через Ingress доступны **только** `/search` и `/health` — для Stats и Backfill используй `archiver-local` + port-forward.
-3. В окружении задай `token` — это `ARCHIVER_TOKEN` (`kubectl -n tgw get secret tgw-tools -o jsonpath='{.data.ARCHIVER_TOKEN}' | base64 -d`).
+1. Postman → Import → `archiver.postman_collection.json` и `archiver-local.postman_environment.json`.
+2. `token` — `ARCHIVER_TOKEN` (токен MCP, только поиск):
+   `kubectl -n tgw get secret tgw-tools -o jsonpath='{.data.ARCHIVER_TOKEN}' | base64 -d`.
+3. `adminToken` — `ARCHIVER_ADMIN_TOKEN` (статистика, бэкфилл, повтор медиа, purge):
+   `kubectl -n tgw get secret tgw-tools -o jsonpath='{.data.ARCHIVER_ADMIN_TOKEN}' | base64 -d`.
+4. `sessionId` — `accountId` воркера control plane.
 
 ### Запросы
 - **System → Health** — живость (No Auth).
-- **System → Stats** — `messages`/`chats`/`processed_events`/`dropped_events`/`consecutive_drops` + статус медиа-оффлоада. Только port-forward (через Ingress не публикуется).
-- **Search → Search history** — `?q=…`; опциональные `chat_id`/`session_id` выключены по умолчанию — включи во вкладке Params.
-- **Backfill → Start** — POST; только port-forward (через Ingress не публикуется). В теле задай `gateway_url`/`token`/`session_id` (переменные `gatewayUrl`/`gatewayToken`/`sessionId`): `gateway_url` = `http://tgw-<accountId>.tgw-accounts.svc.cluster.local:8080`, `token` = `ARCHIVER_SERVICE_TOKEN` из Secret `tgw-<accountId>` (read), `session_id` = `<accountId>`. `gateway_url` проходит anti-SSRF-проверку: он должен совпадать с `ARCHIVER_GATEWAY_TEMPLATE` (если задан) либо быть localhost / cluster DNS / private IP — внешний URL гейтвея через Ingress не подойдёт.
-- **Backfill → Status** — GET; стейт in-memory, обнуляется при рестарте пода.
+- **System → Stats** — счетчики и медиа (`uploaded`, `failed`, `pending`), `skipped_not_archived`. Admin.
+- **Search → Search history** — `?q=…&session_id=…`, без `session_id` 400.
+- **Backfill → Start** — тело `{"session_id": "..."}`: адрес гейтвея и токен из реестра. Admin.
+- **Backfill → Status** — Admin.
+- **Admin → Media retry** — повтор оффлоада для строк без `media_url`.
+- **Admin → Purge account** — удаление архива аккаунта (обычно его вызывает control plane при удалении).
+
+Архиватор пишет только аккаунты с `archive_enabled` (флаг в control plane, по умолчанию включен).
 
 ## Control plane
 

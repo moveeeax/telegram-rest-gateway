@@ -163,48 +163,6 @@ spec:
   selector:
     app.kubernetes.io/name: tgw-archiver
     app.kubernetes.io/instance: {{ .Release.Name }}
-{{- if and .Values.ingress.enabled .Values.ingress.archiverHost }}
-{{- include "tools.ingressGuard" . }}
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: {{ .Release.Name }}-archiver
-  labels:
-    app.kubernetes.io/name: tgw-archiver
-    app.kubernetes.io/instance: {{ .Release.Name }}
-  {{- with include "tools.ingressAnnotations" . }}
-  annotations:
-    {{- . | nindent 4 }}
-  {{- end }}
-spec:
-  {{- with .Values.ingress.className }}
-  ingressClassName: {{ . }}
-  {{- end }}
-  rules:
-    - host: {{ .Values.ingress.archiverHost | quote }}
-      http:
-        # Только read-only: /search и /health. /backfill и /stats остаются ClusterIP-only
-        # (SSRF-поверхность backfill и внутренние счётчики наружу не выставляем).
-        paths:
-          - path: /health
-            pathType: Exact
-            backend:
-              service:
-                name: {{ .Release.Name }}-archiver
-                port:
-                  name: http
-          - path: /search
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ .Release.Name }}-archiver
-                port:
-                  name: http
-  {{- if .Values.ingress.tls.enabled }}
-  tls:
-    - hosts: [{{ .Values.ingress.archiverHost | quote }}]
-      secretName: {{ .Release.Name }}-archiver-tls
-  {{- end }}
-{{- end }}
+{{- /* Наружу архиватор не выставляется (дизайн, раздел «Архиватор», пункт 1): поиск идет только
+     через MCP, админские пути через port-forward. ingress.archiverHost игнорируется. */ -}}
 {{- end }}

@@ -48,6 +48,8 @@ export interface Store {
   setMediaUrl(session_id: string, chat_id: string, message_id: string, url: string): Promise<void>;
   // Строки с file_id, но без media_url (оффлоад не удался), новые сначала.
   pendingMedia(session_id: string | null, sinceEpoch: number, limit: number): Promise<MediaJob[]>;
+  // Удаляет архив аккаунта: сообщения, чаты, seq. Для удаления аккаунта в control plane.
+  purgeSession(session_id: string): Promise<{ messages: number; chats: number }>;
   getSeq(session_id: string): Promise<number | undefined>;
   setSeq(session_id: string, seq: number): Promise<void>;
   search(a: SearchArgs): Promise<SearchRow[]>;
@@ -80,6 +82,7 @@ CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE OF text ON messages BEGIN
   INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text); END;
 CREATE TABLE IF NOT EXISTS chats (session_id TEXT NOT NULL, chat_id TEXT NOT NULL, title TEXT, type TEXT, PRIMARY KEY (session_id, chat_id));
 CREATE TABLE IF NOT EXISTS seq_state (session_id TEXT PRIMARY KEY, last_seq INTEGER);
+CREATE INDEX IF NOT EXISTS messages_session_date_idx ON messages (session_id, date DESC);
 `);
     // media_url мог отсутствовать в старой БД — добавим при апгрейде.
     try { this.db.exec(`ALTER TABLE messages ADD COLUMN media_url TEXT`); } catch { /* уже есть */ }
@@ -105,6 +108,12 @@ CREATE TABLE IF NOT EXISTS seq_state (session_id TEXT PRIMARY KEY, last_seq INTE
   async upsertChat(s: string, c: string, t: string, ty: string): Promise<void> {
     this.db.prepare(`INSERT INTO chats (session_id,chat_id,title,type) VALUES (?,?,?,?)
       ON CONFLICT(session_id,chat_id) DO UPDATE SET title=excluded.title,type=excluded.type`).run(s, c, t, ty);
+  }
+  async purgeSession(s: string): Promise<{ messages: number; chats: number }> {
+    const m = this.db.prepare(`DELETE FROM messages WHERE session_id = ?`).run(s).changes;
+    const c = this.db.prepare(`DELETE FROM chats WHERE session_id = ?`).run(s).changes;
+    this.db.prepare(`DELETE FROM seq_state WHERE session_id = ?`).run(s);
+    return { messages: m, chats: c };
   }
   async pendingMedia(s: string | null, since: number, limit: number): Promise<MediaJob[]> {
     return this.db.prepare(`SELECT session_id,chat_id,message_id,file_id,file_name,mime_type FROM messages
@@ -172,6 +181,16 @@ CREATE INDEX IF NOT EXISTS messages_date_idx ON messages (date DESC);
 CREATE TABLE IF NOT EXISTS chats (session_id text NOT NULL, chat_id text NOT NULL, title text, type text, PRIMARY KEY (session_id, chat_id));
 CREATE TABLE IF NOT EXISTS seq_state (session_id text PRIMARY KEY, last_seq bigint);
 `);
+    // Индекс для поиска в срезе аккаунта. Отдельным соединением без statement_timeout: на большой
+    // таблице построение дольше 20 с пула.
+    const c = await this.pool.connect();
+    try {
+      await c.query("SET statement_timeout = 0");
+      await c.query("CREATE INDEX IF NOT EXISTS messages_session_date_idx ON messages (session_id, date DESC)");
+    } finally {
+      await c.query("RESET statement_timeout").catch(() => {});
+      c.release();
+    }
   }
   async upsertMessage(r: MessageRow): Promise<void> {
     await this.pool.query(
@@ -198,6 +217,20 @@ CREATE TABLE IF NOT EXISTS seq_state (session_id text PRIMARY KEY, last_seq bigi
   async upsertChat(s: string, c: string, t: string, ty: string): Promise<void> {
     await this.pool.query(`INSERT INTO chats (session_id,chat_id,title,type) VALUES ($1,$2,$3,$4)
       ON CONFLICT (session_id,chat_id) DO UPDATE SET title=EXCLUDED.title,type=EXCLUDED.type`, [s, c, t, ty]);
+  }
+  // Пачками по 5000 строк в отдельных транзакциях: одна большая транзакция на сотни тысяч строк
+  // с GIN-индексом упирается в statement_timeout и память Postgres.
+  async purgeSession(s: string): Promise<{ messages: number; chats: number }> {
+    let messages = 0;
+    for (;;) {
+      const r = await this.pool.query(
+        `DELETE FROM messages WHERE ctid IN (SELECT ctid FROM messages WHERE session_id = $1 LIMIT 5000)`, [s]);
+      messages += r.rowCount ?? 0;
+      if ((r.rowCount ?? 0) === 0) break;
+    }
+    const c = await this.pool.query(`DELETE FROM chats WHERE session_id = $1`, [s]);
+    await this.pool.query(`DELETE FROM seq_state WHERE session_id = $1`, [s]);
+    return { messages, chats: c.rowCount ?? 0 };
   }
   async pendingMedia(s: string | null, since: number, limit: number): Promise<MediaJob[]> {
     const r = await this.pool.query(`SELECT session_id,chat_id,message_id,file_id,file_name,mime_type FROM messages

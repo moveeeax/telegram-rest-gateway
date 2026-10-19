@@ -38,6 +38,8 @@ test("QR path to ready: worker created, token shown exactly once", async () => {
 
     const acc = await e.store.getAccount(id);
     assert.equal(acc?.status, "active");
+    // архив у всех тенантов включен по умолчанию (решение владельца 2026-10-19)
+    assert.equal(acc?.archiveEnabled, true);
     assert.equal(acc?.telegramUserId, "777");
     assert.equal(acc?.username, "tester");
     assert.equal(e.s3.metas.get(id).telegram_user_id, "777");

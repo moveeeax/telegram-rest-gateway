@@ -89,7 +89,8 @@ out="$(render "tools allowlist" "${TOOLS_ARGS[@]}" --set 'ingress.ipAllowList={2
 # Документы Ingress по одному: awk режет вывод по '---' и берет документ с нужным именем.
 doc() { awk -v n="name: $2" 'BEGIN{RS="\n---\n"} index($0, "kind: Ingress") && index($0, n)' <<<"$1"; }
 assert_contains "tools allowlist on mcp" "$(doc "$out" tt-mcp-111)" "tgw-tt-ip-allowlist@kubernetescrd"
-assert_contains "tools allowlist on archiver" "$(doc "$out" tt-archiver)" "tgw-tt-ip-allowlist@kubernetescrd"
+# Архиватор наружу не выставляется: Ingress не рендерится даже с ingress.archiverHost.
+if [[ -z "$(doc "$out" tt-archiver)" && -n "$out" ]]; then pass "archiver: no ingress"; else fail "archiver: no ingress" "Ingress tt-archiver отрендерен"; fi
 n_mw="$(grep -c '^kind: Middleware' <<<"$out" || true)"
 if [[ "$n_mw" == 1 ]]; then pass "tools single middleware"; else fail "tools single middleware" "Middleware: $n_mw"; fi
 assert_contains "tools class traefik" "$out" "ingressClassName: traefik"
@@ -186,5 +187,12 @@ ardep="$(awk 'BEGIN{RS="\n---\n"} index($0, "kind: Deployment") && index($0, "na
 assert_contains "archiver: registry url" "$ardep" "http://tt-control-plane:8096/internal/registry"
 assert_contains "archiver: registry token" "$(grep -A4 'name: ARCHIVER_REGISTRY_TOKEN' <<<"$ardep")" "key: CP_REGISTRY_ARCHIVER_TOKEN"
 assert_contains "archiver: admin token" "$(grep -A4 'name: ARCHIVER_ADMIN_TOKEN' <<<"$ardep")" "key: ARCHIVER_ADMIN_TOKEN"
+
+# Control plane чистит архив удаленного аккаунта через admin API архиватора.
+out="$(render "cp archiver purge" tt "$TOOLS" --namespace tgw --set archiver.image.tag=x --set mcp.enabled=false \
+    --set controlPlane.enabled=true --set controlPlane.image.tag=x --set controlPlane.workerImage=gw:x)" || { out=""; FAILED=1; }
+cpdep="$(awk 'BEGIN{RS="\n---\n"} index($0, "kind: Deployment") && index($0, "name: tt-control-plane\n")' <<<"$out")"
+assert_contains "cp: archiver admin url" "$cpdep" "http://tt-archiver:8090"
+assert_contains "cp: archiver admin token" "$(grep -A5 'name: CP_ARCHIVER_ADMIN_TOKEN' <<<"$cpdep")" "key: ARCHIVER_ADMIN_TOKEN"
 
 exit "$FAILED"

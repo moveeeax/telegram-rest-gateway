@@ -13,6 +13,7 @@ import { makeStore, type MessageRow } from "./store.js";
 import { MediaOffloader } from "./media.js";
 import { ArchiverRegistry } from "./registry.js";
 import { retryMedia } from "./media_retry.js";
+import { accessLevel, admitFrame, guardAdmin, parsePurgeId } from "./tenancy.js";
 
 const BROKERS = (process.env.ARCHIVER_KAFKA_BROKERS ?? "redpanda:9092").split(",");
 const TOPIC = process.env.ARCHIVER_KAFKA_TOPIC ?? "tgw.updates";
@@ -59,6 +60,8 @@ if (media) console.error("archiver: media offload enabled (S3)");
 let processed = 0;
 let dropped = 0;
 let consecutiveDrops = 0;
+// Кадры аккаунтов без archive_enabled (или удаленных): не пишутся, offset коммитится.
+let skippedNotArchived = 0;
 // Здоровье Kafka-консьюмера — отражается в /health, на который смотрят И liveness, И readiness
 // пробы k8s. Раньше /health был безусловным 200: даже упавший (crashed/stopped) консьюмер не
 // приводил ни к рестарту пода, ни к выводу его из ротации (5.3).
@@ -303,15 +306,11 @@ function authorized(req: http.IncomingMessage): boolean {
   return timingSafeEqual(got, want);
 }
 
-// Админские операции (повтор медиа; дальше /stats, /backfill, purge) требуют отдельный
-// ARCHIVER_ADMIN_TOKEN. Без него админские пути закрыты (403): fail closed.
+// Админские операции (/stats, /backfill, /media/retry, DELETE /accounts/:id) требуют отдельный
+// ARCHIVER_ADMIN_TOKEN; токен MCP (ARCHIVER_TOKEN) дает только /search. Без admin-токена в
+// конфиге админские пути закрыты (fail closed).
 const ADMIN_TOKEN = process.env.ARCHIVER_ADMIN_TOKEN ?? "";
-function adminAuthorized(req: http.IncomingMessage): boolean {
-  if (!ADMIN_TOKEN) return false;
-  const got = createHash("sha256").update(req.headers.authorization ?? "").digest();
-  const want = createHash("sha256").update(`Bearer ${ADMIN_TOKEN}`).digest();
-  return timingSafeEqual(got, want);
-}
+const level = (req: http.IncomingMessage) => accessLevel(req.headers.authorization, { search: TOKEN, admin: ADMIN_TOKEN });
 
 async function readBody(req: http.IncomingMessage, maxBytes: number): Promise<{ ok: true; body: string } | { ok: false; tooLarge: true }> {
   // Копим Buffer'ы и декодируем один раз в конце: multibyte-символ может быть
@@ -341,7 +340,8 @@ const server = http.createServer((req, res) => {
         return send(200, { ok: true });
       }
       if (url.pathname === "/media/retry" && req.method === "POST") {
-        if (!adminAuthorized(req)) return send(req.headers.authorization ? 403 : 401, { ok: false, error: "admin token required" });
+        const deny = guardAdmin(level(req));
+        if (deny) return send(deny, { ok: false, error: "admin token required" });
         if (!media) return send(409, { ok: false, error: "media offload disabled" });
         const raw = await readBody(req, 4096);
         if (!raw.ok) return send(413, { ok: false, error: "body too large" });
@@ -355,7 +355,23 @@ const server = http.createServer((req, res) => {
           return send(400, { ok: false, error: (e as Error).message });
         }
       }
-      if (!authorized(req)) return send(401, { ok: false, error: "unauthorized" });
+      const purgeMatch = url.pathname.startsWith("/accounts/");
+      if (purgeMatch && req.method === "DELETE") {
+        const deny = guardAdmin(level(req));
+        if (deny) return send(deny, { ok: false, error: "admin token required" });
+        const id = parsePurgeId(url.pathname);
+        if (!id) return send(400, { ok: false, error: "invalid account id" });
+        const rows = await store.purgeSession(id);
+        const mediaObjects = media ? await media.purgeSession(id) : 0;
+        console.error(`archiver: purged ${id}: ${rows.messages} messages, ${rows.chats} chats, ${mediaObjects} media objects`);
+        return send(200, { ok: true, account: id, ...rows, media_objects: mediaObjects });
+      }
+      if (url.pathname === "/stats" || url.pathname === "/backfill") {
+        const deny = guardAdmin(level(req));
+        if (deny) return send(deny, { ok: false, error: "admin token required" });
+      } else if (!authorized(req)) {
+        return send(401, { ok: false, error: "unauthorized" });
+      }
 
       if (url.pathname === "/stats") {
         const s = await store.stats();
@@ -364,6 +380,7 @@ const server = http.createServer((req, res) => {
           ...s,
           processed_events: processed,
           dropped_events: dropped,
+          skipped_not_archived: skippedNotArchived,
           consecutive_drops: consecutiveDrops,
           drop_circuit: DROP_CIRCUIT,
           media: media?.stats() ?? null,
@@ -372,6 +389,8 @@ const server = http.createServer((req, res) => {
       if (url.pathname === "/search") {
         const q = url.searchParams.get("q") ?? "";
         if (!q.trim()) return send(400, { ok: false, error: "query param 'q' is required" });
+        // Поиск только в срезе одного аккаунта: без session_id ответ содержал бы чужую переписку.
+        if (!url.searchParams.get("session_id")) return send(400, { ok: false, error: "query param 'session_id' is required" });
         const rows = await store.search({
           q, chat_id: url.searchParams.get("chat_id"), session_id: url.searchParams.get("session_id"),
           limit: queryLimit(url.searchParams.get("limit"), 20, 100),
@@ -390,11 +409,26 @@ const server = http.createServer((req, res) => {
         if (!raw.ok) { releaseIfOwn(state); return send(413, { ok: false, error: "body too large" }); }
         let cfg: any = {};
         try { cfg = JSON.parse(raw.body || "{}"); } catch { releaseIfOwn(state); return send(400, { ok: false, error: "bad json body" }); }
-        if (!cfg.gateway_url || !cfg.token || !cfg.session_id) {
+        if (!cfg.session_id) {
           releaseIfOwn(state);
-          return send(400, { ok: false, error: "gateway_url, token, session_id are required" });
+          return send(400, { ok: false, error: "session_id is required" });
         }
         const sessionId = String(cfg.session_id);
+        // С реестром адрес и токен гейтвея берутся оттуда, из тела не принимаются (нет SSRF).
+        if (registry) {
+          const t = await registry.get(sessionId);
+          if (t === "unavailable") { releaseIfOwn(state); return send(503, { ok: false, error: "registry unavailable" }); }
+          if (t === null || !t.archiveEnabled) { releaseIfOwn(state); return send(400, { ok: false, error: "account is not archived" }); }
+          state.session_id = sessionId;
+          const throttle = queryLimit(String(cfg.throttle_ms ?? 300), 300, 60_000, 0);
+          const perChat = queryLimit(String(cfg.max_per_chat ?? "1000000"), 1_000_000, 5_000_000);
+          void runBackfill(state, t.gatewayUrl, t.token, sessionId, throttle, perChat);
+          return send(200, { ok: true, started: true, session_id: sessionId });
+        }
+        if (!cfg.gateway_url || !cfg.token) {
+          releaseIfOwn(state);
+          return send(400, { ok: false, error: "gateway_url and token are required without a registry" });
+        }
         const gatewayUrl = String(cfg.gateway_url).replace(/\/$/, "");
         if (!isAllowedGatewayUrl(gatewayUrl, sessionId)) {
           releaseIfOwn(state);
@@ -472,6 +506,16 @@ async function main() {
         // содержимое не логируем — только тип
         console.error("bad event (not an object):", Array.isArray(frame) ? "array" : typeof frame);
         return;
+      }
+      // Только аккаунты с archive_enabled. Пока реестр недоступен, кадр держим: не коммитим offset
+      // и ждем, иначе при старте без реестра архив молча терял бы события.
+      const sid = String((frame as any).session_id ?? "default");
+      for (;;) {
+        const verdict = await admitFrame(sid, registry ? (s) => registry.get(s) : null);
+        if (verdict === "store") break;
+        if (verdict === "drop") { skippedNotArchived += 1; return; }
+        await heartbeat().catch(() => {});
+        await sleep(5000);
       }
       // storage/transient: ретраи с бэкоффом, после — drop+commit одного события
       // (не вешаем партицию навсегда). Серия consecutive drops → fail-closed.

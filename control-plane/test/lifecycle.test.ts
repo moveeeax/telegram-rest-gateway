@@ -96,3 +96,28 @@ test("pollActive marks a logged-out worker needs_relogin", async () => {
     assert.equal((await e.store.getAccount(ID))?.status, "needs_relogin");
   } finally { await w.stop(); }
 });
+
+test("deletion purges the archive after S3 and only then drops the record", async () => {
+  const http = await import("node:http");
+  const calls: string[] = [];
+  let fail = true;
+  const arch = http.createServer((req, res) => {
+    calls.push(`${req.method} ${req.url} ${req.headers.authorization}`);
+    res.writeHead(fail ? 500 : 200, { "content-type": "application/json" });
+    res.end(fail ? "{}" : '{"ok":true}');
+  });
+  const url: string = await new Promise((r) => arch.listen(0, "127.0.0.1", () => r(`http://127.0.0.1:${(arch.address() as any).port}`)));
+  try {
+    const e = await env("http://127.0.0.1:1");
+    (e.deps as any).cfg = config({ archiverAdminUrl: url, archiverAdminToken: "arch-adm" });
+    await e.store.insertAccount(account(ID, { status: "deleting", deleteStep: "pod_gone" }));
+    await advanceDeletion((await e.store.getAccount(ID))!, e.deps);
+    assert.deepEqual(e.s3.deleted, [`telegram-sessions/${ID}/`]);
+    assert.deepEqual(calls, [`DELETE /accounts/${ID} Bearer arch-adm`]);
+    // purge не прошел: запись остается, шаг повторится
+    assert.equal((await e.store.getAccount(ID))?.deleteStep, "s3_deleted");
+    fail = false;
+    await advanceDeletion((await e.store.getAccount(ID))!, e.deps);
+    assert.equal(await e.store.getAccount(ID), null);
+  } finally { arch.close(); }
+});
