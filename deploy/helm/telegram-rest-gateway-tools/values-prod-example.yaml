@@ -11,8 +11,8 @@ mcp:
   # Пример владельца: реальные Telegram account id (совпадают с accounts гейтвея);
   # в дефолтах чарта mcp.accounts пуст.
   accounts:
-    - sessionId: "1214732998"
-    - sessionId: "1389231240"
+    - sessionId: "1000000001"
+    - sessionId: "1000000002"
 ingress:
   enabled: true
   className: traefik

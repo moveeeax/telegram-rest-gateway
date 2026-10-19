@@ -89,7 +89,7 @@
 
 Порты разделены: публичный (страницы онбординга) идет в Ingress, admin и `/internal` слушают отдельный порт, который в Ingress не попадает.
 
-- [ ] **Step 1: тесты.** `newAccountId` 1000 раз матчит `^a[a-z0-9]{10}$` и без повторов; `isAccountId("1214732998")` true, `isAccountId("A1234567890")` false, `isAccountId("a123")` false, `isAccountId("../x")` false; `accountIdFromToken(clientToken(id)) === id`; `accountIdFromToken("nodot")` null; `newSecret()` длиной 43 и матчит `^[A-Za-z0-9_-]+$`. `loadConfig({})` бросает ошибку с именем первой отсутствующей обязательной переменной (`CP_PG_URL`); пустой `CP_ADMIN_TOKEN` тоже ошибка.
+- [ ] **Step 1: тесты.** `newAccountId` 1000 раз матчит `^a[a-z0-9]{10}$` и без повторов; `isAccountId("1000000001")` true, `isAccountId("A1234567890")` false, `isAccountId("a123")` false, `isAccountId("../x")` false; `accountIdFromToken(clientToken(id)) === id`; `accountIdFromToken("nodot")` null; `newSecret()` длиной 43 и матчит `^[A-Za-z0-9_-]+$`. `loadConfig({})` бросает ошибку с именем первой отсутствующей обязательной переменной (`CP_PG_URL`); пустой `CP_ADMIN_TOKEN` тоже ошибка.
 - [ ] **Step 2:** `cd control-plane && npm test`. Expected: FAIL, модули не найдены.
 - [ ] **Step 3:** реализовать. Slug: `randomBytes` с отбраковкой байтов ≥ 252 (`252 = 36·7`), без смещения распределения.
 - [ ] **Step 4:** `npm test` и `npm run build`. Expected: PASS, tsc без ошибок.
@@ -189,7 +189,7 @@ function startReconciler(store, kube, cfg): { kick(): void; stop(): void };
 
 Поведение `reconcileOnce`: читает `listAccounts()`; если чтение бросило ошибку, функция бросает ее дальше, ничего не применив и не удалив. Для каждого аккаунта применяет `desiredObjects`. Объекты с лейблом, чей `account-id` не встречается в базе, удаляет; IngressRoute аккаунта не в статусе `active` удаляет. Secret удаляется только при отсутствии записи в базе. `kick()` склеивает частые вызовы в один проход, параллельных проходов нет.
 
-- [ ] **Step 1: тесты на `FakeKube`.** Новый `onboarding`-аккаунт дает 3 apply. Объект с лейблом без записи в базе удаляется. Объект без лейбла `managed-by` не трогается, даже с похожим именем `tgw-1214732998`. Store, у которого `listAccounts` бросает ошибку, дает reject и ноль вызовов `delete` (Review Focus 1). `onboarding`-аккаунт моложе 15 минут после «перезапуска» (новый экземпляр reconciler на том же store и FakeKube) сохраняет свои объекты (Review Focus 5). Переход `active` в `needs_relogin` удаляет IngressRoute и оставляет StatefulSet. Пять `kick()` подряд дают один проход.
+- [ ] **Step 1: тесты на `FakeKube`.** Новый `onboarding`-аккаунт дает 3 apply. Объект с лейблом без записи в базе удаляется. Объект без лейбла `managed-by` не трогается, даже с похожим именем `tgw-1000000001`. Store, у которого `listAccounts` бросает ошибку, дает reject и ноль вызовов `delete` (Review Focus 1). `onboarding`-аккаунт моложе 15 минут после «перезапуска» (новый экземпляр reconciler на том же store и FakeKube) сохраняет свои объекты (Review Focus 5). Переход `active` в `needs_relogin` удаляет IngressRoute и оставляет StatefulSet. Пять `kick()` подряд дают один проход.
 - [ ] **Step 2:** `npm test`. Expected: FAIL.
 - [ ] **Step 3:** реализовать.
 - [ ] **Step 4:** `npm test`. Expected: PASS.

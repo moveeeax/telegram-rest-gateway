@@ -15,7 +15,7 @@ test("newAccountId: slug format, no repeats", () => {
 });
 
 test("isAccountId: slug and numeric legacy ids only", () => {
-  assert.equal(isAccountId("1214732998"), true);
+  assert.equal(isAccountId("1000000001"), true);
   assert.equal(isAccountId(newAccountId()), true);
   assert.equal(isAccountId("A1234567890"), false);
   assert.equal(isAccountId("a123"), false);

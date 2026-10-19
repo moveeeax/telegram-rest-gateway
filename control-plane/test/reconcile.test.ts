@@ -32,10 +32,10 @@ test("labelled objects without a db record are deleted, but never the Secret", a
 test("objects without managed-by label are never touched", async () => {
   const store = new MemStore();
   const kube = new FakeKube();
-  kube.putForeign("Service", "tgw-1214732998", "1214732998");
+  kube.putForeign("Service", "tgw-1000000001", "1000000001");
   await reconcileOnce(store, kube, config(), NOW);
   assert.deepEqual(kube.deleted, []);
-  assert.ok(kube.objects.has("Service/tgw-1214732998"));
+  assert.ok(kube.objects.has("Service/tgw-1000000001"));
 });
 
 test("db read failure: nothing applied, nothing deleted", async () => {

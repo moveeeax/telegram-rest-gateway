@@ -338,21 +338,21 @@ Expected: `STATUS: deployed`. Поды гейтвея пересоздаются
 С IP владельца:
 
 ```
-curl -s -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/v1/health        -> 200
-curl -s -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/metrics          -> 404
-curl -s -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/METRICS          -> 404
-curl -s -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/Ui               -> 404
-curl -s -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/ui               -> 200
-curl -s --path-as-is -o /dev/null -w '%{http_code}' https://tg-1214732998.tarassov.me/v1/../metrics  -> не 200
-curl -s -o /dev/null -w '%{http_code}' 'https://tg-1214732998.tarassov.me/v1/..%2Fmetrics'          -> не 200
+curl -s -o /dev/null -w '%{http_code}' https://tg-1000000001.tarassov.me/v1/health        -> 200
+curl -s -o /dev/null -w '%{http_code}' https://tg-1000000001.tarassov.me/metrics          -> 404
+curl -s -o /dev/null -w '%{http_code}' https://tg-1000000001.tarassov.me/METRICS          -> 404
+curl -s -o /dev/null -w '%{http_code}' https://tg-1000000001.tarassov.me/Ui               -> 404
+curl -s -o /dev/null -w '%{http_code}' https://tg-1000000001.tarassov.me/ui               -> 200
+curl -s --path-as-is -o /dev/null -w '%{http_code}' https://tg-1000000001.tarassov.me/v1/../metrics  -> не 200
+curl -s -o /dev/null -w '%{http_code}' 'https://tg-1000000001.tarassov.me/v1/..%2Fmetrics'          -> не 200
 ```
 
 С другого IP (мобильная сеть владельца или любой внешний хост, который он укажет) все пять адресов дают `403`. Если с IP владельца тоже `403`, Traefik видит адрес LB, а не клиента. Тогда `ipAllowList` убрать, `exposeLoginUi: false`, `allowOpenIngress: true` с комментарием, повторить шаг 4 и сообщить владельцу.
 
 - [ ] **Step 6: Проверка утечки архива**
 
-Через коннектор аккаунта `1214732998` вызвать `telegram_search_history` со словом, которое есть только в переписке `1389231240`.
-Expected: пустой результат. В логах архиватора запрос `/search` содержит `session_id=1214732998`.
+Через коннектор аккаунта `1000000001` вызвать `telegram_search_history` со словом, которое есть только в переписке `1000000002`.
+Expected: пустой результат. В логах архиватора запрос `/search` содержит `session_id=1000000001`.
 
 - [ ] **Step 7: Проверка push на Ready**
 
@@ -362,5 +362,5 @@ Expected: пустой результат. В логах архиватора з
 авторизацию в бинлог к моменту Ready: добавить второй шаг синка с задержкой через `SyncGate`.
 
 
-Run: `kubectl --context oci-k3s -n tgw logs deploy/tgw-1214732998 | grep "push on ready"`
+Run: `kubectl --context oci-k3s -n tgw logs deploy/tgw-1000000001 | grep "push on ready"`
 Expected: строка `s3 sync: push on ready` после последнего рестарта и следом `s3 sync: session pushed`.
