@@ -1,3 +1,4 @@
+import type { MediaJob } from "./media.js";
 /**
  * Абстракция хранилища архива. Два бэкенда:
  *  - SqliteStore  — встроенный (better-sqlite3 + FTS5), дефолт;
@@ -45,6 +46,8 @@ export interface Store {
   markDeleted(session_id: string, chat_id: string, message_id: string): Promise<void>;
   upsertChat(session_id: string, chat_id: string, title: string, type: string): Promise<void>;
   setMediaUrl(session_id: string, chat_id: string, message_id: string, url: string): Promise<void>;
+  // Строки с file_id, но без media_url (оффлоад не удался), новые сначала.
+  pendingMedia(session_id: string | null, sinceEpoch: number, limit: number): Promise<MediaJob[]>;
   getSeq(session_id: string): Promise<number | undefined>;
   setSeq(session_id: string, seq: number): Promise<void>;
   search(a: SearchArgs): Promise<SearchRow[]>;
@@ -102,6 +105,11 @@ CREATE TABLE IF NOT EXISTS seq_state (session_id TEXT PRIMARY KEY, last_seq INTE
   async upsertChat(s: string, c: string, t: string, ty: string): Promise<void> {
     this.db.prepare(`INSERT INTO chats (session_id,chat_id,title,type) VALUES (?,?,?,?)
       ON CONFLICT(session_id,chat_id) DO UPDATE SET title=excluded.title,type=excluded.type`).run(s, c, t, ty);
+  }
+  async pendingMedia(s: string | null, since: number, limit: number): Promise<MediaJob[]> {
+    return this.db.prepare(`SELECT session_id,chat_id,message_id,file_id,file_name,mime_type FROM messages
+      WHERE file_id IS NOT NULL AND file_id <> '' AND (media_url IS NULL OR media_url = '') AND deleted = 0
+        AND (? IS NULL OR session_id = ?) AND date >= ? ORDER BY date DESC LIMIT ?`).all(s, s, since, limit) as MediaJob[];
   }
   async setMediaUrl(s: string, c: string, m: string, url: string): Promise<void> {
     this.db.prepare(`UPDATE messages SET media_url=? WHERE session_id=? AND chat_id=? AND message_id=?`).run(url, s, c, m);
@@ -190,6 +198,12 @@ CREATE TABLE IF NOT EXISTS seq_state (session_id text PRIMARY KEY, last_seq bigi
   async upsertChat(s: string, c: string, t: string, ty: string): Promise<void> {
     await this.pool.query(`INSERT INTO chats (session_id,chat_id,title,type) VALUES ($1,$2,$3,$4)
       ON CONFLICT (session_id,chat_id) DO UPDATE SET title=EXCLUDED.title,type=EXCLUDED.type`, [s, c, t, ty]);
+  }
+  async pendingMedia(s: string | null, since: number, limit: number): Promise<MediaJob[]> {
+    const r = await this.pool.query(`SELECT session_id,chat_id,message_id,file_id,file_name,mime_type FROM messages
+      WHERE file_id IS NOT NULL AND file_id <> '' AND (media_url IS NULL OR media_url = '') AND deleted = false
+        AND ($1::text IS NULL OR session_id = $1) AND date >= $2 ORDER BY date DESC LIMIT $3`, [s, since, limit]);
+    return r.rows as MediaJob[];
   }
   async setMediaUrl(s: string, c: string, m: string, url: string): Promise<void> {
     await this.pool.query(`UPDATE messages SET media_url=$1 WHERE session_id=$2 AND chat_id=$3 AND message_id=$4`, [url, s, c, m]);

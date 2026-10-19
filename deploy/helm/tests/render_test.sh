@@ -179,4 +179,12 @@ out="$(render "mcp shared off" tt "$TOOLS" --namespace tgw --set archiver.enable
 assert_not_contains "mcp shared: disabled" "$out" "MCP_REGISTRY_URL"
 assert_not_contains "mcp shared: no edge rule when disabled" "$out" 'host: "mcp.tarassov.me"'
 
+# Архиватор на реестре control plane: адрес и токены аккаунтов из реестра, отдельный админ-токен.
+out="$(render "archiver registry" tt "$TOOLS" --namespace tgw --set archiver.image.tag=x --set mcp.enabled=false \
+    --set controlPlane.enabled=true --set controlPlane.image.tag=x --set controlPlane.workerImage=gw:x)" || { out=""; FAILED=1; }
+ardep="$(awk 'BEGIN{RS="\n---\n"} index($0, "kind: Deployment") && index($0, "name: tt-archiver\n")' <<<"$out")"
+assert_contains "archiver: registry url" "$ardep" "http://tt-control-plane:8096/internal/registry"
+assert_contains "archiver: registry token" "$(grep -A4 'name: ARCHIVER_REGISTRY_TOKEN' <<<"$ardep")" "key: CP_REGISTRY_ARCHIVER_TOKEN"
+assert_contains "archiver: admin token" "$(grep -A4 'name: ARCHIVER_ADMIN_TOKEN' <<<"$ardep")" "key: ARCHIVER_ADMIN_TOKEN"
+
 exit "$FAILED"

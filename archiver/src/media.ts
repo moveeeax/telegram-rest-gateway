@@ -6,12 +6,15 @@
  * Env:
  *   ARCHIVER_S3_ENDPOINT/_REGION/_BUCKET/_ACCESS_KEY_ID/_SECRET_ACCESS_KEY/_PREFIX/_PUBLIC_BASE
  *   ARCHIVER_S3_FORCE_PATH_STYLE — "true"/"false"; default: true (false → virtual-hosted AWS)
- *   ARCHIVER_GATEWAY_TEMPLATE — напр. http://tgw-{sessionId}:8080 (per-account сервис)
- *   ARCHIVER_GATEWAY_TOKEN    — Bearer (read) для скачивания файлов
+ *   Адрес гейтвея и токен (read) каждого аккаунта берутся из реестра control plane (registry.ts).
  *   ARCHIVER_MEDIA_MAX_BYTES  — не грузить файлы больше (default 100 MiB)
  */
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import type { ArchiveTarget } from "./registry.js";
 import type { Store } from "./store.js";
+
+export type TargetLookup = (sessionId: string) => Promise<ArchiveTarget | null | "unavailable">;
+export type PutObject = (key: string, body: Buffer, contentType: string, disposition?: string) => Promise<void>;
 
 export type MediaJob = {
   session_id: string;
@@ -41,7 +44,8 @@ const SEEN_MAX_SIZE = 100_000;
 
 type ProcessResult = "done" | "retry" | "skip";
 
-/** Permanent: 401/403/404 и явные non-retriable. Не requeue'им, ключ остаётся в seen. */
+/** Permanent: 404 (file_id устарел, например после перезапуска воркера) и явные non-retriable.
+ *  401/403 не permanent: это неверный или устаревший токен, после обновления реестра пройдет. */
 class MediaError extends Error {
   constructor(
     message: string,
@@ -135,21 +139,19 @@ export class MediaOffloader {
   private seen = new Map<string, true>();
   private running = true;
   private busy = false;
-  private s3: S3Client;
+  private put: PutObject;
+  private targets: TargetLookup;
   private bucket: string;
   private prefix: string;
   private publicBase: string;
-  private gwTemplate: string;
-  private gwToken: string;
   private maxBytes: number;
   uploaded = 0;
   failed = 0;
   lastError: string | null = null;
 
-  static fromEnv(store: Store): MediaOffloader | null {
+  static fromEnv(store: Store, targets: TargetLookup | null): MediaOffloader | null {
     const bucket = process.env.ARCHIVER_S3_BUCKET ?? "";
-    const gwTemplate = process.env.ARCHIVER_GATEWAY_TEMPLATE ?? "";
-    if (!bucket || !gwTemplate) return null; // медиа-оффлоад выключен
+    if (!bucket || !targets) return null; // медиа-оффлоад выключен (нет бакета или реестра)
     const endpoint = process.env.ARCHIVER_S3_ENDPOINT ?? "";
     return new MediaOffloader(store, {
       endpoint,
@@ -162,24 +164,32 @@ export class MediaOffloader {
       // path-style по умолчанию (исторический дефолт; virtual-hosted ломает бакеты
       // с точками в имени на чистом AWS) — virtual-hosted только явным опт-аутом
       forcePathStyle: envBool("ARCHIVER_S3_FORCE_PATH_STYLE") ?? true,
-      gwTemplate,
-      gwToken: process.env.ARCHIVER_GATEWAY_TOKEN ?? "",
+      targets,
       maxBytes: Number(process.env.ARCHIVER_MEDIA_MAX_BYTES ?? String(100 * 1024 * 1024)),
     });
   }
 
   constructor(private store: Store, cfg: any) {
-    this.s3 = new S3Client({
-      endpoint: cfg.endpoint || undefined,
-      region: cfg.region,
-      forcePathStyle: Boolean(cfg.forcePathStyle),
-      credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
-    });
+    if (cfg.put) {
+      this.put = cfg.put;
+    } else {
+      const s3 = new S3Client({
+        endpoint: cfg.endpoint || undefined,
+        region: cfg.region,
+        forcePathStyle: Boolean(cfg.forcePathStyle),
+        credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
+      });
+      this.put = async (key, body, contentType, disposition) => {
+        await s3.send(new PutObjectCommand({
+          Bucket: cfg.bucket, Key: key, Body: body, ContentType: contentType,
+          ...(disposition ? { ContentDisposition: disposition } : {}),
+        }));
+      };
+    }
+    this.targets = cfg.targets;
     this.bucket = cfg.bucket;
     this.prefix = cfg.prefix;
     this.publicBase = cfg.publicBase;
-    this.gwTemplate = cfg.gwTemplate;
-    this.gwToken = cfg.gwToken;
     this.maxBytes = cfg.maxBytes;
     void this.loop();
   }
@@ -200,6 +210,11 @@ export class MediaOffloader {
     }
     this.markSeen(key);
     this.queue.push(job);
+  }
+
+  /** Снимает задачу с дедупа: повтор после permanent fail или ручной retry. */
+  forget(job: MediaJob): void {
+    this.seen.delete(this.jobKey(job));
   }
 
   /** Помечает ключ виденным, вытесняя старейший при переполнении (LRU, см. SEEN_MAX_SIZE). */
@@ -298,8 +313,8 @@ export class MediaOffloader {
       try {
         const result = await this.process(job);
         if (result === "retry") {
-          // 202 / ещё не докачался — requeue в конец очереди
-          this.requeueOrGiveUp(job, key, "download still pending (202)");
+          // 202 (ещё не докачался) или реестр недоступен — requeue в конец очереди
+          this.requeueOrGiveUp(job, key, "download pending or registry unavailable");
         }
         // "done" и "skip" (oversized) оставляют ключ в seen
       } catch (e: any) {
@@ -319,8 +334,14 @@ export class MediaOffloader {
   }
 
   private async process(job: MediaJob): Promise<ProcessResult> {
-    const base = this.gwTemplate.replace("{sessionId}", job.session_id).replace(/\/$/, "");
     const dedupKey = this.jobKey(job);
+    const target = await this.targets(job.session_id);
+    if (target === "unavailable") return "retry"; // реестр недоступен: повторим позже
+    if (target === null || !target.archiveEnabled) {
+      console.error(`media: skip ${dedupKey}: account is not archived`);
+      return "skip";
+    }
+    const base = target.gatewayUrl;
     // Скачиваем файл из гейтвея; 202 = ещё качается TDLib — несколько ретраев внутри process.
     let bytes: Buffer | null = null;
     let contentType = job.mime_type || "application/octet-stream";
@@ -331,7 +352,7 @@ export class MediaOffloader {
       const controller = new AbortController();
       try {
         resp = await fetch(`${base}/v1/files/${encodeURIComponent(job.file_id)}`, {
-          headers: this.gwToken ? { Authorization: `Bearer ${this.gwToken}` } : {},
+          headers: { Authorization: `Bearer ${target.token}` },
           signal: AbortSignal.any([AbortSignal.timeout(60000), controller.signal]), // не морозим воркер на зависшем скачивании
         });
       } catch (e: any) {
@@ -346,7 +367,7 @@ export class MediaOffloader {
       if (!resp.ok) {
         const body = await resp.text().catch(() => "");
         const detail = body ? `: ${body.slice(0, 200)}` : "";
-        const permanent = resp.status === 401 || resp.status === 403 || resp.status === 404;
+        const permanent = resp.status === 404;
         throw new MediaError(`download ${resp.status}${detail}`, permanent);
       }
       // 200 + application/json — легитимный файл (пользователь прислал .json):
@@ -385,15 +406,7 @@ export class MediaOffloader {
     const key = `${this.prefix}${job.session_id}/${job.chat_id}/${job.message_id}/${safeName}`;
     const { contentType: safeType, disposition } = safeContentType(contentType);
     try {
-      await this.s3.send(
-        new PutObjectCommand({
-          Bucket: this.bucket,
-          Key: key,
-          Body: bytes,
-          ContentType: safeType,
-          ...(disposition ? { ContentDisposition: disposition } : {}),
-        }),
-      );
+      await this.put(key, bytes, safeType, disposition);
     } catch (e: any) {
       throw new MediaError(`s3 put: ${String(e?.message ?? e)}`, false);
     }

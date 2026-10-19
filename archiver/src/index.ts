@@ -11,6 +11,8 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { Kafka, logLevel } from "kafkajs";
 import { makeStore, type MessageRow } from "./store.js";
 import { MediaOffloader } from "./media.js";
+import { ArchiverRegistry } from "./registry.js";
+import { retryMedia } from "./media_retry.js";
 
 const BROKERS = (process.env.ARCHIVER_KAFKA_BROKERS ?? "redpanda:9092").split(",");
 const TOPIC = process.env.ARCHIVER_KAFKA_TOPIC ?? "tgw.updates";
@@ -47,7 +49,11 @@ const DROP_CIRCUIT =
 
 const store = makeStore();
 await store.init();
-const media = MediaOffloader.fromEnv(store);
+// Реестр control plane: адрес гейтвея и токен архиватора каждого аккаунта (ARCHIVER_REGISTRY_*).
+const REGISTRY_URL = process.env.ARCHIVER_REGISTRY_URL ?? "";
+const registry = REGISTRY_URL ? new ArchiverRegistry(REGISTRY_URL, process.env.ARCHIVER_REGISTRY_TOKEN ?? "") : null;
+if (!registry) console.error("archiver: ARCHIVER_REGISTRY_URL не задан: медиа-оффлоад выключен");
+const media = MediaOffloader.fromEnv(store, registry ? (s) => registry.get(s) : null);
 if (media) console.error("archiver: media offload enabled (S3)");
 
 let processed = 0;
@@ -297,6 +303,16 @@ function authorized(req: http.IncomingMessage): boolean {
   return timingSafeEqual(got, want);
 }
 
+// Админские операции (повтор медиа; дальше /stats, /backfill, purge) требуют отдельный
+// ARCHIVER_ADMIN_TOKEN. Без него админские пути закрыты (403): fail closed.
+const ADMIN_TOKEN = process.env.ARCHIVER_ADMIN_TOKEN ?? "";
+function adminAuthorized(req: http.IncomingMessage): boolean {
+  if (!ADMIN_TOKEN) return false;
+  const got = createHash("sha256").update(req.headers.authorization ?? "").digest();
+  const want = createHash("sha256").update(`Bearer ${ADMIN_TOKEN}`).digest();
+  return timingSafeEqual(got, want);
+}
+
 async function readBody(req: http.IncomingMessage, maxBytes: number): Promise<{ ok: true; body: string } | { ok: false; tooLarge: true }> {
   // Копим Buffer'ы и декодируем один раз в конце: multibyte-символ может быть
   // разрезан границей чанков, а лимит должен считать байты, а не code units.
@@ -323,6 +339,21 @@ const server = http.createServer((req, res) => {
         // живым и готовым, пока consumer молча не потребляет топик (5.3).
         if (!consumerHealthy) return send(503, { ok: false, error: "consumer unhealthy" });
         return send(200, { ok: true });
+      }
+      if (url.pathname === "/media/retry" && req.method === "POST") {
+        if (!adminAuthorized(req)) return send(req.headers.authorization ? 403 : 401, { ok: false, error: "admin token required" });
+        if (!media) return send(409, { ok: false, error: "media offload disabled" });
+        const raw = await readBody(req, 4096);
+        if (!raw.ok) return send(413, { ok: false, error: "body too large" });
+        let body: any = {};
+        try { body = raw.body ? JSON.parse(raw.body) : {}; } catch { return send(400, { ok: false, error: "invalid json" }); }
+        try {
+          const queued = await retryMedia(store, media, body, Date.now());
+          console.error(`archiver: media retry queued ${queued} job(s)`);
+          return send(200, { ok: true, queued });
+        } catch (e) {
+          return send(400, { ok: false, error: (e as Error).message });
+        }
       }
       if (!authorized(req)) return send(401, { ok: false, error: "unauthorized" });
 
