@@ -47,4 +47,20 @@ RUN git clone --recursive https://github.com/drogonframework/drogon.git /src/dro
     && cmake --build /src/drogon/build --target install \
     && rm -rf /src/drogon
 
+# --- Drogon + trantor с ThreadSanitizer, только для пресета tsan (CMakePresets.json). ---
+# Без инструментации TSan не видит синхронизацию внутри trantor (lock-free очередь
+# queueInLoop -> doRunInLoopFuncs) и сообщает ложные гонки на функторах, переданных в петлю.
+# Отдельный слой после обычного Drogon: кэш слоев TDLib и Drogon сохраняется.
+RUN git clone --recursive https://github.com/drogonframework/drogon.git /src/drogon \
+    && git -C /src/drogon checkout "${DROGON_REF}" \
+    && git -C /src/drogon submodule update --init --recursive \
+    && cmake -S /src/drogon -B /src/drogon/build -G Ninja \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/opt/drogon-tsan \
+        -DCMAKE_C_FLAGS="-fsanitize=thread" -DCMAKE_CXX_FLAGS="-fsanitize=thread" \
+        -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread" -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread" \
+        -DBUILD_SHARED_LIBS=OFF -DBUILD_ORM=OFF -DBUILD_YAML_CONFIG=OFF -DBUILD_EXAMPLES=OFF \
+        -DBUILD_CTL=OFF -DBUILD_TESTING=OFF \
+    && cmake --build /src/drogon/build --target install \
+    && rm -rf /src/drogon
+
 ENV CMAKE_PREFIX_PATH=/opt/tdlib:/opt/drogon

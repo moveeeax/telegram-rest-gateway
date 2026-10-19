@@ -42,7 +42,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "TGW_BUILD_TESTS": "ON",
-        "TGW_ENABLE_TSAN": "ON"
+        "TGW_ENABLE_TSAN": "ON",
+        "CMAKE_PREFIX_PATH": "/opt/tdlib;/opt/drogon-tsan"
       }
     },
     {
