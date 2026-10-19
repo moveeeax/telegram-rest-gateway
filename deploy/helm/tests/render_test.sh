@@ -143,4 +143,15 @@ assert_fails "edge: guard applies" tt "$TOOLS" --namespace tgw --set archiver.en
 out="$(render "cp off" tt "$TOOLS" --namespace tgw --set archiver.image.tag=x --set mcp.enabled=false)" || { out=""; FAILED=1; }
 assert_not_contains "cp: disabled renders nothing" "$out" "control-plane"
 
+# MCP-под старого аккаунта на новом воркере: имя и хост по sessionId, адрес, id архива и токен по workerId.
+out="$(render "mcp worker" tt "$TOOLS" --namespace tgw --set archiver.enabled=false --set mcp.image.tag=x \
+    --set gatewayServiceTemplate='tgw-{sessionId}.tgw-accounts.svc.cluster.local' \
+    --set-string 'mcp.accounts[0].sessionId=111' --set-string 'mcp.accounts[0].workerId=aaaaaaaaaa1' \
+    --set-string 'mcp.accounts[0].gatewayTokenKey=GATEWAY_TOKEN_aaaaaaaaaa1')" || { out=""; FAILED=1; }
+dep="$(awk -v n="name: tt-mcp-111" 'BEGIN{RS="\n---\n"} index($0, "kind: Deployment") && index($0, n)' <<<"$out")"
+assert_contains "mcp worker: base url" "$dep" "http://tgw-aaaaaaaaaa1.tgw-accounts.svc.cluster.local:8080"
+assert_contains "mcp worker: archive session id" "$(grep -A1 'name: TGW_SESSION_ID' <<<"$dep" | tail -1)" 'value: "aaaaaaaaaa1"'
+assert_contains "mcp worker: token key" "$(grep -A4 'name: TGW_BEARER_TOKEN' <<<"$dep")" "key: GATEWAY_TOKEN_aaaaaaaaaa1"
+assert_contains "mcp worker: name stays" "$out" "name: tt-mcp-111"
+
 exit "$FAILED"
