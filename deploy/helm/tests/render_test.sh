@@ -115,4 +115,32 @@ assert_contains "archiver pg: emptyDir" "$out" "emptyDir: {}"
 out="$(render "archiver sqlite" tt "$TOOLS" --namespace tgw --set archiver.image.tag=x --set mcp.enabled=false)" || { out=""; FAILED=1; }
 assert_contains "archiver sqlite: pvc" "$out" "kind: PersistentVolumeClaim"
 
+# --- control plane и edge ---
+CP_ARGS=(tt "$TOOLS" --namespace tgw --set archiver.enabled=false --set mcp.enabled=false
+         --set controlPlane.enabled=true --set controlPlane.image.tag=x --set controlPlane.workerImage=gw:x
+         --set edge.enabled=true --set ingress.allowOpenIngress=true)
+out="$(render "cp" "${CP_ARGS[@]}")" || { out=""; FAILED=1; }
+role="$(awk 'BEGIN{RS="\n---\n"} index($0, "kind: Role\n")' <<<"$out")"
+assert_contains "cp: role only in worker ns" "$role" "namespace: tgw-accounts"
+assert_not_contains "cp: no cluster role" "$out" "kind: ClusterRole"
+edge="$(awk 'BEGIN{RS="\n---\n"} index($0, "kind: Ingress") && index($0, "name: tt-edge")' <<<"$out")"
+assert_not_contains "cp: admin port not in ingress" "$edge" "admin"
+assert_not_contains "cp: admin port number not in ingress" "$edge" "8096"
+assert_contains "edge: join invite path" "$edge" "path: /i/"
+assert_contains "edge: join onboard path" "$edge" "path: /onboard"
+assert_not_contains "edge: no internal path" "$edge" "/internal"
+assert_contains "edge: tls tg" "$edge" "tg.tarassov.me"
+assert_contains "edge: tls join" "$edge" "join.tarassov.me"
+assert_contains "edge: tls mcp" "$edge" "mcp.tarassov.me"
+assert_contains "edge: cert-manager issuer" "$edge" "cert-manager.io/cluster-issuer: letsencrypt-prod"
+assert_contains "edge: ratelimit middleware" "$edge" "tgw-tt-join-ratelimit@kubernetescrd"
+assert_contains "edge: ratelimit object" "$out" "rateLimit:"
+assert_contains "cp: worker config map in worker ns" "$out" "name: tgw-worker-config"
+assert_fails "cp: image tag required" tt "$TOOLS" --namespace tgw --set archiver.enabled=false --set mcp.enabled=false \
+    --set controlPlane.enabled=true --set controlPlane.workerImage=gw:x
+assert_fails "edge: guard applies" tt "$TOOLS" --namespace tgw --set archiver.enabled=false --set mcp.enabled=false \
+    --set edge.enabled=true
+out="$(render "cp off" tt "$TOOLS" --namespace tgw --set archiver.image.tag=x --set mcp.enabled=false)" || { out=""; FAILED=1; }
+assert_not_contains "cp: disabled renders nothing" "$out" "control-plane"
+
 exit "$FAILED"

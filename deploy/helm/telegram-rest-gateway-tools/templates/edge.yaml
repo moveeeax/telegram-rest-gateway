@@ -1,0 +1,64 @@
+{{- if .Values.edge.enabled }}
+{{- include "tools.ingressGuard" (merge (dict "Values" (dict "ingress" (merge (dict "enabled" true) .Values.ingress))) .) }}
+{{- $e := .Values.edge }}
+{{- $svc := printf "%s-control-plane" .Release.Name }}
+{{- $rl := printf "%s-join-ratelimit" .Release.Name }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ $rl }}
+spec:
+  rateLimit:
+    average: {{ $e.rateLimit.average }}
+    burst: {{ $e.rateLimit.burst }}
+---
+# Общие хосты: DNS (external-dns читает Ingress) и сертификат на три имени. На tg хост ведет
+# одно служебное правило, остальное там отдают IngressRoute воркеров, без совпадения Traefik
+# отвечает 404. Admin-порт control plane сюда не попадает.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-edge
+  annotations:
+    cert-manager.io/cluster-issuer: {{ $e.clusterIssuer }}
+    {{- $mw := printf "%s-%s@kubernetescrd" .Release.Namespace $rl }}
+    {{- if .Values.ingress.ipAllowList }}
+    {{- $mw = printf "%s-%s@kubernetescrd,%s" .Release.Namespace (include "tools.ipAllowListName" .) $mw }}
+    {{- end }}
+    traefik.ingress.kubernetes.io/router.middlewares: {{ $mw }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+    - hosts: [{{ $e.hosts.api | quote }}, {{ $e.hosts.join | quote }}, {{ $e.hosts.mcp | quote }}]
+      secretName: {{ .Release.Name }}-edge-tls
+  rules:
+    - host: {{ $e.hosts.join | quote }}
+      http:
+        paths:
+          {{- range list "/i/" "/t/" "/onboard" }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  name: public
+          {{- end }}
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  name: public
+    - host: {{ $e.hosts.api | quote }}
+      http:
+        paths:
+          - path: /__tgw-edge
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $svc }}
+                port:
+                  name: public
+{{- end }}
