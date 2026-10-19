@@ -1,0 +1,210 @@
+{
+  "info": {
+    "name": "tgw control plane (admin)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Admin API control plane: инвайты и аккаунты. Наружу не выставлен, только через port-forward:\nkubectl -n tgw port-forward svc/tgw-tools-control-plane 18096:8096\nadminToken: kubectl -n tgw get secret tgw-control-plane -o jsonpath='{.data.CP_ADMIN_TOKEN}' | base64 -d"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{adminToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "cpUrl",
+      "value": "http://localhost:18096"
+    },
+    {
+      "key": "accountId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Invites",
+      "item": [
+        {
+          "name": "Create invite",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cpUrl}}/admin/invites",
+              "host": [
+                "{{cpUrl}}"
+              ],
+              "path": [
+                "admin",
+                "invites"
+              ]
+            },
+            "description": "Одноразовая ссылка https://join.tarassov.me/i/<code> на 24 ч. Клиент открывает ее, жмет «Подключить» и сканирует QR."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Accounts",
+      "item": [
+        {
+          "name": "List accounts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{cpUrl}}/admin/accounts",
+              "host": [
+                "{{cpUrl}}"
+              ],
+              "path": [
+                "admin",
+                "accounts"
+              ]
+            },
+            "description": "Статус, telegramUserId, archive/export флаги и tgw_ready от воркера."
+          }
+        },
+        {
+          "name": "Set flags",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{cpUrl}}/admin/accounts/{{accountId}}",
+              "host": [
+                "{{cpUrl}}"
+              ],
+              "path": [
+                "admin",
+                "accounts",
+                "{{accountId}}"
+              ]
+            },
+            "description": "Флаги архива и экспорта сессии; воркер перезапускается с новым env.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"archive_enabled\": true,\n  \"export_enabled\": false\n}"
+            }
+          }
+        },
+        {
+          "name": "Reissue client token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cpUrl}}/admin/accounts/{{accountId}}/token",
+              "host": [
+                "{{cpUrl}}"
+              ],
+              "path": [
+                "admin",
+                "accounts",
+                "{{accountId}}",
+                "token"
+              ]
+            },
+            "description": "Ссылка https://join.tarassov.me/t/<code>: новый токен показывается один раз; старый перестает работать после перезапуска пода."
+          }
+        },
+        {
+          "name": "Relogin invite",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{cpUrl}}/admin/accounts/{{accountId}}/relogin",
+              "host": [
+                "{{cpUrl}}"
+              ],
+              "path": [
+                "admin",
+                "accounts",
+                "{{accountId}}",
+                "relogin"
+              ]
+            },
+            "description": "Только для status=needs_relogin: тот же QR-поток на существующем воркере, токен и архив сохраняются."
+          }
+        },
+        {
+          "name": "Delete account",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{cpUrl}}/admin/accounts/{{accountId}}",
+              "host": [
+                "{{cpUrl}}"
+              ],
+              "path": [
+                "admin",
+                "accounts",
+                "{{accountId}}"
+              ]
+            },
+            "description": "Logout в Telegram, остановка пода, удаление telegram-sessions/<accountId>/ в S3, затем Secret и запись."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Internal",
+      "item": [
+        {
+          "name": "Registry",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{cpUrl}}/internal/registry",
+              "host": [
+                "{{cpUrl}}"
+              ],
+              "path": [
+                "internal",
+                "registry"
+              ]
+            },
+            "description": "Реестр для MCP и архиватора. Нужен их сервисный токен (CP_REGISTRY_MCP_TOKEN или CP_REGISTRY_ARCHIVER_TOKEN), admin-токен получает 401."
+          }
+        }
+      ]
+    },
+    {
+      "name": "System",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{cpUrl}}/healthz",
+              "host": [
+                "{{cpUrl}}"
+              ],
+              "path": [
+                "healthz"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

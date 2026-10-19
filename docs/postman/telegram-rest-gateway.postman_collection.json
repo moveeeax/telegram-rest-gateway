@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "telegram-rest-gateway",
-    "description": "REST API self-hosted гейтвея к пользовательскому Telegram-аккаунту (TDLib + Drogon).\n\nНастрой переменные окружения: baseUrl, token (Bearer), и по мере работы chatId/messageId/fileId/userId.\nВсе 64-битные id — строки. Auth: Bearer на всех /v1/**, кроме health/ready/metrics/ui.\nСкоупы токена: read (GET+WS), write (мутации), admin (/v1/auth/*, session export).",
+    "description": "REST API telegram-rest-gateway.\n\nСхема с control plane: все аккаунты за одним хостом https://tg.tarassov.me. Аккаунт выбирается префиксом токена `<accountId>.` (Traefik матчит заголовок Authorization), сам токен проверяет воркер аккаунта. Токен клиент получает один раз на странице онбординга join.tarassov.me или ссылкой перевыпуска.\n\nНа общем хосте открыты только /v1/chats, /v1/me, /v1/users, /v1/contacts, /v1/resolve, /v1/search, /v1/files, /v1/updates, /v1/health. Остальное (папка Auth, /v1/ready, /metrics, вебхуки) отдает 404 и доступно только окружению tgw-local через kubectl port-forward к воркеру с его admin-токеном.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -76,7 +76,7 @@
                 "health"
               ]
             },
-            "description": "Живость процесса.",
+            "description": "Живость процесса.\n\nНа tg.tarassov.me без токена 404: маршрут выбирается по префиксу токена. В tgw-prod включи на этом запросе Auth → Inherit; No Auth рассчитан на tgw-local.",
             "auth": {
               "type": "noauth"
             }
@@ -98,7 +98,7 @@
                 "ready"
               ]
             },
-            "description": "Готовность (авторизован в Telegram).",
+            "description": "Готовность (авторизован в Telegram).\n\nТолько окружение tgw-local (port-forward к воркеру): на tg.tarassov.me этот путь отдает 404.",
             "auth": {
               "type": "noauth"
             }
@@ -119,7 +119,7 @@
                 "metrics"
               ]
             },
-            "description": "Prometheus text exposition.",
+            "description": "Prometheus text exposition.\n\nТолько окружение tgw-local (port-forward к воркеру): на tg.tarassov.me этот путь отдает 404.",
             "auth": {
               "type": "noauth"
             }
@@ -130,7 +130,7 @@
     },
     {
       "name": "Auth",
-      "description": "",
+      "description": "Логин и сессия воркера. Новые аккаунты логинятся через страницу join.tarassov.me, эти запросы нужны только для отладки. Только окружение tgw-local (port-forward к воркеру): на tg.tarassov.me этот путь отдает 404. Токен: ADMIN_TOKEN из Secret tgw-<accountId> в namespace tgw-accounts. Session export у воркеров выключен (TGW_SESSION_EXPORT_ENABLED=false), запрос вернет 404, пока владелец не включит export_enabled через admin API control plane.",
       "item": [
         {
           "name": "State",
@@ -1049,7 +1049,7 @@
                 "updates"
               ]
             },
-            "description": "WebSocket-поток апдейтов. В Postman создай отдельный WebSocket Request к ws(s)://<host>/v1/updates с заголовком Authorization: Bearer <token> (или Sec-WebSocket-Protocol: bearer.<token>). После connect сервер шлёт hello, далее фреймы update. Фильтр: отправь {\"type\":\"subscribe\",\"update_types\":[...]}. Это HTTP-заглушка только для документации — обычным Send не сработает."
+            "description": "Документация, не исполняемый запрос. Создай в Postman WebSocket Request к wss://tg.tarassov.me/v1/updates с заголовком `Sec-WebSocket-Protocol: bearer.{{token}}` (браузерный способ) или `Authorization: Bearer {{token}}`. Первый кадр: {\"type\":\"hello\",\"session_id\":\"<accountId>\"}."
           },
           "response": []
         }
