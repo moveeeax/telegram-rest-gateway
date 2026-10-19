@@ -55,6 +55,13 @@ class BridgeHarness {
         // loop_thread_ уже полностью запущен (его конструктор дождался готовности петли), поэтому
         // здесь достаточно поднять приёмник моста.
         bridge_.start();
+        // Поток-приемник при старте запоминает last_sweep_ = clock(). Если он стартует позже, чем
+        // тест сдвинет фейковые часы, last_sweep_ окажется после сдвига, и sweep на замороженных
+        // часах не сработает никогда. Ждем первую итерацию приемника, прежде чем отдать мост тесту.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (bridge_.receiveIterations() == 0 && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
     ~BridgeHarness() { bridge_.stop(); }
 
