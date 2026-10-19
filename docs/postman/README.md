@@ -85,3 +85,20 @@ ADM=$(kubectl -n tgw get secret tgw-control-plane -o jsonpath='{.data.CP_ADMIN_T
 curl -s -H "Authorization: Bearer $ADM" localhost:18096/admin/accounts
 curl -s -X POST -H "Authorization: Bearer $ADM" localhost:18096/admin/invites
 ```
+
+## MCP
+
+Единый MCP: `https://mcp.tarassov.me/mcp`, ключ в `X-API-Key` (клиентский токен аккаунта или токен
+владельца `owner.<secret>`). Postman умеет MCP-запросы (New → MCP Request, транспорт HTTP);
+коллекции для MCP в репозитории нет. Проверка через curl:
+
+```bash
+U=https://mcp.tarassov.me/mcp; KEY='<token>'
+H=(-H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -H "x-api-key: $KEY")
+SID=$(curl -s -D - -o /dev/null -X POST $U "${H[@]}" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}' \
+  | grep -i '^mcp-session-id' | awk '{print $2}' | tr -d '\r')
+curl -s -o /dev/null -X POST $U "${H[@]}" -H "mcp-session-id: $SID" -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+curl -s -X POST $U "${H[@]}" -H "mcp-session-id: $SID" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"telegram_list_accounts","arguments":{}}}'
+```

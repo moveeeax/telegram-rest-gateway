@@ -237,3 +237,34 @@ Secret и запись в базе.
 
 Ограничения сейчас: архив тенантов выключен (`archive_enabled=false`, Kafka у воркера пустой),
 единого MCP еще нет, два старых аккаунта живут по-старому в чарте `tgw` до миграции.
+
+## Единый MCP (mcp.tarassov.me)
+
+Один MCP-сервер на все аккаунты: `https://mcp.tarassov.me/mcp` (Streamable HTTP), чарт tools
+с `mcp.shared.enabled=true`. Ключ (заголовок `X-API-Key` или `Authorization: Bearer`)
+резолвится через реестр control plane в набор аккаунтов, кэш 30 с. В гейтвей MCP ходит
+сервисным токеном воркера, ключ клиента туда не передается.
+
+- Клиент подключает коннектор со своим клиентским токеном `<accountId>.<secret>` и видит только
+  свой аккаунт.
+- Владелец держит один коннектор на несколько аккаунтов с токеном `owner.<secret>`:
+
+```bash
+kubectl -n tgw port-forward svc/tgw-tools-control-plane 18096:8096 &
+ADM=$(kubectl -n tgw get secret tgw-control-plane -o jsonpath='{.data.CP_ADMIN_TOKEN}' | base64 -d)
+curl -s -X POST -H "Authorization: Bearer $ADM" -H 'content-type: application/json' \
+  -d '{"label":"owner","account_ids":["<accountId>","<accountId>"]}' localhost:18096/admin/owner-tokens
+curl -s -H "Authorization: Bearer $ADM" localhost:18096/admin/owner-tokens          # список без токенов
+curl -s -X DELETE -H "Authorization: Bearer $ADM" localhost:18096/admin/owner-tokens/owner
+```
+
+Токен показывается один раз, в базе только хэш. У каждого инструмента есть параметр `account`:
+при одном аккаунте у ключа его можно не указывать, при нескольких он обязателен для всех
+инструментов (дефолта нет). `telegram_list_accounts` возвращает доступные аккаунты.
+
+Коннектор claude.ai: URL `https://mcp.tarassov.me/mcp`, заголовок `X-API-Key`. Запросы с
+заголовком `Origin` вне `mcp.shared.allowedOrigins` получают 403; коннектор claude.ai проходит
+(проверено 2026-10-19). У MCP свой Ingress, rate limit онбординга на него не действует.
+
+Per-account MCP (`mcp-<id>`) убраны 2026-10-19 (`mcp.accounts: []`); их DNS-записи в
+Cloudflare external-dns с `--policy=upsert-only` не удаляет.
