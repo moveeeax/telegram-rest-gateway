@@ -23,10 +23,28 @@ export function messagePage(message: string): string {
   return shell("Подключение Telegram", `<h1>Подключение Telegram</h1><div class="card"><p>${esc(message)}</p></div>`);
 }
 
-export function tokenPage(token: string, apiUrl: string): string {
+// Одноразовые ссылки по GET ничего не тратят: превью мессенджера открывает только эту страницу,
+// а занимает ссылку POST по нажатию кнопки.
+const CLAIM_SCRIPT = `
+const $=(id)=>document.getElementById(id);
+$("go").onclick=async()=>{$("go").disabled=true;$("msg").textContent="";
+  try{const r=await fetch(location.pathname,{method:"POST",headers:{"content-type":"application/json"},body:"{}"});const j=await r.json();
+    if(j.redirect){location.href=j.redirect;return;}
+    if(j.token){$("token").textContent=j.token;$("api").textContent=j.api_url;$("out").hidden=false;$("go").hidden=true;return;}
+    $("msg").textContent=j.error||"Ошибка";}catch(e){$("msg").textContent="Сервер не ответил, попробуйте еще раз.";}
+  $("go").disabled=false;};`;
+
+export function invitePage(nonce: string): string {
+  return shell("Подключение Telegram", `<h1>Подключение Telegram</h1><div class="card">
+<p>Вас пригласили подключить аккаунт Telegram. Понадобится телефон с Telegram.</p>
+<button id="go" type="button">Подключить</button><p class="err" id="msg" role="alert"></p><div id="out" hidden></div></div>`, nonce, CLAIM_SCRIPT);
+}
+
+export function tokenRevealPage(nonce: string): string {
   return shell("Новый токен", `<h1>Новый токен</h1><div class="card">
-<p>Токен показывается один раз. Сохраните его, старый перестанет работать через минуту.</p>
-<pre>${esc(token)}</pre><p class="muted">API: ${esc(apiUrl)}, заголовок <code>Authorization: Bearer &lt;токен&gt;</code></p></div>`);
+<p>Токен показывается один раз, после нажатия кнопки. Сохраните его: старый перестанет работать через минуту.</p>
+<button id="go" type="button">Показать токен</button><p class="err" id="msg" role="alert"></p>
+<div id="out" hidden><pre id="token"></pre><p class="muted">API: <span id="api"></span>, заголовок <code>Authorization: Bearer &lt;токен&gt;</code></p></div></div>`, nonce, CLAIM_SCRIPT);
 }
 
 const ONBOARD_SCRIPT = `
