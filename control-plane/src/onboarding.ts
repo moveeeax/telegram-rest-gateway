@@ -71,8 +71,12 @@ export class Onboarding {
 
   async open(code: string, cookie: string | null): Promise<OpenResult> {
     const now = this.now();
-    const value = cookie ?? newCode();
-    const claim = await this.d.store.claimInvite(sha256hex(code), sha256hex(value), SESSION_TTL_MS, MAX_CONCURRENT, now);
+    // Cookie переиспользуется только для той же ссылки (перезагрузка). Cookie другой ссылки, например
+    // недавнего онбординга в этом же браузере, привязал бы новую ссылку к чужой завершенной сессии.
+    const codeHash = sha256hex(code);
+    const bound = cookie ? await this.d.store.inviteBySession(sha256hex(cookie), now) : null;
+    const value = cookie && (bound === null || bound.codeHash === codeHash) ? cookie : newCode();
+    const claim = await this.d.store.claimInvite(codeHash, sha256hex(value), SESSION_TTL_MS, MAX_CONCURRENT, now);
     if (!claim.ok) {
       if (claim.reason === "in_use" || claim.reason === "used") return { kind: "page", status: 409, message: TEXT.inUse };
       if (claim.reason === "busy") return { kind: "page", status: 503, message: TEXT.busy };

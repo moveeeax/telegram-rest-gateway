@@ -59,6 +59,23 @@ test("reload with the same cookie keeps one account; another browser gets in_use
   } finally { await e.stop(); }
 });
 
+test("cookie of a finished onboarding does not leak into the next invite", async () => {
+  const e = await onbEnv();
+  try {
+    const first = await e.open(await e.invite());
+    e.worker.state = { authorization_state: "ready", ready: true };
+    assert.equal((await e.onb.view(first.cookie!)).phase, "ready");
+    // тот же браузер открывает следующую ссылку с прежним cookie
+    e.worker.state = { authorization_state: "wait_phone_number", ready: false };
+    const second = await e.open(await e.invite(), first.cookie);
+    assert.equal(second.r.kind, "redirect");
+    assert.notEqual(second.cookie, first.cookie);
+    const v = await e.onb.view(second.cookie!);
+    assert.equal(v.phase, "qr");
+    assert.equal((await e.store.listAccounts()).filter((a) => a.status === "onboarding").length, 1);
+  } finally { await e.stop(); }
+});
+
 test("fourth concurrent onboarding is told to retry later", async () => {
   const e = await onbEnv();
   try {
