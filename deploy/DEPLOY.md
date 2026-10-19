@@ -183,3 +183,57 @@ curl -s -o /dev/null -w '%{http_code}\n' $H/ui          # 200 при exposeLogin
 
 > `/v1/health`, `/v1/ready` и `/ui` отвечают без Bearer. Это допустимо только потому, что доступ
 > ограничен по IP. Не расширяй allowlist без необходимости.
+
+## Новые клиенты: control plane (онбординг по инвайту)
+
+Новые аккаунты больше не заводятся через values и `helm upgrade`. Control plane
+(`control-plane/`, включается в чарте tools: `controlPlane.enabled`, `edge.enabled`) сам
+поднимает воркер аккаунта в namespace `tgw-accounts`: Secret, StatefulSet, Service,
+NetworkPolicy и, после логина, IngressRoute на `tg.tarassov.me`. Дизайн:
+`docs/superpowers/specs/2026-10-18-multi-account-single-endpoint-design.md`.
+
+Хосты: `join.tarassov.me` (страницы онбординга), `tg.tarassov.me` (REST и WebSocket всех
+новых аккаунтов, аккаунт выбирается по префиксу токена `<accountId>.`), `mcp.tarassov.me`
+(пока только в сертификате, единый MCP отдельным планом). DNS и сертификат заводит Ingress
+`tgw-tools-edge`.
+
+Однократная подготовка кластера (сделана 2026-10-19):
+
+```bash
+kubectl create ns tgw-accounts
+# копия общего Secret гейтвея без BEARER_TOKENS, DATABASE_ENCRYPTION_KEY и TGW_SESSION владельца
+# CNPG Database tgw_control (owner tgw) и Secret tgw/tgw-control-plane:
+#   CP_PG_URL, CP_ADMIN_TOKEN, CP_REGISTRY_MCP_TOKEN, CP_REGISTRY_ARCHIVER_TOKEN
+helm upgrade tgw-tools deploy/helm/telegram-rest-gateway-tools -n tgw --reuse-values \
+  --set controlPlane.enabled=true --set controlPlane.image.tag=<sha> \
+  --set controlPlane.workerImage=ghcr.io/moveeeax/telegram-rest-gateway:<sha> --set edge.enabled=true
+```
+
+Пример полного набора values: `deploy/helm/telegram-rest-gateway-tools/values-prod-example.yaml`.
+
+Admin API наружу не выставлен, только через port-forward:
+
+```bash
+kubectl -n tgw port-forward svc/tgw-tools-control-plane 18096:8096 &
+ADM=$(kubectl -n tgw get secret tgw-control-plane -o jsonpath='{.data.CP_ADMIN_TOKEN}' | base64 -d)
+curl -s -X POST -H "Authorization: Bearer $ADM" localhost:18096/admin/invites            # ссылка на 24 ч
+curl -s -H "Authorization: Bearer $ADM" localhost:18096/admin/accounts                   # список и tgw_ready
+curl -s -X PATCH -H "Authorization: Bearer $ADM" -H 'content-type: application/json' \
+  -d '{"archive_enabled":true}' localhost:18096/admin/accounts/<id>                      # архив, экспорт
+curl -s -X POST -H "Authorization: Bearer $ADM" localhost:18096/admin/accounts/<id>/token    # новый токен
+curl -s -X POST -H "Authorization: Bearer $ADM" localhost:18096/admin/accounts/<id>/relogin  # needs_relogin
+curl -s -X DELETE -H "Authorization: Bearer $ADM" localhost:18096/admin/accounts/<id>       # logout + зачистка
+```
+
+Клиент открывает ссылку, нажимает «Подключить», сканирует QR (или входит по телефону) и один
+раз видит токен. Ссылка одноразовая, сессия онбординга 15 минут, одновременно не больше трех.
+Удаление: logout в Telegram, остановка пода, удаление `telegram-sessions/<id>/` в S3, затем
+Secret и запись в базе.
+
+Проверено на тестовом аккаунте 2026-10-19: онбординг по QR, маршрутизация и изоляция на
+`tg.tarassov.me` (чужой и неизвестный префикс 404, служебные пути 404 в любом регистре и с
+`..`), WebSocket hello, перезапуск пода после логина, push бинлога на Ready, NetworkPolicy
+(из `default` до воркера не доходит), удаление и повторный онбординг того же человека.
+
+Ограничения сейчас: архив тенантов выключен (`archive_enabled=false`, Kafka у воркера пустой),
+единого MCP еще нет, два старых аккаунта живут по-старому в чарте `tgw` до миграции.
