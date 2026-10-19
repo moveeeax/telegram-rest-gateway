@@ -9,7 +9,7 @@
  *   Адрес гейтвея и токен (read) каждого аккаунта берутся из реестра control plane (registry.ts).
  *   ARCHIVER_MEDIA_MAX_BYTES  — не грузить файлы больше (default 100 MiB)
  */
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import type { ArchiveTarget } from "./registry.js";
 import type { Store } from "./store.js";
 
@@ -140,6 +140,7 @@ export class MediaOffloader {
   private running = true;
   private busy = false;
   private put: PutObject;
+  private deleteKeys: ((prefix: string) => Promise<number>) | null = null;
   private targets: TargetLookup;
   private bucket: string;
   private prefix: string;
@@ -170,15 +171,16 @@ export class MediaOffloader {
   }
 
   constructor(private store: Store, cfg: any) {
-    if (cfg.put) {
+    // Один S3-клиент на put и purge; в тестах put подменяется, purge тогда выключен.
+    const s3 = cfg.put ? null : new S3Client({
+      endpoint: cfg.endpoint || undefined,
+      region: cfg.region,
+      forcePathStyle: Boolean(cfg.forcePathStyle),
+      credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
+    });
+    if (!s3) {
       this.put = cfg.put;
     } else {
-      const s3 = new S3Client({
-        endpoint: cfg.endpoint || undefined,
-        region: cfg.region,
-        forcePathStyle: Boolean(cfg.forcePathStyle),
-        credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
-      });
       this.put = async (key, body, contentType, disposition) => {
         await s3.send(new PutObjectCommand({
           Bucket: cfg.bucket, Key: key, Body: body, ContentType: contentType,
@@ -187,6 +189,23 @@ export class MediaOffloader {
       };
     }
     this.targets = cfg.targets;
+    if (s3) {
+      this.deleteKeys = async (prefix) => {
+        let n = 0;
+        let token: string | undefined;
+        do {
+          const page = await s3.send(new ListObjectsV2Command({ Bucket: cfg.bucket, Prefix: prefix, ContinuationToken: token }));
+          const keys = (page.Contents ?? []).map((o) => ({ Key: o.Key! }));
+          if (keys.length) {
+            const r = await s3.send(new DeleteObjectsCommand({ Bucket: cfg.bucket, Delete: { Objects: keys } }));
+            if (r.Errors?.length) throw new Error(`s3 delete: ${r.Errors.length} object(s) failed`);
+            n += keys.length;
+          }
+          token = page.IsTruncated ? page.NextContinuationToken : undefined;
+        } while (token);
+        return n;
+      };
+    }
     this.bucket = cfg.bucket;
     this.prefix = cfg.prefix;
     this.publicBase = cfg.publicBase;
@@ -210,6 +229,14 @@ export class MediaOffloader {
     }
     this.markSeen(key);
     this.queue.push(job);
+  }
+
+  /** Удаляет медиа аккаунта в S3 (purge). Префикс только `<prefix><sessionId>/`. */
+  async purgeSession(sessionId: string): Promise<number> {
+    if (!/^(a[a-z0-9]{10}|[0-9]{1,20})$/.test(sessionId)) throw new Error("invalid session id");
+    if (!this.deleteKeys) return 0;
+    this.queue = this.queue.filter((j) => j.session_id !== sessionId);
+    return this.deleteKeys(`${this.prefix}${sessionId}/`);
   }
 
   /** Снимает задачу с дедупа: повтор после permanent fail или ручной retry. */

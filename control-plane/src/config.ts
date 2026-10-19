@@ -26,6 +26,9 @@ export type Config = {
   // Пусто, пока нет единого MCP: страница онбординга тогда не показывает блок MCP.
   mcpBaseUrl: string;
   reconcileIntervalMs: number;
+  // Purge архива при удалении аккаунта: admin API архиватора. Пусто = шаг пропускается.
+  archiverAdminUrl: string;
+  archiverAdminToken: string;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -66,5 +69,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     apiBaseUrl: optional("CP_API_BASE_URL", "https://tg.tarassov.me"),
     mcpBaseUrl: optional("CP_MCP_BASE_URL", ""),
     reconcileIntervalMs: int("CP_RECONCILE_INTERVAL_MS", 30000),
+    archiverAdminUrl: optional("CP_ARCHIVER_ADMIN_URL", "").replace(/\/$/, ""),
+    archiverAdminToken: optional("CP_ARCHIVER_ADMIN_TOKEN", ""),
   };
 }

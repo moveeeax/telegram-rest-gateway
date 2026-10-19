@@ -86,33 +86,28 @@ volume и потеряется при пересоздании пода. `TGW_FI
 ## Архиватор и MCP в кластере (chart telegram-rest-gateway-tools)
 
 Отдельный чарт `deploy/helm/telegram-rest-gateway-tools`:
-- **archiver** — Deployment (replicas 1, Recreate — SQLite single-writer) + PVC (longhorn) +
-  Service :8090. Консьюмит кластерную Kafka, отдаёт `/search`.
-- **mcp** — по Deployment+Service на аккаунт (Streamable HTTP, stateful session), env
-  `TGW_BASE_URL` → gateway-Service, `TGW_ARCHIVER_URL` → archiver-Service.
+- **archiver** — Deployment (replicas 1) + Service :8090, Postgres `tgw_archive` в CNPG.
+  Консьюмит Kafka `tgw.updates` и пишет только аккаунты с `archive_enabled` (флаг control plane,
+  по умолчанию включен). Адрес гейтвея и токен каждого аккаунта для медиа и бэкфилла берет из
+  реестра control plane (`ARCHIVER_REGISTRY_URL`). Наружу не выставлен.
+- **mcp** — единый MCP за `mcp.tarassov.me`, см. раздел «Единый MCP».
 
-Секрет `tgw-tools`: `TGW_BEARER_TOKEN` (MCP→gateway, скоуп read,write), `MCP_HTTP_TOKEN`
-(клиент→MCP), `ARCHIVER_TOKEN` (доступ к /search).
-
-```bash
-kubectl -n tgw create secret generic tgw-tools \
-  --from-literal=TGW_BEARER_TOKEN=<agent-token> \
-  --from-literal=MCP_HTTP_TOKEN=<random> \
-  --from-literal=ARCHIVER_TOKEN=<random>
-helm upgrade --install tgw-tools deploy/helm/telegram-rest-gateway-tools -n tgw --wait
-```
-
-### Подключить Claude к MCP в кластере
-
-MCP отдаёт Streamable HTTP на `/mcp` (Bearer = `MCP_HTTP_TOKEN`). Наружу — через Ingress
-(`ingress.enabled=true`, `mcpHostTemplate`) или локально:
+Секрет `tgw-tools`: `ARCHIVER_TOKEN` (MCP → `/search`), `ARCHIVER_ADMIN_TOKEN` (`/stats`,
+`/backfill`, `/media/retry`, `DELETE /accounts/:id`; его же использует control plane для purge),
+`ARCHIVER_PG_URL`.
 
 ```bash
-kubectl -n tgw port-forward svc/tgw-tools-mcp-<sessionId> 8080:8080
-claude mcp add --transport http telegram http://localhost:8080/mcp \
-  --header "Authorization: Bearer <MCP_HTTP_TOKEN>"
+kubectl -n tgw port-forward svc/tgw-tools-archiver 8090:8090 &
+ADM=$(kubectl -n tgw get secret tgw-tools -o jsonpath='{.data.ARCHIVER_ADMIN_TOKEN}' | base64 -d)
+curl -s -H "Authorization: Bearer $ADM" localhost:8090/stats
+curl -s -X POST -H "Authorization: Bearer $ADM" -H 'content-type: application/json' -d '{}' localhost:8090/media/retry
+curl -s -X POST -H "Authorization: Bearer $ADM" -H 'content-type: application/json' \
+  -d '{"session_id":"<accountId>"}' localhost:8090/backfill
 ```
 
+`/search` требует `session_id`; токен MCP на админских путях получает 403. При удалении
+аккаунта control plane вызывает `DELETE /accounts/<accountId>`: удаляются сообщения, чаты, seq и
+медиа `media/<accountId>/` в S3.
 
 ## Внешний доступ (Ingress + TLS + IP-allowlist)
 
@@ -162,7 +157,7 @@ MCP: весь хост `mcp-<sessionId>` (Streamable HTTP на `/mcp`). Архи
 cert-manager, ClusterIssuer `letsencrypt-prod`, ACME DNS-01 через Cloudflare (Secret
 `cloudflare-api-key`). HTTP-01 не используется, allowlist выпуску сертификатов не мешает.
 DNS-записи создает external-dns по аннотации `external-dns.alpha.kubernetes.io/target: <LB-IP>`.
-Хосты: `tg-<sessionId>`, `mcp-<sessionId>`, `tgw-archive`.
+Хосты: `tg.tarassov.me`, `join.tarassov.me` (Ingress `tgw-tools-edge`), `mcp.tarassov.me` (Ingress `tgw-tools-mcp-shared`).
 
 ### Проверка после выкатки
 

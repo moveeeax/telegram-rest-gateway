@@ -107,7 +107,7 @@ export class Onboarding {
       archiverServiceToken: newSecret(), databaseEncryptionKey: newSecret(),
     };
     await this.d.store.insertAccount({
-      accountId, status: "onboarding", telegramUserId: null, username: null, archiveEnabled: false,
+      accountId, status: "onboarding", telegramUserId: null, username: null, archiveEnabled: true,
       exportEnabled: false, clientTokenHash: sha256hex(secrets.clientToken), invitedBy: "owner", createdAt: now,
       activatedAt: null, tokenShownAt: null, deleteStep: null, secretRev: 1,
     });

@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "telegram-rest-gateway — archiver",
-    "description": "HTTP API архиватора: статистика, полнотекстовый поиск по истории (SQLite FTS5 / PostgreSQL) и управление бэкфиллом. Авторизация — Bearer {{token}} (ARCHIVER_TOKEN); /health переопределён на No Auth.\n\nsession_id в архиве равен accountId воркера control plane (вид a + 10 символов). Для поиска по одному аккаунту включи параметр session_id. Backfill: gateway_url = http://tgw-<accountId>.tgw-accounts.svc.cluster.local:8080, token = ARCHIVER_SERVICE_TOKEN из Secret tgw-<accountId> (read).",
+    "description": "API архиватора (HTTP :8090). Наружу не выставлен: только kubectl -n tgw port-forward svc/tgw-tools-archiver 8090:8090.\n\nТокены: {{token}} = ARCHIVER_TOKEN (токен MCP, только /search); {{adminToken}} = ARCHIVER_ADMIN_TOKEN (/stats, /backfill, /media/retry, DELETE /accounts). Токен MCP на админских путях получает 403.\n\nsession_id = accountId воркера control plane (a + 10 символов). /search без session_id отдает 400.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -59,7 +59,17 @@
                 "stats"
               ]
             },
-            "description": "Счётчики: messages, chats, processed_events, dropped_events и статус медиа-оффлоада (pending/uploaded/failed).\n\n⚠ Через прод-Ingress не доступен (наружу выставлены только /search и /health) — используй kubectl port-forward и окружение archiver-local."
+            "description": "Счётчики: messages, chats, processed_events, dropped_events и статус медиа-оффлоада (pending/uploaded/failed).\n\n⚠ Через прод-Ingress не доступен (наружу выставлены только /search и /health) — используй kubectl port-forward и окружение archiver-local.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
           },
           "response": []
         }
@@ -74,7 +84,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/search?q={{q}}&limit=20",
+              "raw": "{{baseUrl}}/search?q={{q}}&session_id={{sessionId}}&limit=20",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -84,29 +94,19 @@
               "query": [
                 {
                   "key": "q",
-                  "value": "{{q}}",
-                  "description": "Полнотекстовый запрос (websearch-синтаксис на PostgreSQL / FTS5 на SQLite)."
-                },
-                {
-                  "key": "limit",
-                  "value": "20",
-                  "description": "1..100 (по умолчанию 20)."
-                },
-                {
-                  "key": "chat_id",
-                  "value": "{{chatId}}",
-                  "description": "Опционально: ограничить чатом.",
-                  "disabled": true
+                  "value": "{{q}}"
                 },
                 {
                   "key": "session_id",
-                  "value": "{{sessionId}}",
-                  "description": "Опционально: ограничить аккаунтом (сессией).",
-                  "disabled": true
+                  "value": "{{sessionId}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
                 }
               ]
             },
-            "description": "Полнотекстовый поиск по заархивированной истории. Возвращает results[] со сниппетами (ts_headline) и media_url, если файл оффлоаднут в S3."
+            "description": "Полнотекстовый поиск в срезе одного аккаунта. session_id обязателен."
           },
           "response": []
         }
@@ -127,12 +127,7 @@
             ],
             "body": {
               "mode": "raw",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              },
-              "raw": "{\n  \"gateway_url\": \"{{gatewayUrl}}\",\n  \"token\": \"{{gatewayToken}}\",\n  \"session_id\": \"{{sessionId}}\",\n  \"throttle_ms\": 300,\n  \"max_per_chat\": 1000000\n}"
+              "raw": "{\n  \"session_id\": \"{{sessionId}}\",\n  \"throttle_ms\": 300\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/backfill",
@@ -143,7 +138,17 @@
                 "backfill"
               ]
             },
-            "description": "Запускает фоновый обход истории через гейтвей и пишет её в хранилище архиватора.\n\n⚠ Через прод-Ingress не доступен (наружу выставлены только /search и /health) — используй kubectl port-forward и окружение archiver-local.\n\nТело:\n- gateway_url — база per-account гейтвея. Anti-SSRF: должен совпадать с ARCHIVER_GATEWAY_TEMPLATE (если задан), иначе — только localhost / cluster DNS / private IP. Внешние URL гейтвея (через Ingress) не принимаются; внутри кластера — http://tgw-<sessionId>:8080.\n- token — Bearer гейтвея (read).\n- session_id — id аккаунта (сессии).\n- throttle_ms — пауза между страницами (по умолчанию 300; 0 = без троттлинга).\n- max_per_chat — лимит сообщений на чат (по умолчанию ~безлимит).\n\n409, если бэкфилл уже идёт."
+            "description": "Бэкфилл истории аккаунта. Адрес гейтвея и токен архиватор берет из реестра control plane, в теле только session_id. Аккаунт без archive_enabled получает 400.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
           },
           "response": []
         },
@@ -161,9 +166,89 @@
                 "backfill"
               ]
             },
-            "description": "Текущее состояние бэкфилла (running, chats_done/chats_total, messages_added, error) и статус медиа-оффлоада. Стейт — in-memory: обнуляется при рестарте пода.\n\n⚠ Через прод-Ingress не доступен — используй kubectl port-forward."
+            "description": "Текущее состояние бэкфилла (running, chats_done/chats_total, messages_added, error) и статус медиа-оффлоада. Стейт — in-memory: обнуляется при рестарте пода.\n\n⚠ Через прод-Ingress не доступен — используй kubectl port-forward.",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
           },
           "response": []
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "Media retry",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/media/retry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "media",
+                "retry"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Заново ставит в очередь строки с file_id без media_url (по умолчанию за 7 дней; поле since в epoch-секундах). Без session_id по всем аккаунтам.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session_id\": \"{{sessionId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Purge account",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/accounts/{{sessionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "accounts",
+                "{{sessionId}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Удаляет архив аккаунта: сообщения, чаты, seq и медиа media/<sessionId>/ в S3. Control plane вызывает его сам при удалении аккаунта."
+          }
         }
       ]
     }

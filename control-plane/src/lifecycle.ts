@@ -18,7 +18,8 @@ export type LifecycleDeps = {
 // Сколько проходов ждать ответа воркера на logout, прежде чем удалять без него.
 export const LOGOUT_WAIT_PASSES = 3;
 
-// Шаги: (null | logout_wait:N) -> logged_out -> scaled -> pod_gone -> s3_deleted -> запись удалена.
+// Шаги: (null | logout_wait:N) -> logged_out -> scaled -> pod_gone -> s3_deleted -> archive_purged
+// -> запись удалена.
 // replicas: 0 ставит reconcile по статусу deleting. S3 чистится строго после остановки пода,
 // иначе финальный push на shutdown вернул бы бинлог.
 export async function advanceDeletion(a: Account, d: LifecycleDeps): Promise<void> {
@@ -61,7 +62,26 @@ export async function advanceDeletion(a: Account, d: LifecycleDeps): Promise<voi
     await set("s3_deleted");
   }
   if (step === "s3_deleted") {
-    // Purge архива добавит план архиватора (шаг archive_purged).
+    // Архив аккаунта: сообщения, чаты и медиа в S3. Ошибка оставляет шаг до следующего прохода.
+    // Архиватор есть, а токена нет: не продвигаем шаг, иначе архив удаленного аккаунта остался бы навсегда.
+    if (d.cfg.archiverAdminUrl && !d.cfg.archiverAdminToken) {
+      console.error(`lifecycle: ${id}: CP_ARCHIVER_ADMIN_TOKEN not set, archive purge blocked`);
+      return;
+    }
+    if (d.cfg.archiverAdminUrl) {
+      const r = await fetch(`${d.cfg.archiverAdminUrl}/accounts/${encodeURIComponent(id)}`, {
+        method: "DELETE", headers: { authorization: `Bearer ${d.cfg.archiverAdminToken}` }, signal: AbortSignal.timeout(120_000),
+      }).catch((e: Error) => ({ ok: false, status: 0, statusText: e.message }) as const);
+      if (!r.ok) {
+        console.error(`lifecycle: ${id}: archive purge failed: ${r.status}`);
+        return;
+      }
+    } else {
+      console.error(`lifecycle: ${id}: no archiver configured (CP_ARCHIVER_ADMIN_URL empty), archive purge skipped`);
+    }
+    await set("archive_purged");
+  }
+  if (step === "archive_purged") {
     await d.kube.delete("Secret", workerName(id));
     await d.store.deleteAccount(id);
     d.kick();

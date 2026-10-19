@@ -18,6 +18,6 @@ export function config(patch: Partial<Config> = {}): Config {
     workerConfigMap: "tgw-worker-config", kafkaBrokers: "kafka.kafka.svc:9092",
     s3: { endpoint: "http://minio", region: "us-east-1", bucket: "tgw-s3-bucket", accessKeyId: "k", secretAccessKey: "s", forcePathStyle: true },
     joinBaseUrl: "https://join.tarassov.me", apiBaseUrl: "https://tg.tarassov.me", mcpBaseUrl: "",
-    reconcileIntervalMs: 30000, ...patch,
+    reconcileIntervalMs: 30000, archiverAdminUrl: "", archiverAdminToken: "", ...patch,
   };
 }
