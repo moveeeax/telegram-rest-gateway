@@ -212,6 +212,11 @@ export class MediaOffloader {
     this.queue.push(job);
   }
 
+  /** Снимает задачу с дедупа: повтор после permanent fail или ручной retry. */
+  forget(job: MediaJob): void {
+    this.seen.delete(this.jobKey(job));
+  }
+
   /** Помечает ключ виденным, вытесняя старейший при переполнении (LRU, см. SEEN_MAX_SIZE). */
   private markSeen(key: string): void {
     if (this.seen.size >= SEEN_MAX_SIZE) {
