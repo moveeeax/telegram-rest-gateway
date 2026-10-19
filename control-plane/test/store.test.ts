@@ -103,6 +103,16 @@ function suite(name: string, make: () => Promise<Store>, cleanup?: () => Promise
       await s.deleteAccount("aaaaaaaaaa3");
     });
 
+    test("owner tokens: insert, list, delete by label, unique label", async () => {
+      await s.insertOwnerToken({ tokenHash: "oh1", label: "me", accountIds: ["aaaaaaaaaa4", "aaaaaaaaaa5"], createdAt: now });
+      const l = await s.listOwnerTokens();
+      assert.deepEqual(l.map((t) => [t.label, t.accountIds]), [["me", ["aaaaaaaaaa4", "aaaaaaaaaa5"]]]);
+      await assert.rejects(s.insertOwnerToken({ tokenHash: "oh2", label: "me", accountIds: ["aaaaaaaaaa4"], createdAt: now }));
+      assert.equal(await s.deleteOwnerToken("me"), true);
+      assert.equal(await s.deleteOwnerToken("me"), false);
+      assert.deepEqual(await s.listOwnerTokens(), []);
+    });
+
     test("accounts CRUD and activeByTelegramId ignores needs_relogin", async () => {
       await s.insertAccount(account("aaaaaaaaaa2"));
       await s.updateAccount("aaaaaaaaaa2", { status: "needs_relogin", telegramUserId: "777" });

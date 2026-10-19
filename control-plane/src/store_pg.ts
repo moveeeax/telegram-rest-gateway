@@ -1,6 +1,6 @@
 // Postgres-реализация Store (база tgw_control в CNPG). Схема применяется на старте.
 import pg from "pg";
-import type { Account, AttemptKind, ClaimResult, Invite, InviteKind, Store } from "./store.js";
+import type { Account, AttemptKind, ClaimResult, Invite, InviteKind, OwnerToken, Store } from "./store.js";
 
 // Сброс занятости инвайта: то же, что releaseInvite, используется и в claim истекшей сессии.
 const RESET_SQL = `claimed_at = NULL, session_hash = NULL, session_expires_at = NULL,
@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS invites (
   outcome            text
 );
 ALTER TABLE invites ADD COLUMN IF NOT EXISTS phone_attempts integer NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS owner_tokens (
+  token_hash  text PRIMARY KEY,
+  label       text UNIQUE NOT NULL,
+  account_ids text[] NOT NULL,
+  created_at  timestamptz NOT NULL
+);
 CREATE INDEX IF NOT EXISTS invites_session ON invites (session_hash);
 `;
 
@@ -89,7 +95,7 @@ export class PgStore implements Store {
   }
 
   async resetForTests(): Promise<void> {
-    await this.pool.query("TRUNCATE accounts, invites");
+    await this.pool.query("TRUNCATE accounts, invites, owner_tokens");
   }
 
   async createInvite(i: { codeHash: string; kind: InviteKind; accountId: string | null; ttlMs: number; now: Date }): Promise<Invite> {
@@ -216,6 +222,21 @@ export class PgStore implements Store {
 
   async deleteAccount(accountId: string): Promise<void> {
     await this.pool.query("DELETE FROM accounts WHERE account_id = $1", [accountId]);
+  }
+
+  async insertOwnerToken(t: OwnerToken): Promise<void> {
+    await this.pool.query("INSERT INTO owner_tokens (token_hash, label, account_ids, created_at) VALUES ($1,$2,$3,$4)",
+      [t.tokenHash, t.label, t.accountIds, t.createdAt]);
+  }
+
+  async listOwnerTokens(): Promise<OwnerToken[]> {
+    const r = await this.pool.query("SELECT * FROM owner_tokens ORDER BY created_at");
+    return r.rows.map((x) => ({ tokenHash: x.token_hash, label: x.label, accountIds: x.account_ids, createdAt: x.created_at }));
+  }
+
+  async deleteOwnerToken(label: string): Promise<boolean> {
+    const r = await this.pool.query("DELETE FROM owner_tokens WHERE label = $1", [label]);
+    return r.rowCount === 1;
   }
 
   async activeByTelegramId(telegramUserId: string): Promise<Account | null> {

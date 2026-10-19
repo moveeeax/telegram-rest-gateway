@@ -87,11 +87,18 @@ export function adminApp(d: AdminDeps): express.Express {
     if (!isMcp && !isArchiver) return void res.status(401).json({ error: "unauthorized" });
     const active = (await store.listAccounts()).filter((a) => a.status === "active");
     if (isMcp) {
-      const tokens = [];
+      // Запись на каждый клиентский токен (один аккаунт) и на каждый токен владельца (набор).
+      const refs = new Map<string, { accountId: string; gatewayUrl: string; serviceToken: string }>();
       for (const a of active) {
-        const s = await kube.getSecret(workerName(a.accountId));
-        if (!s?.[SECRET_KEYS.mcp]) continue;
-        tokens.push({ sha256: a.clientTokenHash, accountIds: [a.accountId], gatewayUrl: workerBaseUrl(a.accountId, cfg), serviceToken: s[SECRET_KEYS.mcp] });
+        const sec = await kube.getSecret(workerName(a.accountId));
+        if (sec?.[SECRET_KEYS.mcp]) {
+          refs.set(a.accountId, { accountId: a.accountId, gatewayUrl: workerBaseUrl(a.accountId, cfg), serviceToken: sec[SECRET_KEYS.mcp] });
+        }
+      }
+      const tokens = active.filter((a) => refs.has(a.accountId)).map((a) => ({ sha256: a.clientTokenHash, accounts: [refs.get(a.accountId)!] }));
+      for (const o of await store.listOwnerTokens()) {
+        const accounts = o.accountIds.map((id) => refs.get(id)).filter((r) => r !== undefined);
+        if (accounts.length) tokens.push({ sha256: o.tokenHash, accounts });
       }
       return void res.json({ tokens });
     }
@@ -181,6 +188,31 @@ export function adminApp(d: AdminDeps): express.Express {
     const inv = await store.createInvite({ codeHash: sha256hex(code), kind: "token", accountId: a.accountId, ttlMs: INVITE_TTL_MS, now: now() });
     d.kick();
     res.status(201).json({ url: inviteUrl("t", code), expires_at: inv.expiresAt.toISOString() });
+  }));
+
+  // Токены владельца: один ключ MCP на несколько аккаунтов. Токен показывается один раз.
+  app.post("/admin/owner-tokens", wrap(async (req, res) => {
+    const label = typeof req.body?.label === "string" ? req.body.label.trim() : "";
+    const ids = req.body?.account_ids;
+    if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(label)) return void res.status(400).json({ error: "label must match [a-z0-9-], up to 32 chars" });
+    if (!Array.isArray(ids) || ids.length === 0 || ids.some((x) => typeof x !== "string")) {
+      return void res.status(400).json({ error: "account_ids must be a non-empty array" });
+    }
+    for (const id of ids as string[]) {
+      if (!isAccountId(id) || !(await store.getAccount(id))) return void res.status(400).json({ error: `unknown account ${id}` });
+    }
+    if ((await store.listOwnerTokens()).some((o) => o.label === label)) return void res.status(409).json({ error: "label exists" });
+    const token = `owner.${newSecret()}`;
+    await store.insertOwnerToken({ tokenHash: sha256hex(token), label, accountIds: [...new Set(ids as string[])], createdAt: now() });
+    res.status(201).json({ label, token });
+  }));
+
+  app.get("/admin/owner-tokens", wrap(async (_req, res) => {
+    res.json({ tokens: (await store.listOwnerTokens()).map((o) => ({ label: o.label, account_ids: o.accountIds, created_at: o.createdAt })) });
+  }));
+
+  app.delete("/admin/owner-tokens/:label", wrap(async (req, res) => {
+    res.status((await store.deleteOwnerToken(String(req.params.label))) ? 204 : 404).end();
   }));
 
   app.delete("/admin/accounts/:id", wrap(async (req, res) => {
