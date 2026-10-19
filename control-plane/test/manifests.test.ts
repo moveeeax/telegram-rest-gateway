@@ -30,9 +30,13 @@ test("onboarding: no IngressRoute; active: IngressRoute", () => {
   assert.equal(byKind(desiredObjects(account(ID, { status: "needs_relogin" }), config()), "IngressRoute"), undefined);
 });
 
-test("replicas: 1 normally, 0 while deleting", () => {
-  assert.equal(byKind(desiredObjects(account(ID), config()), "StatefulSet").spec.replicas, 1);
-  assert.equal(byKind(desiredObjects(account(ID, { status: "deleting" }), config()), "StatefulSet").spec.replicas, 0);
+test("replicas: 1 normally and until logout, 0 after logout while deleting", () => {
+  const reps = (p: Parameters<typeof account>[1]) => byKind(desiredObjects(account(ID, p), config()), "StatefulSet").spec.replicas;
+  assert.equal(reps({}), 1);
+  // под нужен живым, пока lifecycle не сделал logout
+  assert.equal(reps({ status: "deleting", deleteStep: null }), 1);
+  assert.equal(reps({ status: "deleting", deleteStep: "logout_wait:2" }), 1);
+  for (const s of ["logged_out", "scaled", "pod_gone", "s3_deleted"]) assert.equal(reps({ status: "deleting", deleteStep: s }), 0, s);
 });
 
 test("worker env: per-account secrets override shared, export off, kafka by archive flag", () => {

@@ -62,6 +62,7 @@ export async function advanceDeletion(a: Account, d: LifecycleDeps): Promise<voi
   }
   if (step === "s3_deleted") {
     // Purge архива добавит план архиватора (шаг archive_purged).
+    await d.kube.delete("Secret", workerName(id));
     await d.store.deleteAccount(id);
     d.kick();
   }

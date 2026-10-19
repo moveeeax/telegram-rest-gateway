@@ -1,6 +1,11 @@
 // Postgres-реализация Store (база tgw_control в CNPG). Схема применяется на старте.
 import pg from "pg";
-import type { Account, ClaimResult, Invite, InviteKind, Store } from "./store.js";
+import type { Account, AttemptKind, ClaimResult, Invite, InviteKind, Store } from "./store.js";
+
+// Сброс занятости инвайта: то же, что releaseInvite, используется и в claim истекшей сессии.
+const RESET_SQL = `claimed_at = NULL, session_hash = NULL, session_expires_at = NULL,
+         code_attempts = 0, password_attempts = 0, phone_attempts = 0, outcome = NULL,
+         account_id = CASE WHEN kind = 'new' THEN NULL ELSE account_id END`;
 
 // Общий ключ advisory lock на claim: подсчет занятых сессий и захват идут под одной блокировкой.
 const CLAIM_LOCK = 727001;
@@ -35,6 +40,7 @@ CREATE TABLE IF NOT EXISTS invites (
   password_attempts  integer NOT NULL DEFAULT 0,
   outcome            text
 );
+ALTER TABLE invites ADD COLUMN IF NOT EXISTS phone_attempts integer NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS invites_session ON invites (session_hash);
 `;
 
@@ -65,7 +71,7 @@ function toInvite(r: Row): Invite {
     expiresAt: r.expires_at as Date, claimedAt: (r.claimed_at as Date | null) ?? null,
     sessionHash: (r.session_hash as string | null) ?? null, sessionExpiresAt: (r.session_expires_at as Date | null) ?? null,
     usedAt: (r.used_at as Date | null) ?? null, codeAttempts: r.code_attempts as number,
-    passwordAttempts: r.password_attempts as number, outcome: (r.outcome as string | null) ?? null,
+    passwordAttempts: r.password_attempts as number, phoneAttempts: r.phone_attempts as number, outcome: (r.outcome as string | null) ?? null,
   };
 }
 
@@ -120,11 +126,13 @@ export class PgStore implements Store {
         );
         if (busy.rows[0].n >= maxConcurrent) result = { ok: false, reason: "busy" };
         else {
+          const abandonedAccountId = inv.claimedAt !== null && inv.kind === "new" ? inv.accountId : null;
+          if (inv.claimedAt !== null) await c.query(`UPDATE invites SET ${RESET_SQL} WHERE code_hash = $1`, [codeHash]);
           const u = await c.query(
             "UPDATE invites SET claimed_at = $2, session_hash = $3, session_expires_at = $4 WHERE code_hash = $1 RETURNING *",
             [codeHash, now, sessionHash, new Date(now.getTime() + sessionTtlMs)],
           );
-          result = { ok: true, invite: toInvite(u.rows[0]) };
+          result = { ok: true, invite: toInvite(u.rows[0]), abandonedAccountId };
         }
       }
       await c.query("COMMIT");
@@ -149,18 +157,15 @@ export class PgStore implements Store {
 
   async releaseInvite(codeHash: string): Promise<void> {
     await this.pool.query(
-      `UPDATE invites SET claimed_at = NULL, session_hash = NULL, session_expires_at = NULL,
-         code_attempts = 0, password_attempts = 0,
-         account_id = CASE WHEN kind = 'new' THEN NULL ELSE account_id END
-       WHERE code_hash = $1`, [codeHash]);
+      `UPDATE invites SET ${RESET_SQL} WHERE code_hash = $1`, [codeHash]);
   }
 
   async markInviteUsed(codeHash: string, now: Date): Promise<void> {
     await this.pool.query("UPDATE invites SET used_at = $2 WHERE code_hash = $1", [codeHash, now]);
   }
 
-  async bumpAttempt(codeHash: string, kind: "code" | "password"): Promise<number> {
-    const col = kind === "code" ? "code_attempts" : "password_attempts";
+  async bumpAttempt(codeHash: string, kind: AttemptKind): Promise<number> {
+    const col = { code: "code_attempts", password: "password_attempts", phone: "phone_attempts" }[kind];
     const r = await this.pool.query(
       `UPDATE invites SET ${col} = ${col} + 1 WHERE code_hash = $1 RETURNING ${col} AS n`, [codeHash]);
     return r.rows[0]?.n ?? 0;

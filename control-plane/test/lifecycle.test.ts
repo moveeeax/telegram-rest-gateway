@@ -42,6 +42,7 @@ test("deletion: logout, wait for pod, then S3, then the record", async () => {
     await advanceDeletion((await e.store.getAccount(ID))!, e.deps);
     assert.deepEqual(e.s3.deleted, [`telegram-sessions/${ID}/`]);
     assert.equal(await e.store.getAccount(ID), null);
+    assert.equal(e.kube.objects.has(`Secret/tgw-${ID}`), false);
     assert.ok(e.kicks() >= 1);
   } finally { await w.stop(); }
 });

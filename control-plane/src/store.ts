@@ -20,6 +20,7 @@ export type Account = {
 };
 
 export type InviteKind = "new" | "relogin" | "token";
+export type AttemptKind = "code" | "password" | "phone";
 
 export type Invite = {
   codeHash: string;
@@ -32,12 +33,14 @@ export type Invite = {
   usedAt: Date | null;
   codeAttempts: number;
   passwordAttempts: number;
+  phoneAttempts: number;
   // Чем кончилась сессия, если не успехом: "duplicate", "wrong_account", "too_many_attempts".
   outcome: string | null;
 };
 
 export type ClaimResult =
-  | { ok: true; invite: Invite }
+  // abandonedAccountId: аккаунт истекшей сессии, которую этот claim перехватил (его надо удалить).
+  | { ok: true; invite: Invite; abandonedAccountId?: string | null }
   | { ok: false; reason: "not_found" | "expired" | "in_use" | "busy" | "used" };
 
 export interface Store {
@@ -51,7 +54,7 @@ export interface Store {
   // Сбрасывает занятость (истекшая сессия): ссылка снова работает до своего expiresAt.
   releaseInvite(codeHash: string): Promise<void>;
   markInviteUsed(codeHash: string, now: Date): Promise<void>;
-  bumpAttempt(codeHash: string, kind: "code" | "password"): Promise<number>;
+  bumpAttempt(codeHash: string, kind: AttemptKind): Promise<number>;
   setOutcome(codeHash: string, outcome: string): Promise<void>;
   // Атомарно ставит tokenShownAt, если он пуст. true ровно у одного вызывающего.
   claimTokenShow(accountId: string, now: Date): Promise<boolean>;

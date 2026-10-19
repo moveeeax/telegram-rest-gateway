@@ -18,14 +18,15 @@ test("new onboarding account gets StatefulSet, Service, NetworkPolicy", async ()
   assert.deepEqual(kube.applied.sort(), [`NetworkPolicy/tgw-${ID}`, `Service/tgw-${ID}`, `StatefulSet/tgw-${ID}`]);
 });
 
-test("labelled objects without a db record are deleted, Secret included", async () => {
+test("labelled objects without a db record are deleted, but never the Secret", async () => {
   const store = new MemStore();
   const kube = new FakeKube();
   await kube.apply(secretManifest("azzzzzzzzzz", { clientToken: "c", adminToken: "a", mcpServiceToken: "m", archiverServiceToken: "r", databaseEncryptionKey: "k" }, 1, config()));
   await kube.apply({ apiVersion: "v1", kind: "Service", metadata: { name: "tgw-azzzzzzzzzz", namespace: "tgw-accounts", labels: { [LABEL_ACCOUNT]: "azzzzzzzzzz", [LABEL_MANAGED]: "control-plane" } } });
   const r = await reconcileOnce(store, kube, config(), NOW);
-  assert.equal(r.deleted, 2);
-  assert.equal(kube.objects.size, 0);
+  // Secret держит ключ шифрования БД: его удаляет только lifecycle после зачистки S3.
+  assert.equal(r.deleted, 1);
+  assert.deepEqual([...kube.objects.keys()], ["Secret/tgw-azzzzzzzzzz"]);
 });
 
 test("objects without managed-by label are never touched", async () => {

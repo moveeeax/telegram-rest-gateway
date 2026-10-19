@@ -49,6 +49,22 @@ function suite(name: string, make: () => Promise<Store>, cleanup?: () => Promise
       for (const c of ["b2", "b3", "b4"]) await s.releaseInvite(c);
     });
 
+    test("claim after session expiry starts clean and reports the abandoned account", async () => {
+      await s.createInvite({ codeHash: "x1", kind: "new", accountId: null, ttlMs: DAY, now });
+      await s.claimInvite("x1", "old", MIN15, 3, now);
+      await s.attachAccount("x1", "aabandoned1");
+      await s.bumpAttempt("x1", "code");
+      await s.setOutcome("x1", "too_many_attempts");
+      const later = new Date(now.getTime() + MIN15 + 1);
+      const r = await s.claimInvite("x1", "new", MIN15, 3, later);
+      assert.ok(r.ok);
+      assert.equal(r.ok && r.invite.accountId, null);
+      assert.equal(r.ok && r.invite.codeAttempts, 0);
+      assert.equal(r.ok && r.invite.outcome, null);
+      assert.equal(r.ok && r.abandonedAccountId, "aabandoned1");
+      await s.releaseInvite("x1");
+    });
+
     test("parallel claims of one code: exactly one wins", async () => {
       await s.createInvite({ codeHash: "p1", kind: "new", accountId: null, ttlMs: DAY, now });
       const rs = await Promise.all([1, 2, 3, 4].map((i) => s.claimInvite("p1", "ps" + i, MIN15, 3, now)));
@@ -73,6 +89,7 @@ function suite(name: string, make: () => Promise<Store>, cleanup?: () => Promise
       assert.equal(await s.bumpAttempt("t1", "code"), 2);
       assert.equal(await s.bumpAttempt("t1", "code"), 3);
       assert.equal(await s.bumpAttempt("t1", "password"), 1);
+      assert.equal(await s.bumpAttempt("t1", "phone"), 1);
     });
 
     test("outcome and one-time token show", async () => {

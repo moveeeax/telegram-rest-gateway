@@ -14,7 +14,9 @@ export interface Kube {
   podGone(accountId: string): Promise<boolean>;
 }
 
-export const MANAGED_KINDS = ["StatefulSet", "Service", "NetworkPolicy", "IngressRoute", "Secret"] as const;
+// Secret в общий список не входит: в нем ключ шифрования БД TDLib, и reconcile его не удаляет
+// никогда. Удаляет его только lifecycle, когда S3 уже зачищен (lifecycle.ts).
+export const MANAGED_KINDS = ["StatefulSet", "Service", "NetworkPolicy", "IngressRoute"] as const;
 
 const API_VERSION: Record<string, string> = {
   StatefulSet: "apps/v1",

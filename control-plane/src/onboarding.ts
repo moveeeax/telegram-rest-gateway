@@ -15,6 +15,8 @@ export const INVITE_TTL_MS = 24 * 3600 * 1000;
 export const SESSION_TTL_MS = 15 * 60 * 1000;
 export const MAX_CONCURRENT = 3;
 export const MAX_ATTEMPTS = 5;
+// Номера телефона на сессию: каждый вызов шлет код через общий API_ID, флуд грозит его блокировкой.
+export const MAX_PHONE_ATTEMPTS = 3;
 export const COOKIE_NAME = "tgw_onb";
 
 export const TEXT = {
@@ -77,6 +79,10 @@ export class Onboarding {
       return { kind: "page", status: 404, message: TEXT.invalid };
     }
     const inv = claim.invite;
+    if (claim.abandonedAccountId) {
+      const old = await this.d.store.getAccount(claim.abandonedAccountId);
+      if (old?.status === "onboarding") await this.d.store.updateAccount(old.accountId, { status: "deleting" });
+    }
     if (inv.kind === "token") return { kind: "page", status: 404, message: TEXT.invalid };
     if (inv.kind === "new" && !inv.accountId) await this.createAccount(inv, now);
     if (inv.kind === "relogin") {
@@ -233,7 +239,7 @@ export class Onboarding {
   }
 
   submitPhone(cookie: string, phone: string): Promise<OnboardView> {
-    return this.submit(cookie, null, (w) => w.phone(phone));
+    return this.submit(cookie, "phone", (w) => w.phone(phone));
   }
   submitCode(cookie: string, code: string): Promise<OnboardView> {
     return this.submit(cookie, "code", (w) => w.code(code));
@@ -243,14 +249,15 @@ export class Onboarding {
   }
 
   private async submit(
-    cookie: string, attempt: "code" | "password" | null,
+    cookie: string, attempt: "code" | "password" | "phone",
     call: (w: WorkerClient) => Promise<{ ok: true; value: AuthState } | { ok: false; status: number; error: string }>,
   ): Promise<OnboardView> {
     const s = await this.session(cookie);
     if (typeof s === "string") return { phase: s };
     const done = this.outcomeView(s.invite);
     if (done) return done;
-    if (attempt && (await this.d.store.bumpAttempt(s.invite.codeHash, attempt)) > MAX_ATTEMPTS) {
+    const limit = attempt === "phone" ? MAX_PHONE_ATTEMPTS : MAX_ATTEMPTS;
+    if ((await this.d.store.bumpAttempt(s.invite.codeHash, attempt)) > limit) {
       await this.d.store.setOutcome(s.invite.codeHash, "too_many_attempts");
       await this.d.store.markInviteUsed(s.invite.codeHash, this.now());
       if (s.account.status === "onboarding") await this.d.store.updateAccount(s.account.accountId, { status: "deleting" });

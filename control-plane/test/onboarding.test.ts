@@ -148,6 +148,34 @@ test("sixth code attempt ends the session with an error", async () => {
   } finally { await e.stop(); }
 });
 
+test("fourth phone number ends the session (shared API_ID protection)", async () => {
+  const e = await onbEnv();
+  try {
+    const { cookie } = await e.open(await e.invite());
+    await e.onb.view(cookie!);
+    for (let i = 0; i < 3; i++) await e.onb.submitPhone(cookie!, "+1555010" + i);
+    const v = await e.onb.submitPhone(cookie!, "+15550109");
+    assert.equal(v.phase, "error");
+    assert.equal(e.worker.requests.filter((q) => q.path === "/v1/auth/phone").length, 3);
+  } finally { await e.stop(); }
+});
+
+test("abandoned account of an expired session goes to deleting when the link is reused", async () => {
+  const e = await onbEnv();
+  try {
+    const code = await e.invite();
+    await e.open(code);
+    const first = (await e.store.listAccounts())[0].accountId;
+    e.advance(16 * 60e3); // expire() еще не прошел
+    const again = await e.open(code);
+    assert.equal(again.r.kind, "redirect");
+    assert.equal((await e.store.getAccount(first))?.status, "deleting");
+    const accs = await e.store.listAccounts();
+    assert.equal(accs.filter((a) => a.status === "onboarding").length, 1);
+    assert.notEqual(accs.find((a) => a.status === "onboarding")!.accountId, first);
+  } finally { await e.stop(); }
+});
+
 test("relogin: same telegram user returns to active without a new token", async () => {
   const e = await onbEnv();
   try {

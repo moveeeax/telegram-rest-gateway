@@ -38,6 +38,9 @@ export const SECRET_KEYS = {
 const PUBLIC_PATHS = "(chats|me|users|contacts|resolve|search|files|updates|health)";
 export const API_HOST_DEFAULT = "tg.tarassov.me";
 
+// Шаги удаления (lifecycle.ts), на которых воркер уже вышел из Telegram и должен быть остановлен.
+export const SCALED_DOWN_STEPS = new Set(["logged_out", "scaled", "pod_gone", "s3_deleted"]);
+
 export function workerName(accountId: string): string {
   if (!isAccountId(accountId)) throw new Error(`invalid accountId: ${accountId}`);
   return `tgw-${accountId}`;
@@ -91,7 +94,8 @@ function statefulSet(a: Account, cfg: Config): KubeObject {
     metadata: m,
     spec: {
       // Одна сессия Telegram = один под. StatefulSet не создает замену, пока старый под не удален.
-      replicas: a.status === "deleting" ? 0 : 1,
+      // При удалении под нужен живым до logout: гасим только после шага logged_out.
+      replicas: a.status === "deleting" && SCALED_DOWN_STEPS.has(a.deleteStep ?? "") ? 0 : 1,
       serviceName: m.name,
       selector: { matchLabels: { [LABEL_ACCOUNT]: a.accountId } },
       template: {

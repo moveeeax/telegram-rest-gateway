@@ -27,7 +27,7 @@ export async function reconcileOnce(store: Store, kube: Kube, cfg: Config, _now:
     for (const o of await kube.listManaged(kind)) {
       const id = o.metadata.labels?.[LABEL_ACCOUNT];
       const a = id ? byId.get(id) : undefined;
-      // Secret и прочее удаляются только без записи в базе; маршрут живет только у active.
+      // Объекты без записи в базе удаляются; маршрут живет только у active. Secret здесь не бывает.
       const orphan = !a;
       const staleRoute = kind === "IngressRoute" && a !== undefined && a.status !== "active";
       if (orphan || staleRoute) {

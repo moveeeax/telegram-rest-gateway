@@ -1,5 +1,5 @@
 // Хранилище в памяти для тестов. Семантика совпадает с PgStore, включая атомарность claim.
-import type { Account, ClaimResult, Invite, InviteKind, Store } from "./store.js";
+import type { Account, AttemptKind, ClaimResult, Invite, InviteKind, Store } from "./store.js";
 
 export class MemStore implements Store {
   private invites = new Map<string, Invite>();
@@ -10,7 +10,7 @@ export class MemStore implements Store {
   async createInvite(i: { codeHash: string; kind: InviteKind; accountId: string | null; ttlMs: number; now: Date }): Promise<Invite> {
     const inv: Invite = {
       codeHash: i.codeHash, kind: i.kind, accountId: i.accountId, expiresAt: new Date(i.now.getTime() + i.ttlMs),
-      claimedAt: null, sessionHash: null, sessionExpiresAt: null, usedAt: null, codeAttempts: 0, passwordAttempts: 0, outcome: null,
+      claimedAt: null, sessionHash: null, sessionExpiresAt: null, usedAt: null, codeAttempts: 0, passwordAttempts: 0, phoneAttempts: 0, outcome: null,
     };
     this.invites.set(i.codeHash, inv);
     return { ...inv };
@@ -32,10 +32,13 @@ export class MemStore implements Store {
     }
     const busy = [...this.invites.values()].filter(live).length;
     if (busy >= maxConcurrent) return { ok: false, reason: "busy" };
+    // Истекшая, но еще не освобожденная сессия: начинаем с чистого листа, как после releaseInvite.
+    const abandonedAccountId = inv.claimedAt !== null && inv.kind === "new" ? inv.accountId : null;
+    if (inv.claimedAt !== null) this.reset(inv);
     inv.claimedAt = now;
     inv.sessionHash = sessionHash;
     inv.sessionExpiresAt = new Date(now.getTime() + sessionTtlMs);
-    return { ok: true, invite: { ...inv } };
+    return { ok: true, invite: { ...inv }, abandonedAccountId };
   }
 
   async inviteBySession(sessionHash: string, now: Date): Promise<Invite | null> {
@@ -50,15 +53,20 @@ export class MemStore implements Store {
     if (i) i.accountId = accountId;
   }
 
-  async releaseInvite(codeHash: string): Promise<void> {
-    const i = this.invites.get(codeHash);
-    if (!i) return;
+  private reset(i: Invite) {
     i.claimedAt = null;
     i.sessionHash = null;
     i.sessionExpiresAt = null;
     i.codeAttempts = 0;
     i.passwordAttempts = 0;
+    i.phoneAttempts = 0;
+    i.outcome = null;
     if (i.kind === "new") i.accountId = null;
+  }
+
+  async releaseInvite(codeHash: string): Promise<void> {
+    const i = this.invites.get(codeHash);
+    if (i) this.reset(i);
   }
 
   async markInviteUsed(codeHash: string, now: Date): Promise<void> {
@@ -66,10 +74,11 @@ export class MemStore implements Store {
     if (i) i.usedAt = now;
   }
 
-  async bumpAttempt(codeHash: string, kind: "code" | "password"): Promise<number> {
+  async bumpAttempt(codeHash: string, kind: AttemptKind): Promise<number> {
     const i = this.invites.get(codeHash);
     if (!i) return 0;
     if (kind === "code") return ++i.codeAttempts;
+    if (kind === "phone") return ++i.phoneAttempts;
     return ++i.passwordAttempts;
   }
 
