@@ -175,12 +175,43 @@ export function adminApp(d: AdminDeps): express.Express {
     await kube.apply(secretManifest(a.accountId, {
       clientToken: token, adminToken: old[SECRET_KEYS.admin], databaseEncryptionKey: old[SECRET_KEYS.dbKey],
       mcpServiceToken: old[SECRET_KEYS.mcp] ?? newSecret(), archiverServiceToken: old[SECRET_KEYS.archiver] ?? newSecret(),
+      legacyBearerTokens: old[SECRET_KEYS.legacy] ? old[SECRET_KEYS.legacy].split("\n") : undefined,
     }, rev, cfg));
     await store.updateAccount(a.accountId, { clientTokenHash: sha256hex(token), secretRev: rev });
     const code = newCode();
     const inv = await store.createInvite({ codeHash: sha256hex(code), kind: "token", accountId: a.accountId, ttlMs: INVITE_TTL_MS, now: now() });
     d.kick();
     res.status(201).json({ url: inviteUrl("t", code), expires_at: inv.expiresAt.toISOString() });
+  }));
+
+  // Перенос аккаунта из чарта tgw: тот же числовой id (он же сегмент S3 с сессией), тот же ключ
+  // шифрования БД TDLib и старые токены владельца. Вызывать только когда старый под уже остановлен:
+  // reconcile сразу поднимет воркер, и два процесса на одну сессию отзовут ее (AUTH_KEY_DUPLICATED).
+  app.post("/admin/accounts/import", wrap(async (req, res) => {
+    const b = req.body ?? {};
+    const id = typeof b.account_id === "string" ? b.account_id : "";
+    const key = typeof b.database_encryption_key === "string" ? b.database_encryption_key : "";
+    const legacy = b.legacy_bearer_tokens ?? [];
+    const bad = (m: string) => void res.status(400).json({ error: m });
+    if (!/^[0-9]{1,20}$/.test(id)) return bad("account_id must be the numeric id of an existing account");
+    if (!key) return bad("database_encryption_key is required");
+    if (!Array.isArray(legacy) || legacy.some((t) => typeof t !== "string" || !t.trim() || /[\r\n]/.test(t))) {
+      return bad("legacy_bearer_tokens must be an array of single-line strings");
+    }
+    if (b.archive_enabled !== undefined && typeof b.archive_enabled !== "boolean") return bad("archive_enabled must be boolean");
+    if (await store.getAccount(id)) return void res.status(409).json({ error: "account exists" });
+    const token = clientToken(id);
+    await kube.apply(secretManifest(id, {
+      clientToken: token, adminToken: newSecret(), mcpServiceToken: newSecret(), archiverServiceToken: newSecret(),
+      databaseEncryptionKey: key, legacyBearerTokens: legacy.length ? legacy : undefined,
+    }, 1, cfg));
+    await store.insertAccount({
+      accountId: id, status: "active", telegramUserId: id, username: null, archiveEnabled: b.archive_enabled ?? true,
+      exportEnabled: false, clientTokenHash: sha256hex(token), invitedBy: "import", createdAt: now(), activatedAt: now(),
+      tokenShownAt: now(), deleteStep: null, secretRev: 1,
+    });
+    d.kick();
+    res.status(201).json({ accountId: id, client_token: token });
   }));
 
   app.delete("/admin/accounts/:id", wrap(async (req, res) => {

@@ -119,6 +119,45 @@ test("token reissue: new hash, revision bump, one-time reveal", async () => {
   } finally { await e.stop(); }
 });
 
+test("import of an existing account: same id, key and legacy tokens, active right away", async () => {
+  const e = await env();
+  try {
+    const body = { account_id: "1214732998", database_encryption_key: "OLDKEY", legacy_bearer_tokens: ["OLDADMIN", "OLDRW read,write"], archive_enabled: true };
+    const r = await e.call("POST", "/admin/accounts/import", "cp-admin", body);
+    assert.equal(r.status, 201);
+    const j = await r.json();
+    assert.match(j.client_token, /^1214732998\./);
+    const a = (await e.store.getAccount("1214732998"))!;
+    assert.equal(a.status, "active");
+    assert.equal(a.telegramUserId, "1214732998");
+    assert.equal(a.archiveEnabled, true);
+    assert.equal(a.exportEnabled, false);
+    assert.equal(a.clientTokenHash, sha256hex(j.client_token));
+    const s = (await e.kube.getSecret("tgw-1214732998"))!;
+    assert.equal(s.DATABASE_ENCRYPTION_KEY, "OLDKEY");
+    assert.ok(s.BEARER_TOKENS.endsWith("OLDADMIN\nOLDRW read,write"));
+    assert.ok(e.kicks() >= 1);
+    // повторный импорт и мусор отклоняются
+    assert.equal((await e.call("POST", "/admin/accounts/import", "cp-admin", body)).status, 409);
+    for (const bad of [{ ...body, account_id: "a1b2c3d4e5f" }, { ...body, account_id: "../x" }, { ...body, database_encryption_key: "" },
+      { ...body, legacy_bearer_tokens: ["has\nnewline"] }, { ...body, account_id: "999", legacy_bearer_tokens: "x" }]) {
+      assert.equal((await e.call("POST", "/admin/accounts/import", "cp-admin", bad)).status, 400, JSON.stringify(bad));
+    }
+    assert.equal((await e.call("POST", "/admin/accounts/import", null, body)).status, 401);
+  } finally { await e.stop(); }
+});
+
+test("token reissue keeps legacy tokens", async () => {
+  const e = await env();
+  try {
+    await e.call("POST", "/admin/accounts/import", "cp-admin", { account_id: "1389231240", database_encryption_key: "K2", legacy_bearer_tokens: ["OLDRO read"], archive_enabled: true });
+    assert.equal((await e.call("POST", "/admin/accounts/1389231240/token", "cp-admin")).status, 201);
+    const s = (await e.kube.getSecret("tgw-1389231240"))!;
+    assert.ok(s.BEARER_TOKENS.endsWith("\nOLDRO read"));
+    assert.equal(s.LEGACY_BEARER_TOKENS, "OLDRO read");
+  } finally { await e.stop(); }
+});
+
 test("registry: each consumer sees only its part", async () => {
   const e = await env();
   try {

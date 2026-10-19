@@ -21,6 +21,8 @@ export type WorkerSecrets = {
   mcpServiceToken: string;
   archiverServiceToken: string;
   databaseEncryptionKey: string;
+  // Строки BEARER_TOKENS аккаунта, перенесенного из чарта tgw (токены коннекторов и скриптов владельца).
+  legacyBearerTokens?: string[];
 };
 
 // Ключи Secret аккаунта. Токены в открытом виде нужны гейтвею (он сам хэширует BEARER_TOKENS)
@@ -32,6 +34,7 @@ export const SECRET_KEYS = {
   admin: "ADMIN_TOKEN",
   mcp: "MCP_SERVICE_TOKEN",
   archiver: "ARCHIVER_SERVICE_TOKEN",
+  legacy: "LEGACY_BEARER_TOKENS",
 } as const;
 
 // Публичные префиксы REST на общем хосте. /v1/auth, /v1/webhooks, /ui, /metrics сюда не входят.
@@ -56,7 +59,10 @@ function meta(accountId: string, cfg: Config) {
 
 // Строки BEARER_TOKENS: клиент read,write; admin без скоупа (полный); сервисные урезаны.
 export function bearerTokensValue(s: WorkerSecrets): string {
-  return [`${s.clientToken} read,write`, s.adminToken, `${s.mcpServiceToken} read,write`, `${s.archiverServiceToken} read`].join("\n");
+  return [
+    `${s.clientToken} read,write`, s.adminToken, `${s.mcpServiceToken} read,write`, `${s.archiverServiceToken} read`,
+    ...(s.legacyBearerTokens ?? []),
+  ].join("\n");
 }
 
 export function secretManifest(accountId: string, s: WorkerSecrets, secretRev: number, cfg: Config): KubeObject {
@@ -73,6 +79,7 @@ export function secretManifest(accountId: string, s: WorkerSecrets, secretRev: n
       [SECRET_KEYS.admin]: s.adminToken,
       [SECRET_KEYS.mcp]: s.mcpServiceToken,
       [SECRET_KEYS.archiver]: s.archiverServiceToken,
+      ...(s.legacyBearerTokens?.length ? { [SECRET_KEYS.legacy]: s.legacyBearerTokens.join("\n") } : {}),
     },
   };
 }

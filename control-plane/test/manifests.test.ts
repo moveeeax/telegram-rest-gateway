@@ -94,6 +94,15 @@ test("BEARER_TOKENS: client token has no admin scope", () => {
   assert.equal(s.stringData.DATABASE_ENCRYPTION_KEY, "DBKEY");
 });
 
+test("legacy tokens of migrated accounts are kept verbatim after the new ones", () => {
+  const legacy = ["OLDADMIN", "OLDRW read,write", "OLDRO read"];
+  const v = bearerTokensValue({ ...secrets, legacyBearerTokens: legacy });
+  assert.deepEqual(v.split("\n"), [`${ID}.CLIENT read,write`, "ADMIN", "MCPSVC read,write", "ARCHSVC read", ...legacy]);
+  const s = secretManifest(ID, { ...secrets, legacyBearerTokens: legacy }, 1, config()) as any;
+  assert.equal(s.stringData.LEGACY_BEARER_TOKENS, legacy.join("\n"));
+  assert.equal((secretManifest(ID, secrets, 1, config()) as any).stringData.LEGACY_BEARER_TOKENS, undefined);
+});
+
 test("unsafe account id is rejected", () => {
   assert.throws(() => desiredObjects(account("../x"), config()));
   assert.throws(() => secretManifest("../x", secrets, 1, config()));
