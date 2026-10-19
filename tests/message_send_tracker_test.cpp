@@ -1,5 +1,7 @@
 #include "bridge/message_send_tracker.hpp"
 
+#include "loop_thread.hpp"
+
 #include <drogon/utils/coroutine.h>
 #include <trantor/net/EventLoop.h>
 
@@ -21,43 +23,7 @@ using tgw::bridge::MessageSendTracker;
 
 namespace {
 
-// Обёртка над trantor::EventLoop с ЯВНОЙ синхронизацией старта (эталон из td_bridge_test.cpp):
-// поток создаёт EventLoop (wakeup-eventfd создаётся на ЕГО потоке), публикует указатель под
-// мьютексом + cv, и только ПОСЛЕ того как тест-тред получил указатель через тот же мьютекс
-// (release/acquire), можно постить в петлю — создание eventfd happens-before любого queueInLoop,
-// иначе TSan видит гонку на fd. Останов — quit() ИЗНУТРИ петли (через queueInLoop) + join.
-class LoopThread {
-   public:
-    LoopThread() {
-        thread_ = std::thread([this] {
-            trantor::EventLoop loop;  // eventfd создаётся здесь, на этом потоке
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                loop_ = &loop;
-            }
-            cv_.notify_one();
-            loop.loop();  // крутится до quit(); EventLoop разрушится здесь же, на своём потоке
-        });
-        std::unique_lock<std::mutex> lock(mutex_);
-        cv_.wait(lock, [this] { return loop_ != nullptr; });
-    }
-    ~LoopThread() {
-        loop_->queueInLoop([loop = loop_] { loop->quit(); });
-        thread_.join();
-    }
-
-    LoopThread(const LoopThread&) = delete;
-    LoopThread& operator=(const LoopThread&) = delete;
-
-    // loop_ после конструктора больше не меняется — читать без лока безопасно.
-    trantor::EventLoop* loop() const { return loop_; }
-
-   private:
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    trantor::EventLoop* loop_ = nullptr;
-    std::thread thread_;
-};
+using tgw_test::LoopThread;
 
 // Планирует корутину co_await tracker.waitFor(id, timeout) на петле и возвращает future исхода.
 // Корутина обязана суспендиться на петле, чтобы resolve*()/таймаут вернули resume в неё (как в

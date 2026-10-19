@@ -3,6 +3,7 @@
 #include "bridge/clock.hpp"
 #include "bridge/update_sink.hpp"
 #include "fake_transport.hpp"
+#include "loop_thread.hpp"
 
 #include <drogon/utils/coroutine.h>
 #include <td/telegram/td_api.h>
@@ -43,49 +44,7 @@ class FakeClock {
     std::atomic<std::chrono::steady_clock::time_point> now_{std::chrono::steady_clock::now()};
 };
 
-// Обёртка над trantor::EventLoop с ЯВНОЙ синхронизацией старта/останова. У trantor::EventLoopThread
-// этой версии getLoop() публикует лишь указатель на петлю, но НЕ устанавливает happens-before между
-// конструктором EventLoop (где на потоке петли создаётся wakeup-eventfd) и первым queueInLoop из
-// тест-треда — под TSan это гонка на eventfd (чтение fd main-тредом vs его создание на потоке
-// петли). Здесь HB задаём сами: поток создаёт EventLoop, публикует указатель под мьютексом + cv, и
-// только ПОСЛЕ того как тест-тред получил указатель через тот же мьютекс (release/acquire), он
-// постит в петлю — создание eventfd гарантированно happens-before любого queueInLoop. Останов —
-// quit() ИЗНУТРИ петли (через queueInLoop) + join: quit() не дёргается из чужого треда по
-// крутящейся петле.
-class LoopThread {
-   public:
-    LoopThread() {
-        thread_ = std::thread([this] {
-            trantor::EventLoop loop;  // eventfd создаётся здесь, на этом потоке
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                loop_ = &loop;
-            }
-            cv_.notify_one();
-            loop.loop();  // крутится до quit(); EventLoop разрушится здесь же, на своём потоке
-        });
-        std::unique_lock<std::mutex> lock(mutex_);
-        cv_.wait(lock, [this] { return loop_ != nullptr; });
-    }
-    ~LoopThread() {
-        // quit исполняется НА потоке петли -> нет гонки quit() с loop() из чужого треда.
-        loop_->queueInLoop([loop = loop_] { loop->quit(); });
-        thread_.join();
-    }
-
-    LoopThread(const LoopThread&) = delete;
-    LoopThread& operator=(const LoopThread&) = delete;
-
-    // loop_ после конструктора больше не меняется (запись под мьютексом до cv.wait), поэтому
-    // читать его без лока безопасно.
-    trantor::EventLoop* loop() const { return loop_; }
-
-   private:
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    trantor::EventLoop* loop_ = nullptr;
-    std::thread thread_;
-};
+using tgw_test::LoopThread;
 
 // Владеет транспортом, sink'ом, часами, event-loop'ом и мостом в порядке, гарантирующем
 // корректный teardown под TSan: приёмник моста джойнится ДО разрушения транспорта, а петля

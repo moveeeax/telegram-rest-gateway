@@ -3,6 +3,7 @@
 #include "bridge/td_bridge.hpp"
 #include "bridge/update_sink.hpp"
 #include "fake_transport.hpp"
+#include "loop_thread.hpp"
 #include "ws/owner_mention_detector.hpp"
 
 #include <drogon/utils/coroutine.h>
@@ -55,40 +56,7 @@ class FakeClock {
     std::atomic<std::chrono::steady_clock::time_point> now_{std::chrono::steady_clock::now()};
 };
 
-// Обёртка над trantor::EventLoop с ЯВНОЙ синхронизацией старта/останова (см. td_bridge_test.cpp:
-// happens-before на создание wakeup-eventfd против первого queueInLoop из тест-треда; quit()
-// исполняется ИЗНУТРИ петли через queueInLoop, а не из чужого треда).
-class LoopThread {
-   public:
-    LoopThread() {
-        thread_ = std::thread([this] {
-            trantor::EventLoop loop;  // eventfd создаётся здесь, на этом потоке
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                loop_ = &loop;
-            }
-            cv_.notify_one();
-            loop.loop();  // крутится до quit(); EventLoop разрушится здесь же, на своём потоке
-        });
-        std::unique_lock<std::mutex> lock(mutex_);
-        cv_.wait(lock, [this] { return loop_ != nullptr; });
-    }
-    ~LoopThread() {
-        loop_->queueInLoop([loop = loop_] { loop->quit(); });
-        thread_.join();
-    }
-
-    LoopThread(const LoopThread&) = delete;
-    LoopThread& operator=(const LoopThread&) = delete;
-
-    trantor::EventLoop* loop() const { return loop_; }
-
-   private:
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    trantor::EventLoop* loop_ = nullptr;
-    std::thread thread_;
-};
+using tgw_test::LoopThread;
 
 // Владеет транспортом, sink'ом, часами, петлёй и мостом в порядке, гарантирующем корректный
 // teardown под TSan (порядок членов = порядок инициализации; мост джойнится до транспорта).
