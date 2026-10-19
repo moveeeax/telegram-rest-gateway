@@ -38,6 +38,9 @@ export type Invite = {
   outcome: string | null;
 };
 
+// Токен владельца на несколько аккаунтов, только для MCP (через Traefik не маршрутизируется).
+export type OwnerToken = { tokenHash: string; label: string; accountIds: string[]; createdAt: Date };
+
 export type ClaimResult =
   // abandonedAccountId: аккаунт истекшей сессии, которую этот claim перехватил (его надо удалить).
   | { ok: true; invite: Invite; abandonedAccountId?: string | null }
@@ -67,4 +70,7 @@ export interface Store {
   deleteAccount(accountId: string): Promise<void>;
   // Только status = 'active': аккаунты needs_relogin в проверке дубликата не участвуют.
   activeByTelegramId(telegramUserId: string): Promise<Account | null>;
+  insertOwnerToken(t: OwnerToken): Promise<void>;
+  listOwnerTokens(): Promise<OwnerToken[]>;
+  deleteOwnerToken(label: string): Promise<boolean>;
 }

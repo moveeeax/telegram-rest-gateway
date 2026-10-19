@@ -119,14 +119,14 @@ test("token reissue: new hash, revision bump, one-time reveal", async () => {
   } finally { await e.stop(); }
 });
 
-test("registry: each consumer sees only its part", async () => {
+test("registry: MCP sees account sets, archiver its own part", async () => {
   const e = await env();
   try {
     await e.store.insertAccount(account(ID, { status: "active", clientTokenHash: "HASH", archiveEnabled: true }));
     await e.store.insertAccount(account("aonboarding", { status: "onboarding" }));
     await e.kube.apply(secretManifest(ID, SECRETS, 1, e.cfg));
     const m = await (await e.call("GET", "/internal/registry", "reg-mcp")).json();
-    assert.deepEqual(m, { tokens: [{ sha256: "HASH", accountIds: [ID], gatewayUrl: `http://tgw-${ID}.tgw-accounts.svc:8080`, serviceToken: "MCPSVC" }] });
+    assert.deepEqual(m, { tokens: [{ sha256: "HASH", accounts: [{ accountId: ID, gatewayUrl: `http://tgw-${ID}.tgw-accounts.svc:8080`, serviceToken: "MCPSVC" }] }] });
     const a = await (await e.call("GET", "/internal/registry", "reg-arch")).json();
     assert.deepEqual(a, { accounts: { [ID]: { gatewayUrl: `http://tgw-${ID}.tgw-accounts.svc:8080`, archiverGatewayToken: "ARCHSVC", archive_enabled: true } } });
     assert.equal(JSON.stringify(m).includes("ARCHSVC"), false);
@@ -135,3 +135,43 @@ test("registry: each consumer sees only its part", async () => {
     assert.equal((await e.call("GET", "/internal/registry", null)).status, 401);
   } finally { await e.stop(); }
 });
+
+const ID2 = "aadmintest2";
+const SECRETS2 = { clientToken: `${ID2}.X`, adminToken: "ADM2", mcpServiceToken: "MCPSVC2", archiverServiceToken: "ARCHSVC2", databaseEncryptionKey: "K2" };
+
+test("owner token: created once, covers active accounts only, appears in registry", async () => {
+  const e = await env();
+  try {
+    await e.store.insertAccount(account(ID, { status: "active", clientTokenHash: "H1" }));
+    await e.store.insertAccount(account(ID2, { status: "active", clientTokenHash: "H2" }));
+    await e.kube.apply(secretManifest(ID, SECRETS, 1, e.cfg));
+    await e.kube.apply(secretManifest(ID2, SECRETS2, 1, e.cfg));
+    const r = await e.call("POST", "/admin/owner-tokens", "cp-admin", { label: "owner", account_ids: [ID, ID2] });
+    assert.equal(r.status, 201);
+    const { token, label } = await r.json();
+    assert.equal(label, "owner");
+    assert.match(token, /^owner\.[A-Za-z0-9_-]{43}$/);
+    assert.equal((await e.call("POST", "/admin/owner-tokens", "cp-admin", { label: "owner", account_ids: [ID] })).status, 409);
+    assert.equal((await e.call("POST", "/admin/owner-tokens", "cp-admin", { label: "x", account_ids: [] })).status, 400);
+    assert.equal((await e.call("POST", "/admin/owner-tokens", "cp-admin", { label: "y", account_ids: ["anotthere01"] })).status, 400);
+    assert.equal((await e.call("POST", "/admin/owner-tokens", null, { label: "z", account_ids: [ID] })).status, 401);
+    const list = await (await e.call("GET", "/admin/owner-tokens", "cp-admin")).json();
+    assert.deepEqual(list.tokens.map((t: any) => [t.label, t.account_ids]), [["owner", [ID, ID2]]]);
+    assert.equal(JSON.stringify(list).includes(sha256hex(token)), false);
+
+    let reg = await (await e.call("GET", "/internal/registry", "reg-mcp")).json();
+    assert.equal(reg.tokens.length, 3);
+    const own = reg.tokens.find((t: any) => t.sha256 === sha256hex(token));
+    assert.deepEqual(own.accounts.map((a: any) => [a.accountId, a.serviceToken]), [[ID, "MCPSVC"], [ID2, "MCPSVC2"]]);
+
+    await e.store.updateAccount(ID2, { status: "needs_relogin" });
+    reg = await (await e.call("GET", "/internal/registry", "reg-mcp")).json();
+    assert.deepEqual(reg.tokens.find((t: any) => t.sha256 === sha256hex(token)).accounts.map((a: any) => a.accountId), [ID]);
+
+    assert.equal((await e.call("DELETE", "/admin/owner-tokens/owner", "cp-admin")).status, 204);
+    assert.equal((await e.call("DELETE", "/admin/owner-tokens/owner", "cp-admin")).status, 404);
+    reg = await (await e.call("GET", "/internal/registry", "reg-mcp")).json();
+    assert.equal(reg.tokens.some((t: any) => t.sha256 === sha256hex(token)), false);
+  } finally { await e.stop(); }
+});
+

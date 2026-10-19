@@ -1,9 +1,10 @@
 // Хранилище в памяти для тестов. Семантика совпадает с PgStore, включая атомарность claim.
-import type { Account, AttemptKind, ClaimResult, Invite, InviteKind, Store } from "./store.js";
+import type { Account, AttemptKind, ClaimResult, Invite, InviteKind, OwnerToken, Store } from "./store.js";
 
 export class MemStore implements Store {
   private invites = new Map<string, Invite>();
   private accounts = new Map<string, Account>();
+  private owners = new Map<string, OwnerToken>();
   // Сбой базы для тестов reconcile: следующий listAccounts бросит эту ошибку.
   failNextList: Error | null = null;
 
@@ -135,6 +136,21 @@ export class MemStore implements Store {
 
   async deleteAccount(accountId: string): Promise<void> {
     this.accounts.delete(accountId);
+  }
+
+  async insertOwnerToken(t: OwnerToken): Promise<void> {
+    if (this.owners.has(t.label) || [...this.owners.values()].some((o) => o.tokenHash === t.tokenHash)) {
+      throw new Error(`owner token exists: ${t.label}`);
+    }
+    this.owners.set(t.label, { ...t, accountIds: [...t.accountIds] });
+  }
+
+  async listOwnerTokens(): Promise<OwnerToken[]> {
+    return [...this.owners.values()].map((o) => ({ ...o, accountIds: [...o.accountIds] }));
+  }
+
+  async deleteOwnerToken(label: string): Promise<boolean> {
+    return this.owners.delete(label);
   }
 
   async activeByTelegramId(telegramUserId: string): Promise<Account | null> {
