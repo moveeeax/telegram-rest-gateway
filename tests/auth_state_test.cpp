@@ -50,3 +50,15 @@ TEST(AuthState, ToStringIsStable) {
     EXPECT_EQ(tgw::auth::toString(AuthState::Ready), "ready");
     EXPECT_EQ(tgw::auth::toString(AuthState::Unsupported), "unsupported_state");
 }
+
+// Logout, отклоненный TDLib, возвращает реакцию на удаленный logout: иначе после неудачного
+// POST /v1/auth/logout процесс молча пережил бы отзыв сессии.
+TEST(AuthStateManager, CancelExpectShutdownRestoresTerminationCallback) {
+    AuthStateManager manager;
+    int calls = 0;
+    manager.setOnUnexpectedTermination([&calls] { ++calls; });
+    manager.expectShutdown();
+    manager.cancelExpectShutdown();
+    manager.onUpdate(authUpdate(api::make_object<api::authorizationStateClosed>()));
+    EXPECT_EQ(calls, 1);
+}
