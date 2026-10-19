@@ -68,6 +68,23 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.existingSecret }}
                   key: ARCHIVER_TOKEN
+            {{- if .Values.controlPlane.enabled }}
+            # Адрес гейтвея и токен архиватора каждого аккаунта берутся из реестра control plane.
+            - name: ARCHIVER_REGISTRY_URL
+              value: {{ printf "http://%s-control-plane:8096/internal/registry" .Release.Name | quote }}
+            - name: ARCHIVER_REGISTRY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.controlPlane.existingSecret }}
+                  key: CP_REGISTRY_ARCHIVER_TOKEN
+            # Админские пути (/media/retry): отдельный ключ, без него они закрыты.
+            - name: ARCHIVER_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: ARCHIVER_ADMIN_TOKEN
+                  optional: true
+            {{- end }}
             {{- if .Values.archiver.postgres.enabled }}
             - name: ARCHIVER_PG_URL
               valueFrom:
