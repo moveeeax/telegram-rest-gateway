@@ -219,3 +219,21 @@ TEST(RouteSmoke, TelegramErrorMappingChatNotFoundIs404) {
     auto internal = td_api::make_object<td_api::error>(500, "Internal server error");
     EXPECT_EQ(tgw::http::httpStatusForTdError(*internal), drogon::k502BadGateway);
 }
+
+// Экспорт session string регистрируется только при TGW_SESSION_EXPORT_ENABLED; остальные
+// маршруты от флага не зависят. Logout в таблице, поэтому TableRoutesAgreeWithFilter проверяет
+// его 401 без токена.
+TEST(RouteSmoke, ExportRouteDisabledByFlag) {
+    using tgw::http::routeEnabled;
+    EXPECT_FALSE(
+        routeEnabled(tgw::http::kAuthSessionExportRoute, /*session_export_enabled=*/false));
+    EXPECT_TRUE(routeEnabled(tgw::http::kAuthSessionExportRoute, true));
+    for (const auto& route : tgw::http::kRoutesTable) {
+        if (route.path != tgw::http::kAuthSessionExportRoute.path) {
+            EXPECT_TRUE(routeEnabled(route, false)) << route.path;
+        }
+    }
+    EXPECT_EQ(std::string(tgw::http::kAuthLogoutRoute.path), "/v1/auth/logout");
+    EXPECT_EQ(tgw::http::kAuthLogoutRoute.method, drogon::Post);
+    EXPECT_TRUE(tgw::http::kAuthLogoutRoute.requires_auth);
+}

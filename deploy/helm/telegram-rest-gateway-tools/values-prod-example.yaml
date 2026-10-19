@@ -26,3 +26,23 @@ ingress:
     # по умолчанию нет, отдельные аннотации не нужны.
   tls:
     enabled: true
+
+# Control plane и общие хосты (план docs/superpowers/plans/2026-10-18-control-plane.md).
+controlPlane:
+  enabled: true
+  image:
+    tag: "<short-sha>"
+  workerImage: "ghcr.io/moveeeax/telegram-rest-gateway:<short-sha>"
+  kafkaBrokers: "kafka.kafka.svc.cluster.local:9092"
+  s3:
+    endpoint: "http://minio.minio.svc.cluster.local:9000"
+  workerConfig:
+    TGW_LISTEN_ADDRESS: "0.0.0.0"
+    TGW_S3_ENDPOINT: "http://minio.minio.svc.cluster.local:9000"
+    TGW_S3_BUCKET: "tgw-s3-bucket"
+    TGW_S3_PATH_STYLE: "true"
+    TGW_KAFKA_TOPIC: "tgw.updates"
+    # Вебхуки admin-скоупа тенантам недоступны, у воркеров они выключены.
+    TGW_WEBHOOKS_ENABLED: "false"
+edge:
+  enabled: true

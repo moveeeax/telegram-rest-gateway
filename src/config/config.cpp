@@ -115,6 +115,9 @@ Config Config::load() {
             parseNumericEnv<int>("TGW_KEEP_ONLINE_INTERVAL_SECONDS", keep_online_interval);
     }
 
+    const std::string session_export = envOrFile("TGW_SESSION_EXPORT_ENABLED");
+    c.session_export_enabled = !(session_export == "0" || session_export == "false");
+
     // Конфигурация вебхуков mention/reply-событий (TGW_WEBHOOKS_*).
     const std::string webhooks_enabled = envOrFile("TGW_WEBHOOKS_ENABLED");
     c.webhooks_enabled = (webhooks_enabled == "1" || webhooks_enabled == "true");

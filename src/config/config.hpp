@@ -50,6 +50,9 @@ struct Config {
 
     // Конфигурация вебхуков mention/reply-событий (TGW_WEBHOOKS_*).
     bool webhooks_enabled = false;
+    // GET /v1/auth/session/export (TGW_SESSION_EXPORT_ENABLED). По умолчанию включен ради
+    // совместимости; воркеры control plane запускаются с false.
+    bool session_export_enabled = true;
     int webhook_timeout_ms = 10000;
     std::size_t webhook_queue_max = 10000;
     bool webhook_ssrf_guard = false;

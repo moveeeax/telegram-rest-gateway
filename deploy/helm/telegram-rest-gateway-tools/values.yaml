@@ -105,3 +105,56 @@ ingress:
   archiverHost: ""  # хост Ingress архиватора (только /search + /health); пусто = ClusterIP
   tls:
     enabled: false
+
+# Control plane: онбординг по инвайту и воркеры аккаунтов в namespace workerNamespace.
+# Namespace воркеров и копию общего Secret гейтвея в нем создают руками (deploy/DEPLOY.md).
+controlPlane:
+  enabled: false
+  image:
+    repository: ghcr.io/moveeeax/telegram-rest-gateway-control-plane
+    tag: ""        # обязателен при enabled (immutable short-sha из CI)
+    pullPolicy: IfNotPresent
+  # Образ гейтвея для воркеров (тот же тег, что у чарта telegram-rest-gateway).
+  workerImage: ""
+  workerNamespace: tgw-accounts
+  # Общий Secret гейтвея в workerNamespace (API_ID, API_HASH, TGW_S3_*), без BEARER_TOKENS.
+  workerSharedSecret: telegram-rest-gateway
+  # Несекретная конфигурация воркеров: ConfigMap tgw-worker-config в workerNamespace.
+  workerConfig: {}
+  # CP_PG_URL, CP_ADMIN_TOKEN, CP_REGISTRY_MCP_TOKEN, CP_REGISTRY_ARCHIVER_TOKEN.
+  existingSecret: tgw-control-plane
+  kafkaBrokers: ""
+  s3:
+    endpoint: ""
+    region: us-east-1
+    bucket: tgw-s3-bucket
+    forcePathStyle: true
+    credentialsSecret:
+      name: telegram-rest-gateway
+      accessKey: TGW_S3_ACCESS_KEY_ID
+      secretKey: TGW_S3_SECRET_ACCESS_KEY
+  joinBaseUrl: https://join.tarassov.me
+  apiBaseUrl: https://tg.tarassov.me
+  mcpBaseUrl: ""   # пусто, пока нет единого MCP
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { cpu: 300m, memory: 256Mi }
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities: { drop: ["ALL"] }
+
+# Общие хосты и сертификат на них (Ingress tgw-edge в namespace релиза).
+edge:
+  enabled: false
+  hosts:
+    api: tg.tarassov.me
+    join: join.tarassov.me
+    mcp: mcp.tarassov.me
+  clusterIssuer: letsencrypt-prod
+  # Traefik видит у всех клиентов адрес балансировщика, поэтому лимит общий на всех.
+  rateLimit:
+    average: 20
+    burst: 40

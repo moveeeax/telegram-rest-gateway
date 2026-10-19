@@ -33,11 +33,15 @@ class S3SessionSync {
     S3SessionSync(std::string database_dir, PutFn put);
     // true, если был успешный PUT.
     bool syncOnce();
+    // Необратимо выключает PUT (после logout). Потокобезопасен.
+    void disable() { disabled_->store(true, std::memory_order_release); }
+    const std::shared_ptr<std::atomic_bool>& disabled() const { return disabled_; }
 
    private:
     std::string database_dir_;
     PutFn put_;
     std::string last_hash_;
+    std::shared_ptr<std::atomic_bool> disabled_ = std::make_shared<std::atomic_bool>(false);
 };
 
 // Сериализация шагов синка: один рабочий поток за раз, запрос во время работы не теряется, а
@@ -68,6 +72,10 @@ struct S3SyncHandle {
     // Внеочередной шаг синка (напр. сразу после авторизации). Потокобезопасен: ставит шаг на
     // loop Drogon, тот же путь и тот же in_flight, что у тика таймера. no-op если S3 off.
     std::function<void()> push_now;
+    // Выключает фоновые и внеочередные PUT навсегда (POST /v1/auth/logout). disabled читает
+    // хвост main и при true пропускает финальный push.
+    std::function<void()> disable;
+    std::shared_ptr<std::atomic_bool> disabled;
 };
 
 // Планирует периодический push binlog на event-loop Drogon (только при изменении). no-op если

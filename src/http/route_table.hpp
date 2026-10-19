@@ -66,6 +66,7 @@ inline constexpr RouteSpec kAuthQrRoute{"/v1/auth/qr", drogon::Post, true};
 inline constexpr RouteSpec kAuthCodeResendRoute{"/v1/auth/code/resend", drogon::Post, true};
 inline constexpr RouteSpec kAuthCodeRoute{"/v1/auth/code", drogon::Post, true};
 inline constexpr RouteSpec kAuthPasswordRoute{"/v1/auth/password", drogon::Post, true};
+inline constexpr RouteSpec kAuthLogoutRoute{"/v1/auth/logout", drogon::Post, true};
 inline constexpr RouteSpec kMeRoute{"/v1/me", drogon::Get, true};
 
 // --- Вебхуки mention/reply (webhook_routes.cpp, Task 7) — все требуют токен, scope admin (см.
@@ -77,7 +78,7 @@ inline constexpr RouteSpec kWebhookDeleteRoute{"/v1/webhooks/{id}", drogon::Dele
 // Полный перечень маршрутов routes.cpp + webhook_routes.cpp для итерации тестом. Значения — те
 // же спецификации, что выше: по ним же регистрируются хендлеры, поэтому таблица и регистрация
 // не расходятся.
-inline constexpr std::array<RouteSpec, 14> kRoutesTable{{
+inline constexpr std::array<RouteSpec, 15> kRoutesTable{{
     kHealthRoute,
     kReadyRoute,
     kAuthSessionExportRoute,
@@ -88,10 +89,17 @@ inline constexpr std::array<RouteSpec, 14> kRoutesTable{{
     kAuthCodeResendRoute,
     kAuthCodeRoute,
     kAuthPasswordRoute,
+    kAuthLogoutRoute,
     kMeRoute,
     kWebhookCreateRoute,
     kWebhookListRoute,
     kWebhookDeleteRoute,
 }};
+
+// Регистрировать ли маршрут. Экспорт session string отдает auth key, у воркеров control plane он
+// выключен (TGW_SESSION_EXPORT_ENABLED=false), остальные маршруты от флага не зависят.
+inline constexpr bool routeEnabled(const RouteSpec& spec, bool session_export_enabled) {
+    return session_export_enabled || spec.path != kAuthSessionExportRoute.path;
+}
 
 }  // namespace tgw::http

@@ -109,7 +109,8 @@ bool authAttemptAllowed() {
 }
 
 void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
-                    tgw::auth::AuthStateManager& auth, const std::string& database_dir) {
+                    tgw::auth::AuthStateManager& auth, const std::string& database_dir,
+                    bool session_export_enabled, std::function<void()> on_logout) {
     auto& app = drogon::app();
 
     // Регистрация строго через таблицу маршрутов (http/route_table.hpp): путь и constraints
@@ -139,8 +140,9 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
     // --- auth (§7.2) — single-account, session_id неявно "default" ---
     // GET /v1/auth/session/export — «session string» (base64 td.binlog) для stateless-запуска
     // через TGW_SESSION. Содержит auth key: полноценный доступ к аккаунту — хранить как секрет.
-    registerRoute(
-        kAuthSessionExportRoute, [database_dir](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
+    if (routeEnabled(kAuthSessionExportRoute, session_export_enabled)) {
+        registerRoute(kAuthSessionExportRoute, [database_dir](const drogon::HttpRequestPtr&,
+                                                              HttpCallback&& cb) {
             const auto session = tgw::auth::exportSession(database_dir);
             if (!session) {
                 cb(serviceError("NOT_FOUND", "session binlog not found (not logged in yet?)",
@@ -153,6 +155,7 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
             body["data"]["note"] = "store as secret; pass via TGW_SESSION on next start";
             cb(jsonResponse(std::move(body), drogon::k200OK));
         });
+    }
 
     registerRoute(kAuthStateRoute, [&auth](const drogon::HttpRequestPtr&, HttpCallback&& cb) {
         Json::Value body;
@@ -235,6 +238,49 @@ void registerRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id,
         launchAuthMutation(bridge, client_id, auth,
                            td_api::make_object<td_api::checkAuthenticationPassword>(password),
                            std::move(cb));
+    });
+
+    // POST /v1/auth/logout — выход из Telegram (control plane: удаление аккаунта, дубликат при
+    // онбординге). Процесс после logout не завершается: под StatefulSet перезапустился бы и поднял
+    // из S3 снимок до logout. S3-синк выключается, как только TDLib принял logOut, процесс ждет
+    // SIGTERM. Closed ждем опросом на event-loop (sleepCoro), без отдельного потока: корутина не
+    // переживает app().quit() и не держит ссылки на объекты main после его выхода.
+    registerRoute(kAuthLogoutRoute, [&bridge, client_id, &auth, on_logout](
+                                        const drogon::HttpRequestPtr&, HttpCallback&& callback) {
+        if (auth.current() != tgw::auth::AuthState::Ready) {
+            callback(serviceError("NOT_READY", "logout requires an authorized session",
+                                  drogon::k409Conflict));
+            return;
+        }
+        auth.expectShutdown();  // терминальные состояния дальше ожидаемы: без quit() процесса
+        [](tgw::bridge::TdBridge& td, std::int32_t cid, tgw::auth::AuthStateManager& a,
+           std::function<void()> disable_sync, HttpCallback cb) -> drogon::AsyncTask {
+            auto object = co_await td.invoke(cid, td_api::make_object<td_api::logOut>());
+            if (object != nullptr && object->get_id() == td_api::error::ID) {
+                a.cancelExpectShutdown();
+                cb(telegramError(static_cast<td_api::error&>(*object)));
+                co_return;
+            }
+            disable_sync();
+            trantor::EventLoop* loop = trantor::EventLoop::getEventLoopOfCurrentThread();
+            if (loop == nullptr) {
+                loop = drogon::app().getLoop();
+            }
+            constexpr int kPolls = 100;  // 100 x 0.1 с = 10 с, как waitForClosed на shutdown
+            for (int i = 0; i < kPolls && a.current() != tgw::auth::AuthState::Closed; ++i) {
+                co_await drogon::sleepCoro(loop, 0.1);
+            }
+            if (a.current() != tgw::auth::AuthState::Closed) {
+                cb(serviceError("LOGOUT_TIMEOUT", "TDLib did not reach Closed within 10s",
+                                drogon::k504GatewayTimeout));
+                co_return;
+            }
+            Json::Value body;
+            body["ok"] = true;
+            body["data"]["logged_out"] = true;
+            cb(jsonResponse(std::move(body), drogon::k200OK));
+            co_return;
+        }(bridge, client_id, auth, on_logout, std::move(callback));
     });
 
     // --- GET /v1/me (мост, §12 этап 1) ---

@@ -1,0 +1,162 @@
+{{- if .Values.controlPlane.enabled }}
+{{- $cp := .Values.controlPlane }}
+{{- $name := printf "%s-control-plane" .Release.Name }}
+{{- $tag := required "controlPlane.image.tag обязателен: CI публикует immutable short-sha теги" $cp.image.tag }}
+{{- $worker := required "controlPlane.workerImage обязателен: образ гейтвея для воркеров" $cp.workerImage }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: tgw-control-plane
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+# Права только в namespace воркеров: Secret сертификата и прочее в namespace релиза недоступны.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $cp.workerNamespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["traefik.io"]
+    resources: ["ingressroutes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $cp.workerNamespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tgw-worker-config
+  namespace: {{ $cp.workerNamespace }}
+data:
+  {{- range $k, $v := $cp.workerConfig }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: tgw-control-plane
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  # Один экземпляр: reconcile и claim инвайтов рассчитаны на одного писателя k8s-объектов.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tgw-control-plane
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tgw-control-plane
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ $name }}
+      containers:
+        - name: control-plane
+          image: "{{ $cp.image.repository }}:{{ $tag }}"
+          imagePullPolicy: {{ $cp.image.pullPolicy }}
+          securityContext:
+            {{- toYaml $cp.securityContext | nindent 12 }}
+          ports:
+            - name: public
+              containerPort: 8095
+            - name: admin
+              containerPort: 8096
+          envFrom:
+            - secretRef:
+                name: {{ $cp.existingSecret }}
+          env:
+            - name: CP_WORKER_NAMESPACE
+              value: {{ $cp.workerNamespace | quote }}
+            - name: CP_WORKER_IMAGE
+              value: {{ $worker | quote }}
+            - name: CP_SHARED_SECRET
+              value: {{ $cp.workerSharedSecret | quote }}
+            - name: CP_WORKER_CONFIGMAP
+              value: tgw-worker-config
+            - name: CP_KAFKA_BROKERS
+              value: {{ $cp.kafkaBrokers | quote }}
+            - name: CP_S3_ENDPOINT
+              value: {{ $cp.s3.endpoint | quote }}
+            - name: CP_S3_REGION
+              value: {{ $cp.s3.region | quote }}
+            - name: CP_S3_BUCKET
+              value: {{ $cp.s3.bucket | quote }}
+            - name: CP_S3_FORCE_PATH_STYLE
+              value: {{ $cp.s3.forcePathStyle | quote }}
+            - name: CP_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $cp.s3.credentialsSecret.name }}
+                  key: {{ $cp.s3.credentialsSecret.accessKey }}
+            - name: CP_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $cp.s3.credentialsSecret.name }}
+                  key: {{ $cp.s3.credentialsSecret.secretKey }}
+            - name: CP_JOIN_BASE_URL
+              value: {{ $cp.joinBaseUrl | quote }}
+            - name: CP_API_BASE_URL
+              value: {{ $cp.apiBaseUrl | quote }}
+            - name: CP_MCP_BASE_URL
+              value: {{ $cp.mcpBaseUrl | quote }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: public }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: admin }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml $cp.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: tgw-control-plane
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  ports:
+    - name: public
+      port: 8095
+      targetPort: public
+    - name: admin
+      port: 8096
+      targetPort: admin
+  selector:
+    app.kubernetes.io/name: tgw-control-plane
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
