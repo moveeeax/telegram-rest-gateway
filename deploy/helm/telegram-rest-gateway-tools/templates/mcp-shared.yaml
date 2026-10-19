@@ -75,4 +75,45 @@ spec:
   selector:
     app.kubernetes.io/name: tgw-mcp-shared
     app.kubernetes.io/instance: {{ .Release.Name }}
+{{- if .Values.edge.enabled }}
+{{- include "tools.ingressGuard" (merge (dict "Values" (dict "ingress" (merge (dict "enabled" true) .Values.ingress))) .) }}
+---
+# Отдельный Ingress: rate limit онбординга (Middleware на tgw-edge) общий на всех клиентов, потому
+# что Traefik видит адрес балансировщика, и активный агент одного тенанта упирал бы в 429 остальных.
+# Сертификат общий с tgw-edge (там же cert-manager), здесь его только используем.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}-shared
+  labels:
+    app.kubernetes.io/name: tgw-mcp-shared
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  {{- if .Values.ingress.ipAllowList }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: {{ printf "%s-%s@kubernetescrd" .Release.Namespace (include "tools.ipAllowListName" .) }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+    - hosts: [{{ .Values.edge.hosts.mcp | quote }}]
+      secretName: {{ .Release.Name }}-edge-tls
+  rules:
+    - host: {{ .Values.edge.hosts.mcp | quote }}
+      http:
+        paths:
+          - path: /mcp
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $name }}
+                port:
+                  name: http
+{{- end }}
 {{- end }}

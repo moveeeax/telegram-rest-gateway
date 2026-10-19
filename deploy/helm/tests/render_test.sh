@@ -165,8 +165,14 @@ assert_contains "mcp shared: registry url" "$shdep" "http://tt-control-plane:809
 assert_contains "mcp shared: registry token" "$(grep -A4 'name: MCP_REGISTRY_TOKEN' <<<"$shdep")" "key: CP_REGISTRY_MCP_TOKEN"
 assert_not_contains "mcp shared: no gateway token" "$shdep" "TGW_BEARER_TOKEN"
 assert_contains "mcp shared: origins" "$shdep" "https://claude.ai,https://claude.com"
+# MCP в своем Ingress: rate limit онбординга (общий на всех, Traefik видит адрес LB) его не касается.
+mcping="$(awk 'BEGIN{RS="\n---\n"} index($0, "kind: Ingress") && index($0, "name: tt-mcp-shared")' <<<"$out")"
+assert_contains "mcp shared: own ingress host" "$(grep -A12 'host: "mcp.tarassov.me"' <<<"$mcping")" "name: tt-mcp"
+assert_not_contains "mcp shared: no join ratelimit" "$mcping" "join-ratelimit"
+assert_contains "mcp shared: tls from edge cert" "$mcping" "secretName: tt-edge-tls"
+assert_not_contains "mcp shared: no second certificate" "$mcping" "cert-manager.io/cluster-issuer"
 edge="$(awk 'BEGIN{RS="\n---\n"} index($0, "kind: Ingress") && index($0, "name: tt-edge")' <<<"$out")"
-assert_contains "mcp shared: edge host" "$(grep -A12 'host: "mcp.tarassov.me"' <<<"$edge")" "name: tt-mcp"
+assert_not_contains "mcp shared: not under edge rate limit" "$(sed -n '/^  rules:/,$p' <<<"$edge")" 'host: "mcp.tarassov.me"'
 out="$(render "mcp shared off" tt "$TOOLS" --namespace tgw --set archiver.enabled=false --set mcp.image.tag=x \
     --set controlPlane.enabled=true --set controlPlane.image.tag=x --set controlPlane.workerImage=gw:x \
     --set edge.enabled=true --set ingress.allowOpenIngress=true)" || { out=""; FAILED=1; }
