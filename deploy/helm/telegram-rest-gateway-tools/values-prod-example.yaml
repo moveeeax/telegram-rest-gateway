@@ -8,6 +8,9 @@ archiver:
 mcp:
   image:
     tag: "da77e294"  # неизменяемый short-sha
+  # Единый MCP на mcp.tarassov.me (токен клиента из онбординга или токен владельца).
+  shared:
+    enabled: true
   # Пример владельца: реальные Telegram account id (совпадают с accounts гейтвея);
   # в дефолтах чарта mcp.accounts пуст.
   accounts:
@@ -33,6 +36,7 @@ controlPlane:
   image:
     tag: "<short-sha>"
   workerImage: "ghcr.io/moveeeax/telegram-rest-gateway:<short-sha>"
+  mcpBaseUrl: "https://mcp.tarassov.me"
   kafkaBrokers: "kafka.kafka.svc.cluster.local:9092"
   s3:
     endpoint: "http://minio.minio.svc.cluster.local:9000"

@@ -77,6 +77,16 @@ mcp:
   #     - sessionId: "111111111"
   #     - sessionId: "222222222"
   accounts: []
+  # Единый MCP за edge.hosts.mcp: токен клиента резолвится через реестр control plane
+  # (docs/superpowers/plans/2026-10-19-unified-mcp.md). Требует controlPlane.enabled и edge.enabled.
+  shared:
+    enabled: false
+    registryUrl: ""  # пусто = http://<release>-control-plane:8096/internal/registry
+    registryTokenSecret:
+      name: tgw-control-plane
+      key: CP_REGISTRY_MCP_TOKEN
+    # Origin браузерных клиентов; запросы без Origin (серверные клиенты) проходят всегда.
+    allowedOrigins: "https://claude.ai,https://claude.com"
   resources:
     requests: { cpu: 25m, memory: 48Mi }
     limits: { cpu: 250m, memory: 128Mi }  # CPU-limit добавлен — см. review finding

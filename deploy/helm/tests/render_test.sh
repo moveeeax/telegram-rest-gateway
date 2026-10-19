@@ -154,4 +154,23 @@ assert_contains "mcp worker: archive session id" "$(grep -A1 'name: TGW_SESSION_
 assert_contains "mcp worker: token key" "$(grep -A4 'name: TGW_BEARER_TOKEN' <<<"$dep")" "key: GATEWAY_TOKEN_aaaaaaaaaa1"
 assert_contains "mcp worker: name stays" "$out" "name: tt-mcp-111"
 
+# Единый MCP за mcp.tarassov.me: реестр control plane вместо токена гейтвея, правило в edge.
+SH_ARGS=(tt "$TOOLS" --namespace tgw --set archiver.enabled=false --set mcp.image.tag=x --set mcp.shared.enabled=true
+         --set controlPlane.enabled=true --set controlPlane.image.tag=x --set controlPlane.workerImage=gw:x
+         --set edge.enabled=true --set ingress.allowOpenIngress=true)
+out="$(render "mcp shared" "${SH_ARGS[@]}")" || { out=""; FAILED=1; }
+shdep="$(awk 'BEGIN{RS="\n---\n"} index($0, "kind: Deployment") && index($0, "name: tt-mcp\n")' <<<"$out")"
+assert_contains "mcp shared: deployment" "$shdep" "name: MCP_REGISTRY_URL"
+assert_contains "mcp shared: registry url" "$shdep" "http://tt-control-plane:8096/internal/registry"
+assert_contains "mcp shared: registry token" "$(grep -A4 'name: MCP_REGISTRY_TOKEN' <<<"$shdep")" "key: CP_REGISTRY_MCP_TOKEN"
+assert_not_contains "mcp shared: no gateway token" "$shdep" "TGW_BEARER_TOKEN"
+assert_contains "mcp shared: origins" "$shdep" "https://claude.ai,https://claude.com"
+edge="$(awk 'BEGIN{RS="\n---\n"} index($0, "kind: Ingress") && index($0, "name: tt-edge")' <<<"$out")"
+assert_contains "mcp shared: edge host" "$(grep -A12 'host: "mcp.tarassov.me"' <<<"$edge")" "name: tt-mcp"
+out="$(render "mcp shared off" tt "$TOOLS" --namespace tgw --set archiver.enabled=false --set mcp.image.tag=x \
+    --set controlPlane.enabled=true --set controlPlane.image.tag=x --set controlPlane.workerImage=gw:x \
+    --set edge.enabled=true --set ingress.allowOpenIngress=true)" || { out=""; FAILED=1; }
+assert_not_contains "mcp shared: disabled" "$out" "MCP_REGISTRY_URL"
+assert_not_contains "mcp shared: no edge rule when disabled" "$out" 'host: "mcp.tarassov.me"'
+
 exit "$FAILED"

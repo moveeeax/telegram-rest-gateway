@@ -51,6 +51,26 @@ spec:
                 name: {{ $svc }}
                 port:
                   name: public
+    {{- if and .Values.mcp.enabled .Values.mcp.shared.enabled }}
+    # Единый MCP: только /mcp и /healthz, аккаунт выбирает токен (реестр control plane).
+    - host: {{ $e.hosts.mcp | quote }}
+      http:
+        paths:
+          - path: /mcp
+            pathType: Exact
+            backend:
+              service:
+                name: {{ .Release.Name }}-mcp
+                port:
+                  name: http
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: {{ .Release.Name }}-mcp
+                port:
+                  name: http
+    {{- end }}
     - host: {{ $e.hosts.api | quote }}
       http:
         paths:

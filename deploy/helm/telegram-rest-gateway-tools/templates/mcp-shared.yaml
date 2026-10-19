@@ -1,0 +1,78 @@
+{{- if and .Values.mcp.enabled .Values.mcp.shared.enabled }}
+{{- $sh := .Values.mcp.shared }}
+{{- $name := printf "%s-mcp" .Release.Name }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: tgw-mcp-shared
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  # Сессии MCP живут в памяти процесса: одна реплика.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tgw-mcp-shared
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tgw-mcp-shared
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: mcp
+          image: "{{ .Values.mcp.image.repository }}:{{ required "mcp.image.tag обязателен: CI публикует immutable short-sha теги, см. docs/CICD.md" .Values.mcp.image.tag }}"
+          imagePullPolicy: {{ .Values.mcp.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.mcp.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcp.httpPort }}
+          env:
+            - name: MCP_HTTP_PORT
+              value: {{ .Values.mcp.httpPort | quote }}
+            - name: MCP_REGISTRY_URL
+              value: {{ $sh.registryUrl | default (printf "http://%s-control-plane:8096/internal/registry" .Release.Name) | quote }}
+            - name: MCP_REGISTRY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $sh.registryTokenSecret.name }}
+                  key: {{ $sh.registryTokenSecret.key }}
+            - name: MCP_ALLOWED_ORIGINS
+              value: {{ $sh.allowedOrigins | quote }}
+            - name: TGW_ARCHIVER_URL
+              value: "http://{{ .Release.Name }}-archiver:8090"
+            - name: TGW_ARCHIVER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: ARCHIVER_TOKEN
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.mcp.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: tgw-mcp-shared
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  ports:
+    - name: http
+      port: {{ .Values.mcp.httpPort }}
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: tgw-mcp-shared
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
