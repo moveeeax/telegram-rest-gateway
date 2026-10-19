@@ -11,6 +11,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { Kafka, logLevel } from "kafkajs";
 import { makeStore, type MessageRow } from "./store.js";
 import { MediaOffloader } from "./media.js";
+import { ArchiverRegistry } from "./registry.js";
 
 const BROKERS = (process.env.ARCHIVER_KAFKA_BROKERS ?? "redpanda:9092").split(",");
 const TOPIC = process.env.ARCHIVER_KAFKA_TOPIC ?? "tgw.updates";
@@ -47,7 +48,11 @@ const DROP_CIRCUIT =
 
 const store = makeStore();
 await store.init();
-const media = MediaOffloader.fromEnv(store);
+// Реестр control plane: адрес гейтвея и токен архиватора каждого аккаунта (ARCHIVER_REGISTRY_*).
+const REGISTRY_URL = process.env.ARCHIVER_REGISTRY_URL ?? "";
+const registry = REGISTRY_URL ? new ArchiverRegistry(REGISTRY_URL, process.env.ARCHIVER_REGISTRY_TOKEN ?? "") : null;
+if (!registry) console.error("archiver: ARCHIVER_REGISTRY_URL не задан: медиа-оффлоад выключен");
+const media = MediaOffloader.fromEnv(store, registry ? (s) => registry.get(s) : null);
 if (media) console.error("archiver: media offload enabled (S3)");
 
 let processed = 0;
