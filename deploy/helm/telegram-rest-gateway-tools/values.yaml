@@ -44,8 +44,7 @@ archiver:
       accessKey: TGW_S3_ACCESS_KEY_ID
       secretKey: TGW_S3_SECRET_ACCESS_KEY
   gateway:
-    template: "http://tgw-{sessionId}:8080"   # per-account сервис гейтвея (для скачивания файлов)
-    tokenSecret: { name: tgw-tools, key: TGW_BEARER_TOKEN }
+    template: "http://tgw-{sessionId}:8080"   # допустимый gateway_url для /backfill
   resources:
     requests: { cpu: 25m, memory: 64Mi }
     limits: { cpu: 500m, memory: 256Mi }  # CPU-limit добавлен — см. review finding (noisy neighbor)

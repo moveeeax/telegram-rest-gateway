@@ -5,8 +5,10 @@ Self-hosted REST/WebSocket-обёртка над пользовательски�
 HTTP-доступ к аккаунту, скрывая асинхронную природу TDLib за моделью «запрос → ответ»
 и доставляя апдейты через WebSocket.
 
-> Статус: **Stage 0 (каркас)**. Функциональность моста/авторизации/сообщений — в разработке
-> по этапам (см. `docs/SPEC_ELABORATION.md` §12). Сборка только в Docker/CI.
+Вокруг гейтвея в репозитории живут ещё три сервиса на TypeScript: `control-plane/`
+(онбординг аккаунтов по инвайту и воркер гейтвея на каждый аккаунт в Kubernetes), `mcp/`
+(MCP-сервер для агентов, в том числе единый на все аккаунты) и `archiver/` (архив переписки из
+Kafka с полнотекстовым поиском). Сборка гейтвея только в Docker/CI.
 
 ## Документация
 
@@ -17,6 +19,11 @@ HTTP-доступ к аккаунту, скрывая асинхронную п�
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Журнал принятых решений |
 | [`docs/GITFLOW.md`](docs/GITFLOW.md) | Модель ветвления |
 | [`docs/openapi.yaml`](docs/openapi.yaml) | Единый источник истины HTTP-контракта |
+| [`deploy/DEPLOY.md`](deploy/DEPLOY.md) | Деплой в Kubernetes, control plane, единый MCP |
+| [`control-plane/README.md`](control-plane/README.md) | Онбординг по инвайту, реестр аккаунтов |
+| [`mcp/README.md`](mcp/README.md) | MCP-сервер: режимы, инструменты, авторизация |
+| [`archiver/README.md`](archiver/README.md) | Архив переписки и поиск |
+| [`docs/superpowers/`](docs/superpowers/) | Дизайн-документы и планы фич |
 
 ## Стек и ключевые решения
 
@@ -24,7 +31,8 @@ HTTP-доступ к аккаунту, скрывая асинхронную п�
 - **TDLib линкуется статически** через `Td::TdStatic` — нативный C++-API не экспортируется
   `libtdjson.so`.
 - Единый **OpenSSL 3.0** для TDLib, Drogon и нашего кода.
-- Single-account, только WebSocket для апдейтов, шифрование БД TDLib, id в JSON — строками.
+- Один процесс гейтвея = один аккаунт; несколько аккаунтов = несколько воркеров под control
+  plane. Апдейты через WebSocket, вебхуки и Kafka; шифрование БД TDLib; id в JSON строками.
 - Деплой: multi-arch (amd64 + arm64) Docker, финал — distroless nonroot.
 
 ## Структура
@@ -275,13 +283,22 @@ function verifyWebhook(rawBody, signatureHeader, secret) {
 
 [`archiver/`](archiver/README.md) — консьюмер Kafka-событий → SQLite+FTS5: полнотекстовый
 поиск по всей сохранённой истории (`GET :8090/search?q=`), включая правки и удалённые.
-Агенту доступен как MCP-tool `telegram_search_history`.
+Агенту доступен как MCP-tool `telegram_search_history`. Под control plane архивируются только
+аккаунты с `archive_enabled`, при удалении аккаунта его архив вычищается.
 
 ## MCP: агентский коннектор
 
-[`mcp/`](mcp/README.md) — MCP-сервер (TypeScript, stdio): Claude Code/Desktop и любой
-MCP-клиент получают 14 инструментов аккаунта (сообщения, реакции, resolve, медиа).
-Один сервер = один аккаунт; токен = полный доступ, храни как секрет.
+[`mcp/`](mcp/README.md) — MCP-сервер (TypeScript, stdio или Streamable HTTP): Claude
+Code/Desktop, claude.ai и любой MCP-клиент получают инструменты аккаунта (сообщения, реакции,
+поиск, resolve, медиа). Однопользовательский режим работает с одним гейтвеем; единый режим
+обслуживает все аккаунты через реестр control plane, и ключ клиента видит только свои аккаунты.
+Токен = доступ к переписке, храни как секрет.
+
+## Control plane: онбординг по инвайту
+
+[`control-plane/`](control-plane/README.md) — владелец создаёт приглашение, клиент сканирует QR,
+control plane поднимает воркер гейтвея аккаунта в namespace `tgw-accounts` и выдаёт токен.
+Он же держит реестр аккаунтов для MCP и архиватора. Развёртывание: `deploy/DEPLOY.md`.
 
 ## Деплой в Kubernetes (Helm)
 

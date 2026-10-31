@@ -292,6 +292,49 @@ paths:
           $ref: '#/components/responses/NotFound'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+  /v1/auth/logout:
+    post:
+      tags:
+      - auth
+      summary: Выйти из аккаунта Telegram
+      description: 'Вызывает `logOut` в TDLib и ждёт состояния `closed` до 10 с. Сразу после того,
+        как TDLib принял logOut, синхронизация сессии с S3 выключается, чтобы перезапуск пода не
+        поднял снимок до выхода. Процесс после ответа не завершается и ждёт SIGTERM. Используется
+        control plane при удалении аккаунта и при дубликате на онбординге.
+
+        '
+      responses:
+        '200':
+          description: Сессия закрыта
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      logged_out:
+                        type: boolean
+                        example: true
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          description: Сессия не авторизована (`NOT_READY`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          $ref: '#/components/responses/UpstreamError'
+        '504':
+          description: TDLib не дошёл до `closed` за 10 с (`LOGOUT_TIMEOUT`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /v1/me:
     get:
       tags:
