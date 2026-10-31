@@ -117,14 +117,10 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.archiver.s3.credentialsSecret.name }}
                   key: {{ .Values.archiver.s3.credentialsSecret.secretKey }}
-            # Гейтвей (per-account) для скачивания файлов перед оффлоадом в S3.
+            # Шаблон адреса гейтвея: ограничивает gateway_url в /backfill. Адрес и токен для
+            # скачивания медиа архиватор берет из реестра control plane.
             - name: ARCHIVER_GATEWAY_TEMPLATE
               value: {{ .Values.archiver.gateway.template | quote }}
-            - name: ARCHIVER_GATEWAY_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.archiver.gateway.tokenSecret.name }}
-                  key: {{ .Values.archiver.gateway.tokenSecret.key }}
             {{- end }}
           readinessProbe:
             httpGet: { path: /health, port: http }
