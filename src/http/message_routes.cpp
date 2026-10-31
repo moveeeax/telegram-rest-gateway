@@ -620,8 +620,10 @@ void registerMessageRoutes(tgw::bridge::TdBridge& bridge, std::int32_t client_id
                     msg->caption_ = std::move(caption);
                     content = std::move(msg);
                 } else if (media_type == "voice") {
+                    auto voice = api::make_object<api::inputVoiceNote>();
+                    voice->voice_note_ = std::move(local_file);
                     auto msg = api::make_object<api::inputMessageVoiceNote>();
-                    msg->voice_note_ = std::move(local_file);
+                    msg->voice_note_ = std::move(voice);
                     msg->caption_ = std::move(caption);
                     content = std::move(msg);
                 } else if (media_type == "audio") {
