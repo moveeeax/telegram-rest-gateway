@@ -77,7 +77,7 @@ export function buildServer(ctx: ToolContext): McpServer {
   // Обертка над server.tool: параметр account, выбор аккаунта, клиент гейтвея, поле account в ответе.
   function tool<S extends ZodRawShape>(
     name: string, description: string, shape: S,
-    handler: (args: z.objectOutputType<S, z.ZodTypeAny>, gw: GatewayClient, account: AccountRef) => Promise<any>,
+    handler: (args: z.infer<z.ZodObject<S>>, gw: GatewayClient, account: AccountRef) => Promise<any>,
   ) {
     server.tool(name, description, { ...shape, account: accountParam }, (async (args: any) => {
       const set = ctx.accounts();
