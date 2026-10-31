@@ -32,7 +32,11 @@ docker run -d --name tgw-archiver --restart unless-stopped --network <сеть-�
 
 - `GET /search?q=слова&chat_id=&session_id=&limit=` — FTS-поиск (AND), сниппеты с `<<подсветкой>>`,
   сортировка по дате. Мультиаккаунт: события всех инстансов в одном топике различаются `session_id`.
-- `GET /stats` — счётчики сообщений/чатов/обработанных событий.
+- `GET /stats` — счётчики сообщений/чатов/обработанных событий (admin).
+- `POST /backfill` — бэкфилл истории аккаунта из гейтвея (admin).
+- `POST /media/retry` — повторный оффлоад медиа для строк без `media_url` (admin).
+- `DELETE /accounts/{accountId}` — удалить из архива все сообщения, чаты и медиа-объекты
+  аккаунта (admin). Его вызывает control plane при удалении аккаунта.
 - `GET /health` — без auth. `200`, пока Kafka-consumer штатно потребляет топик; `503`, если
   consumer упал/остановился/отключился (`consumer.crash`/`stop`/`disconnect`) или сработал
   `ARCHIVER_DROP_CIRCUIT`, и возвращается в `200` только после успешного повторного вступления
@@ -40,13 +44,23 @@ docker run -d --name tgw-archiver --restart unless-stopped --network <сеть-�
   коннект к брокеру) — на этот эндпоинт смотрят и liveness, и readiness пробы k8s, так что оба
   реагируют на нездоровый consumer (рестарт/вывод из ротации), а не только на упавший HTTP.
 
-### Авторизация (`ARCHIVER_TOKEN`)
+### Авторизация (`ARCHIVER_TOKEN`, `ARCHIVER_ADMIN_TOKEN`)
 
-`/search`, `/stats` и `/backfill` требуют `ARCHIVER_TOKEN` — без него процесс не стартует
-(fail-closed): иначе `/search` отдаёт весь архив переписки, а `/backfill` позволяет запустить
-бэкфилл с произвольным `session_id` любому, кто достучится до порта. Явно принять этот риск
-(доверенная сеть, отладка) можно через `ARCHIVER_ALLOW_INSECURE=1`. Токен сравнивается по
-SHA-256-дайджесту через `timingSafeEqual` — без утечки через время сравнения.
+Токенов два. `ARCHIVER_TOKEN` (его держит MCP) открывает только `/search`; без него процесс не
+стартует (fail-closed), иначе `/search` отдаёт весь архив переписки любому, кто достучится до
+порта. Явно принять этот риск (доверенная сеть, отладка) можно через `ARCHIVER_ALLOW_INSECURE=1`.
+
+Пути с пометкой admin требуют `ARCHIVER_ADMIN_TOKEN`. Если он не задан, эти пути закрыты для
+всех. Токен поиска на admin-пути получает 403, неверный токен 401. Оба токена сравниваются по
+SHA-256-дайджесту через `timingSafeEqual`, без утечки через время сравнения.
+
+### Какие аккаунты архивируются
+
+С заданным `ARCHIVER_REGISTRY_URL` (+ `ARCHIVER_REGISTRY_TOKEN`) архиватор спрашивает реестр
+control plane по `session_id` каждого события. Пишутся только аккаунты с `archive_enabled`;
+события остальных и удалённых аккаунтов пропускаются с коммитом offset (`skipped_not_archived`).
+Пока реестр недоступен, событие не пишется и не коммитится: consumer ждёт, ничего не теряя.
+Без реестра (локальный запуск) архивируется всё, но медиа-оффлоад выключен.
 
 ## Семантика
 
@@ -66,12 +80,13 @@ MCP-сервер (`mcp/`) при заданном `TGW_ARCHIVER_URL` (+опц. `
 
 - **Хранилище:** SQLite (дефолт) или PostgreSQL — задай `ARCHIVER_PG_URL` (`postgres://...`).
   PG использует `tsvector`+GIN и `websearch_to_tsquery('simple', q)` со сниппетами `ts_headline`.
-- **Медиа в S3:** если заданы `ARCHIVER_S3_BUCKET` + `ARCHIVER_GATEWAY_TEMPLATE`, при каждом
-  сообщении с `file_id` файл качается из гейтвея (`GET /v1/files/{id}`) и кладётся в S3
+- **Медиа в S3:** если заданы `ARCHIVER_S3_BUCKET` и реестр (`ARCHIVER_REGISTRY_URL`), при каждом
+  сообщении с `file_id` файл качается из гейтвея аккаунта (`GET /v1/files/{id}`; адрес и токен
+  из реестра) и кладётся в S3
   (`ARCHIVER_S3_PREFIX<session>/<chat>/<message>/<file>`), в строку пишется `media_url`.
   Выделенный воркер с очередью — не блокирует consumer. Env: `ARCHIVER_S3_ENDPOINT/_REGION/
   _BUCKET/_ACCESS_KEY_ID/_SECRET_ACCESS_KEY/_PREFIX/_PUBLIC_BASE`, `ARCHIVER_S3_FORCE_PATH_STYLE`
-  (default: true; `false` → virtual-hosted AWS), `ARCHIVER_GATEWAY_TOKEN`, `ARCHIVER_MEDIA_MAX_BYTES`
+  (default: true; `false` → virtual-hosted AWS), `ARCHIVER_MEDIA_MAX_BYTES`
   (default 100 MiB). `media_url` = `<PUBLIC_BASE>/<key>` или `s3://bucket/key`.
   Размер проверяется дважды: по `Content-Length` до чтения тела (файл больше `ARCHIVER_MEDIA_MAX_BYTES`
   вообще не скачивается) и потоково во время чтения (обрыв закачки, если заголовок отсутствовал

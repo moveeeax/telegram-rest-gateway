@@ -2,9 +2,9 @@
  * Архиватор: консьюмит события гейтвея из Kafka в хранилище (SQLite или PostgreSQL),
  * опционально оффлоадит медиа в S3 (в истории — ссылка), и умеет бэкфиллить историю.
  *
- * Env: ARCHIVER_KAFKA_BROKERS/_TOPIC/_GROUP, ARCHIVER_HTTP_PORT, ARCHIVER_TOKEN,
- *      ARCHIVER_PG_URL (иначе SQLite ARCHIVER_DB_PATH),
- *      ARCHIVER_S3_* + ARCHIVER_GATEWAY_TEMPLATE/_TOKEN (медиа-оффлоад).
+ * Env: ARCHIVER_KAFKA_BROKERS/_TOPIC/_GROUP, ARCHIVER_HTTP_PORT, ARCHIVER_TOKEN, ARCHIVER_ADMIN_TOKEN,
+ *      ARCHIVER_PG_URL (иначе SQLite ARCHIVER_DB_PATH), ARCHIVER_REGISTRY_URL/_TOKEN,
+ *      ARCHIVER_S3_* (медиа-оффлоад), ARCHIVER_GATEWAY_TEMPLATE (ограничение gateway_url бэкфилла).
  */
 import http from "node:http";
 import { createHash, timingSafeEqual } from "node:crypto";

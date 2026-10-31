@@ -1,10 +1,16 @@
 # telegram-rest-gateway MCP
 
 MCP-сервер поверх REST API гейтвея: любой MCP-клиент (Claude Code, Claude Desktop и др.)
-получает 14 инструментов Telegram-аккаунта — чтение/отправка/правка сообщений, реакции,
-пересылка, резолв @username, карточки чатов/юзеров, скачивание медиа (картинки агент видит).
+получает инструменты Telegram-аккаунта — чтение/отправка/правка сообщений, реакции,
+пересылка, поиск, резолв @username, карточки чатов/юзеров, скачивание медиа (картинки агент видит).
 
-Один MCP-сервер = один аккаунт (один инстанс гейтвея, модель `TGW_SESSION_ID`).
+Режимов два:
+
+- однопользовательский: один сервер на один гейтвей (`TGW_BASE_URL` + `TGW_BEARER_TOKEN`),
+  транспорт stdio или Streamable HTTP;
+- многоаккаунтный (единый MCP): `MCP_REGISTRY_URL` + `MCP_REGISTRY_TOKEN`, только HTTP. Ключ
+  клиента резолвится через реестр control plane в набор аккаунтов, в гейтвей сервер ходит
+  сервисным токеном воркера. Развёртывание описано в `deploy/DEPLOY.md`, раздел «Единый MCP».
 
 ## Подключение к Claude Code
 
@@ -27,11 +33,17 @@ claude mcp add telegram -e TGW_BASE_URL=http://127.0.0.1:8080 \
 
 ## Инструменты
 
-`telegram_get_me` · `telegram_get_chats` · `telegram_get_history` · `telegram_send_message`
-(markdown/html, reply, idempotency) · `telegram_edit_message` · `telegram_delete_messages` ·
-`telegram_forward_messages` · `telegram_react` · `telegram_resolve_username` ·
-`telegram_get_chat` · `telegram_get_user` · `telegram_get_contacts` ·
-`telegram_download_file` · `telegram_mark_read`
+`telegram_list_accounts` · `telegram_get_me` · `telegram_get_chats` · `telegram_get_history` ·
+`telegram_send_message` (markdown/html, reply, idempotency) · `telegram_edit_message` ·
+`telegram_delete_messages` · `telegram_forward_messages` · `telegram_react` ·
+`telegram_search_live` · `telegram_resolve_username` · `telegram_get_chat` · `telegram_get_user` ·
+`telegram_get_contacts` · `telegram_download_file` · `telegram_mark_read`
+
+`telegram_search_history` (поиск по архиву) появляется, если задан `TGW_ARCHIVER_URL`; в
+однопользовательском режиме нужен ещё `TGW_SESSION_ID`.
+
+У каждого инструмента есть необязательный параметр `account` (accountId из
+`telegram_list_accounts`). Если ключу доступно больше одного аккаунта, он обязателен.
 
 ## Безопасность
 
