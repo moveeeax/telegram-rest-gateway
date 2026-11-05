@@ -13,6 +13,9 @@ concurrency:
   # там работает publish, прерывать его на середине (частичный набор образов) нельзя.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
+permissions:
+  contents: read
+
 env:
   BUILDER_IMAGE: ghcr.io/${{ github.repository }}/builder
 
@@ -21,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     container: python:3.12-slim
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: pip install --no-cache-dir clang-format==18.1.8
       - run: clang-format --version
       - name: clang-format --dry-run --Werror
@@ -33,7 +36,7 @@ jobs:
   suppressions-guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: guard
         run: |
           hits=$(grep -rnE '(src/|tests/|tgw::)' cmake/suppressions/ | grep -vE ':[0-9]+:[[:space:]]*#' || true)
@@ -44,8 +47,8 @@ jobs:
   helm-render:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
       - run: bash deploy/helm/tests/render_test.sh
 
   # TS-сервисы (archiver, mcp, control-plane): сборка tsc + docker build их Dockerfile'ов БЕЗ пуша.
@@ -65,10 +68,10 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 26
       - run: npm ci
         working-directory: ${{ matrix.pkg }}
       # Только runtime-зависимости и только high/critical: devDependencies в образ не попадают.
@@ -80,8 +83,8 @@ jobs:
         working-directory: ${{ matrix.pkg }}
         env:
           PG_TEST_URL: ${{ matrix.pkg == 'control-plane' && 'postgres://postgres:test@localhost:5432/postgres' || '' }}
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.pkg }}
           file: ${{ matrix.pkg }}/Dockerfile
@@ -101,11 +104,11 @@ jobs:
       image: ${{ steps.meta.outputs.image }}
       available: ${{ steps.meta.outputs.available }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       # Логин: нужен для пуша и для inspect приватного образа. В форк-PR токен
       # read-only — этого достаточно, чтобы ТЯНУТЬ уже существующий builder.
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -139,7 +142,7 @@ jobs:
       # Обычный случай: тега нет и мы можем писать (push в ветку/тег или PR из своего репо).
       - name: build+push builder (content tag)
         if: steps.meta.outputs.exists == 'false' && steps.meta.outputs.available == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.builder
@@ -159,7 +162,7 @@ jobs:
       # Форк-PR без готового тега: локальная сборка (без пуша) как валидация рецепта.
       - name: build builder locally (fork PR, no push)
         if: steps.meta.outputs.exists == 'false' && steps.meta.outputs.available == 'false'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.builder
@@ -182,9 +185,9 @@ jobs:
       image: ${{ steps.meta.outputs.image }}
       available: ${{ steps.meta.outputs.available }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -217,7 +220,7 @@ jobs:
           fi
       - name: build+push arm64 builder (content tag)
         if: steps.meta.outputs.exists == 'false' && steps.meta.outputs.available == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.builder
@@ -245,7 +248,7 @@ jobs:
     env:
       ASAN_OPTIONS: "detect_leaks=1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: cmake --preset asan
       # Только тест-таргет + -j2: держим пиковую память при санитайзерной сборке.
       # LSAN_OPTIONS с путём к suppressions задаётся в шаге, а не на уровне джоба,
@@ -270,7 +273,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: cmake --preset tsan
       # TSAN_OPTIONS с путём к suppressions задаётся в шаге, а не на уровне джоба,
       # чтобы $PWD (путь в контейнере) был доступен, а не ${{ github.workspace }} (хостовый путь).
@@ -294,7 +297,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: cmake --preset dev-debug
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: git ls-files 'src/*.cpp' | xargs -r clang-tidy -p build/dev-debug --warnings-as-errors='bugprone-*,concurrency-*'
@@ -313,7 +316,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: cmake --preset ci-release
       - run: cmake --build --preset ci-release --target telegram-rest-gateway
 
@@ -343,9 +346,9 @@ jobs:
     env:
       GW_IMAGE: ghcr.io/${{ github.repository }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -353,7 +356,7 @@ jobs:
       # Корневой сервис: FROM content-addressed builder своей архитектуры.
       - name: build+push gateway (by digest)
         id: gateway
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -365,7 +368,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.arch == 'arm64' && 'gateway-arm64' || 'gateway' }}
       - name: build+push archiver (by digest)
         id: archiver
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: archiver
           file: archiver/Dockerfile
@@ -373,7 +376,7 @@ jobs:
           outputs: type=image,name=${{ env.GW_IMAGE }}-archiver,push-by-digest=true,name-canonical=true,push=true
       - name: build+push control-plane (by digest)
         id: controlplane
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: control-plane
           file: control-plane/Dockerfile
@@ -381,7 +384,7 @@ jobs:
           outputs: type=image,name=${{ env.GW_IMAGE }}-control-plane,push-by-digest=true,name-canonical=true,push=true
       - name: build+push mcp (by digest)
         id: mcp
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: mcp
           file: mcp/Dockerfile
@@ -399,7 +402,7 @@ jobs:
           echo "$AR_DIGEST" > digests/archiver
           echo "$MC_DIGEST" > digests/mcp
           echo "$CP_DIGEST" > digests/control-plane
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: digests-${{ matrix.arch }}
           path: digests/*
@@ -415,13 +418,13 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: digests-*
           path: digests
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

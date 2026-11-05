@@ -1,5 +1,5 @@
-# Архиватор: Kafka -> SQLite(FTS5) + HTTP /search. node:22-slim (glibc — prebuilt better-sqlite3).
-FROM node:22-slim AS build
+# Архиватор: Kafka -> SQLite(FTS5) + HTTP /search. node:26-slim (glibc — prebuilt better-sqlite3).
+FROM node:26-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -7,7 +7,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22-slim
+FROM node:26-slim
 WORKDIR /app
 ENV NODE_ENV=production ARCHIVER_DB_PATH=/data/archive.db
 COPY --from=build /app/node_modules ./node_modules

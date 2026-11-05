@@ -21,7 +21,7 @@
 |---|---|---|---|
 | `lint-format` | ubuntu-latest | каждый push/PR | `clang-format --dry-run --Werror` |
 | `suppressions-guard` | ubuntu-latest | каждый push/PR | наш код не должен попадать в sanitizer-suppressions |
-| `node-build` (matrix: archiver, mcp) | ubuntu-latest | каждый push/PR | `npm ci && npm run build` (node 22) + `docker build` образа сайдкара **без пуша** |
+| `node-build` (matrix: archiver, mcp) | ubuntu-latest | каждый push/PR | `npm ci && npm run build` (node 26) + `docker build` образа сайдкара **без пуша** |
 | `builder` | ubuntu-latest | каждый push/PR | собирает/переиспользует тулчейн-образ (см. ниже) |
 | `test-asan` | ubuntu-latest (в builder-образе) | каждый push/PR | ASan+LSan юнит-тесты |
 | `test-tsan` | ubuntu-latest (в builder-образе) | каждый push/PR | TSan юнит-тесты |
