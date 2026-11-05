@@ -1,5 +1,6 @@
-# Архиватор: Kafka -> SQLite(FTS5) + HTTP /search. node:26-slim (glibc — prebuilt better-sqlite3).
+# Архиватор: Kafka -> SQLite(FTS5) + HTTP /search. node:26-slim; better-sqlite3 has no prebuilt for Node 26, so it builds from source here.
 FROM node:26-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
