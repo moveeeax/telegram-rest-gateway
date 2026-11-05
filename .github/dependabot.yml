@@ -1,0 +1,28 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directories:
+      - /archiver
+      - /mcp
+      - /control-plane
+    schedule:
+      interval: weekly
+    groups:
+      aws-sdk:
+        patterns: ["@aws-sdk/*"]
+
+  # Sidecar images only: Dockerfile.builder is content-hashed, so bumping its
+  # base image triggers a full TDLib/Drogon rebuild and is done by hand.
+  - package-ecosystem: docker
+    directories:
+      - /archiver
+      - /mcp
+      - /control-plane
+    schedule:
+      interval: weekly
